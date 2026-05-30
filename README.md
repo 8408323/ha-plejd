@@ -3,6 +3,7 @@
 [![Lint](https://github.com/8408323/ha-plejd/actions/workflows/lint.yml/badge.svg)](https://github.com/8408323/ha-plejd/actions/workflows/lint.yml)
 [![Tests](https://github.com/8408323/ha-plejd/actions/workflows/tests.yml/badge.svg)](https://github.com/8408323/ha-plejd/actions/workflows/tests.yml)
 [![Validate](https://github.com/8408323/ha-plejd/actions/workflows/validate.yml/badge.svg)](https://github.com/8408323/ha-plejd/actions/workflows/validate.yml)
+[![CodeQL](https://github.com/8408323/ha-plejd/actions/workflows/codeql.yml/badge.svg)](https://github.com/8408323/ha-plejd/actions/workflows/codeql.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 Unofficial [Home Assistant](https://www.home-assistant.io/) integration for
