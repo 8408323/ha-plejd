@@ -43,3 +43,6 @@ plan.md
 CLAUDE.local.md
 .claude/settings.local.json
 # dotclaude:end
+
+# APK + decompiled analysis (large / copyrighted — never commit)
+tools/apk/

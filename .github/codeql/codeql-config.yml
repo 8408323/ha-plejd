@@ -1,0 +1,10 @@
+name: "ha-plejd CodeQL config"
+
+# AES-128-ECB is mandated by the Plejd BLE mesh protocol: the integration must
+# reproduce the device's fixed cipher (custom_components/plejd/crypto.py) to
+# interoperate — it is not a free algorithm choice. Exclude the weak-cipher query
+# so this intentional, protocol-required usage doesn't fail the build. All other
+# security-and-quality queries stay enabled.
+query-filters:
+  - exclude:
+      id: py/weak-cryptographic-algorithm
