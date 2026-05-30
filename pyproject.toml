@@ -16,6 +16,7 @@ dev = [
     "ruff>=0.15.13",
     "voluptuous>=0.16.0",
     "bleak>=0.22.0",
+    "cryptography>=42.0.0",
 ]
 
 [tool.ruff]
