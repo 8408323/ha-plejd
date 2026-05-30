@@ -1,0 +1,45 @@
+# Secrets and captured traffic — never commit these
+*.pcap
+*.pcapng
+*.har
+*.cfa
+*.log
+btsnoop_hci*
+secrets.yaml
+.env
+capture-*.txt
+tools/_*
+
+# Plejd secrets (crypto key / site export / decoded captures)
+*.plejd
+site_*.json
+tools/*.jsonl
+tools/*.bin
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.coverage
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Editor
+.vscode/
+*.swp
+
+# Local AI session task tracking
+.todo
+plan.md
+
+# dotclaude runtime lock (never commit)
+.claude/scheduled_tasks.lock
+
+# dotclaude:begin
+.claude/plans/
+CLAUDE.local.md
+.claude/settings.local.json
+# dotclaude:end

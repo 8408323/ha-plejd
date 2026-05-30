@@ -1,0 +1,17 @@
+{
+  "config": {
+    "flow_title": "{name}",
+    "step": {
+      "user": {
+        "description": "Sign in with your Plejd account. Your credentials are used to fetch the site's devices and crypto key, then control happens locally over Bluetooth.",
+        "data": {
+          "email": "Email",
+          "password": "Password"
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "[%key:common::config_flow::abort::already_configured%]"
+    }
+  }
+}
