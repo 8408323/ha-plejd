@@ -101,3 +101,27 @@ def test_decode_output_state_ignores_other_opcodes_and_short_data():
     assert decode_output_state(Command(0, 0, CMD_SCENE, b"\x01")) is None
     assert decode_output_state(Command(0, 0, CMD_OUTPUT_STATE_AND_LEVEL, b"")) is None
     assert decode_output_state(Command(11, 0, CMD_GROUP_STATE_AND_LEVEL, b"\x01")) is None
+
+
+def test_set_climate_setpoint_bytes():
+    from plejd.const import CMD_TRM_SETPOINT
+    from plejd.protocol import set_climate_setpoint
+
+    v = set_climate_setpoint(9, 21.5)  # 215 = 0x00D7 little-endian
+    assert (v[3] << 8) | v[4] == CMD_TRM_SETPOINT
+    assert v[5:] == bytes([0xD7, 0x00])
+
+
+def test_set_climate_mode_bytes():
+    from plejd.const import CMD_TRM_MODE
+    from plejd.protocol import set_climate_mode
+
+    v = set_climate_mode(9, 3)
+    assert (v[3] << 8) | v[4] == CMD_TRM_MODE and v[5:] == bytes([3])
+
+
+def test_decode_temperature():
+    from plejd.protocol import decode_temperature
+
+    assert decode_temperature(bytes([0xD7, 0x00])) == 21.5
+    assert decode_temperature(b"\x00") is None

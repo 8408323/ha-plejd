@@ -207,3 +207,19 @@ async def test_shutdown(monkeypatch):
     await c.async_start()
     await c.async_shutdown()
     assert not client.is_connected
+
+
+async def test_set_climate_commands(monkeypatch):
+    from plejd.const import CMD_TRM_MODE, CMD_TRM_SETPOINT
+    from plejd.protocol import decode_command
+
+    client = _FakeClient()
+    _patch_connect(monkeypatch, client)
+    ble = types.SimpleNamespace(address="01:02:03:04:05:a0")
+    hass = _hass([_info("01:02:03:04:05:a0")], {"01:02:03:04:05:a0": ble})
+    c = PlejdCoordinator(hass, _entry(discovered=None))
+    await c.async_start()
+    await c.async_set_climate_setpoint(9, 22.0)
+    assert decode_command(c._connection.mesh.decrypt(client.writes[-1][1])).command == CMD_TRM_SETPOINT
+    await c.async_set_climate_mode(9, 3)
+    assert decode_command(c._connection.mesh.decrypt(client.writes[-1][1])).command == CMD_TRM_MODE

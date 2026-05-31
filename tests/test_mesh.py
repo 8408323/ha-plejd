@@ -66,3 +66,13 @@ def test_state_returns_a_copy():
     snapshot = mesh.state
     snapshot.clear()
     assert 2 in mesh.state  # mutating the snapshot doesn't affect the engine
+
+
+def test_climate_commands_round_trip():
+    from plejd.const import CMD_TRM_MODE, CMD_TRM_SETPOINT
+
+    mesh = _mesh()
+    sp = decode_command(mesh.decrypt(mesh.set_climate_setpoint(9, 20.0)))
+    assert sp.command == CMD_TRM_SETPOINT and sp.data == bytes([200 & 0xFF, 0])
+    md = decode_command(mesh.decrypt(mesh.set_climate_mode(9, 7)))
+    assert md.command == CMD_TRM_MODE and md.data == bytes([7])

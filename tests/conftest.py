@@ -29,6 +29,13 @@ except ImportError:
     for _k, _v in _CONF.items():
         setattr(_const, _k, _v)
 
+    _const.ATTR_TEMPERATURE = "temperature"  # type: ignore[attr-defined]
+
+    class _UnitOfTemperature:
+        CELSIUS = "\u00b0C"
+
+    _const.UnitOfTemperature = _UnitOfTemperature  # type: ignore[attr-defined]
+
     class _Platform(str, enum.Enum):
         LIGHT = "light"
         SWITCH = "switch"
@@ -177,6 +184,28 @@ except ImportError:
 
     _scene.Scene = _Scene  # type: ignore[attr-defined]
     sys.modules.setdefault("homeassistant.components.scene", _scene)
+
+    _climate = types.ModuleType("homeassistant.components.climate")
+
+    class _HVACMode(str, enum.Enum):
+        OFF = "off"
+        HEAT = "heat"
+
+    class _ClimateEntityFeature(enum.IntFlag):
+        TARGET_TEMPERATURE = 1
+        PRESET_MODE = 16
+
+    class _ClimateEntity:
+        def async_on_remove(self, func):
+            self._unsub = func
+
+        def async_write_ha_state(self):
+            return None
+
+    _climate.HVACMode = _HVACMode  # type: ignore[attr-defined]
+    _climate.ClimateEntityFeature = _ClimateEntityFeature  # type: ignore[attr-defined]
+    _climate.ClimateEntity = _ClimateEntity  # type: ignore[attr-defined]
+    sys.modules.setdefault("homeassistant.components.climate", _climate)
 
     _dr = types.ModuleType("homeassistant.helpers.device_registry")
 
