@@ -48,6 +48,14 @@ class PlejdMesh:
         """Encrypted command to read an output's current state (0x00C8, Read)."""
         return self.encrypt(protocol.request_output_state_and_level(address, output))
 
+    def set_output_min_level(self, address: int, output: int, fraction: float) -> bytes:
+        """Encrypted minimum-dim-level setting (0x00C9)."""
+        return self.encrypt(protocol.set_output_min_level(address, output, fraction))
+
+    def set_output_max_level(self, address: int, output: int, fraction: float) -> bytes:
+        """Encrypted maximum-dim-level setting (0x00CA)."""
+        return self.encrypt(protocol.set_output_max_level(address, output, fraction))
+
     def scene(self, address: int, scene: int) -> bytes:
         """Encrypted command to execute a scene (0x0021)."""
         return self.encrypt(protocol.execute_scene(address, scene))
