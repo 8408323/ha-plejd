@@ -65,6 +65,9 @@ CMD_OUTPUT_PHASE_DIM_TYPE = 0x00CE  # set/report phase-dim edge (output, PhaseOu
 CURVE_OPTIONS: dict[str, int] = {"linear": 0, "logarithmic": 1, "antilogarithmic": 3}
 # Phase-dim edge (PhaseOutputType enum): trailing edge for resistive/LED, leading for inductive.
 PHASE_DIM_OPTIONS: dict[str, int] = {"trailing_edge": 0, "leading_edge": 1}
+# Hardware that actually phase-cuts (app's IPhaseable: DIM-01/02 family, SPD-01, FAK-01).
+# Constant-current LED drivers, DALI, and downlights dim but aren't phase dimmers.
+PHASE_DIM_HARDWARE: frozenset[int] = frozenset({1, 2, 11, 14, 15, 22, 24, 25, 40, 164})
 CMD_SCENE = 0x0021  # execute scene
 CMD_INPUT_STATE_AND_LEVEL = 0x0195  # state notification: channel, state, level[2]
 CMD_SYSTEM_TIME = 0x001B

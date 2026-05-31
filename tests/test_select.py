@@ -9,14 +9,14 @@ from plejd.cloud import PlejdCloudDevice
 from plejd.select import PlejdOutputSettingSelect, async_setup_entry
 
 
-def _device(category="light", address=5, dimmable=True, output_index=0):
+def _device(category="light", address=5, dimmable=True, output_index=0, hardware_id=1):
     return PlejdCloudDevice(
         device_id="d1",
         name="Lamp",
         address=address,
         output_index=output_index,
         outputs=[address],
-        hardware_id=1,
+        hardware_id=hardware_id,
         model="DIM-01",
         category=category,
         dimmable=dimmable,
@@ -45,6 +45,15 @@ async def test_setup_creates_curve_and_phase_only_for_dimmable_lights():
     await async_setup_entry(None, entry, lambda entities: added.extend(entities))
     assert len(added) == 2
     assert {e._attr_translation_key for e in added} == {"dim_curve", "phase_dim"}
+
+
+async def test_non_phase_dimmer_gets_curve_only():
+    # LED-10 (hardware 5) dims but isn't a phase-cut dimmer -> no phase-edge select.
+    coord = _Coordinator([_device(hardware_id=5)])
+    entry = types.SimpleNamespace(runtime_data=coord)
+    added = []
+    await async_setup_entry(None, entry, lambda entities: added.extend(entities))
+    assert [e._attr_translation_key for e in added] == ["dim_curve"]
 
 
 def test_options_and_unique_id():

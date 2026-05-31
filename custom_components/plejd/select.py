@@ -19,7 +19,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 
 from .cloud import PlejdCloudDevice
-from .const import CATEGORY_LIGHT, CURVE_OPTIONS, DOMAIN, PHASE_DIM_OPTIONS
+from .const import CATEGORY_LIGHT, CURVE_OPTIONS, DOMAIN, PHASE_DIM_HARDWARE, PHASE_DIM_OPTIONS
 from .coordinator import PlejdCoordinator
 
 
@@ -30,7 +30,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     for device in coordinator.devices:
         if device.category == CATEGORY_LIGHT and device.dimmable and device.address is not None:
             entities.append(PlejdOutputSettingSelect(coordinator, device, "curve"))
-            entities.append(PlejdOutputSettingSelect(coordinator, device, "phase"))
+            # Phase-edge only matters on real phase-cut dimmers, not LED-driver/DALI loads.
+            if device.hardware_id in PHASE_DIM_HARDWARE:
+                entities.append(PlejdOutputSettingSelect(coordinator, device, "phase"))
     async_add_entities(entities)
 
 
