@@ -24,6 +24,9 @@ from .const import (
     CMD_OUTPUT_STATE_AND_LEVEL,
     CMD_SCENE,
     CMD_SYSTEM_TIME,
+    CMD_TIME_EVENT_SCENE,
+    CMD_TIME_EVENT_TIME,
+    CMD_TIME_EVENT_TYPE,
     CMD_TRM_MODE,
     CMD_TRM_SETPOINT,
     SOURCE_APP,
@@ -111,6 +114,46 @@ def set_output_max_level(address: int, output: int, fraction: float) -> bytes:
     """Set an output's maximum dim level (0x00CA): [output, u16le of fraction*65535]."""
     payload = bytes([output & 0xFF]) + _level_fraction_to_u16le(fraction)
     return encode_command(address, CMD_OUTPUT_MAX_LEVEL, payload, command_type=TYPE_DONT_RESPOND)
+
+
+def weekday_mask(days: list[int]) -> int:
+    """Pack weekday indices (Monday=0..Sunday=6) into the app's 1<<day bitmask."""
+    mask = 0
+    for day in days:
+        mask |= 1 << (day & 7)
+    return mask
+
+
+def _fade_steps(seconds: int) -> bytes:
+    """Encode a fade time as the app's u16le 65535//seconds."""
+    steps = 0xFFFF // seconds
+    return bytes([steps & 0xFF, (steps >> 8) & 0xFF])
+
+
+def set_time_event_time(slot: int, mask: int, hour: int, minute: int, second: int, repetition: int) -> bytes:
+    """Set a time event's weekly schedule (0x0258): [slot,1,mask,h,m,s,u32le rep]."""
+    rep = repetition & 0xFFFFFFFF
+    payload = bytes([slot & 0xFF, 1, mask & 0xFF, hour & 0xFF, minute & 0xFF, second & 0xFF])
+    payload += bytes([rep & 0xFF, (rep >> 8) & 0xFF, (rep >> 16) & 0xFF, (rep >> 24) & 0xFF])
+    return encode_command(0, CMD_TIME_EVENT_TIME, payload, command_type=TYPE_DONT_RESPOND)
+
+
+def set_time_event_type(slot: int, result: int) -> bytes:
+    """Set what a time event does (0x0259): [slot, TimeEventResult]."""
+    return encode_command(0, CMD_TIME_EVENT_TYPE, bytes([slot & 0xFF, result & 0xFF]), command_type=TYPE_DONT_RESPOND)
+
+
+def set_time_event_scene(slot: int, scene: int, fade: int = 0) -> bytes:
+    """Set the scene a time event runs (0x025A): [slot,1,scene](+u16le fade if >0)."""
+    payload = bytes([slot & 0xFF, 1, scene & 0xFF])
+    if fade > 0:
+        payload += _fade_steps(fade)
+    return encode_command(0, CMD_TIME_EVENT_SCENE, payload, command_type=TYPE_DONT_RESPOND)
+
+
+def remove_time_event(slot: int) -> bytes:
+    """Delete a time event (0x0258): [slot]."""
+    return encode_command(0, CMD_TIME_EVENT_TIME, bytes([slot & 0xFF]), command_type=TYPE_DONT_RESPOND)
 
 
 def set_timestamp(epoch: int) -> bytes:

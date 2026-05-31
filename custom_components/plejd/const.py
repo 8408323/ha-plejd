@@ -69,6 +69,17 @@ PHASE_DIM_OPTIONS: dict[str, int] = {"trailing_edge": 0, "leading_edge": 1}
 # Constant-current LED drivers, DALI, and downlights dim but aren't phase dimmers.
 PHASE_DIM_HARDWARE: frozenset[int] = frozenset({1, 2, 11, 14, 15, 22, 24, 25, 40, 164})
 CMD_SCENE = 0x0021  # execute scene
+CMD_TIME_EVENT_TIME = 0x0258  # set/remove a time event's schedule
+CMD_TIME_EVENT_TYPE = 0x0259  # what a time event does (TimeEventResult)
+CMD_TIME_EVENT_SCENE = 0x025A  # the scene a time event runs
+
+# Time events (on-device weekly schedules). 20 slots per device; weekday bit = 1<<index
+# with Monday=0..Sunday=6 (app's Weekday enum); recurring events repeat "forever".
+TIME_EVENT_SLOTS = 20
+TIME_EVENT_RESULT_SCENE = 0
+TIME_EVENT_REP_FOREVER = 0xFFFFFFFF
+WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+CONF_SCHEDULES = "schedules"  # entry.options: list of time-event schedule dicts
 CMD_INPUT_STATE_AND_LEVEL = 0x0195  # state notification: channel, state, level[2]
 CMD_SYSTEM_TIME = 0x001B
 CMD_DEVICE_TYPE = 0x0000

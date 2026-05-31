@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import asdict
 from typing import TYPE_CHECKING, Any
 
 import voluptuous as vol
-from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
+from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlow
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.selector import SelectSelector, SelectSelectorConfig
 
@@ -25,12 +27,17 @@ from .const import (
     CONF_INPUTS,
     CONF_MOTION,
     CONF_SCENES,
+    CONF_SCHEDULES,
     CONF_SITE_ID,
     DOMAIN,
+    TIME_EVENT_SLOTS,
+    WEEKDAYS,
 )
 
 if TYPE_CHECKING:
     from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
+
+_LOGGER = logging.getLogger(__name__)
 
 STEP_USER_SCHEMA = vol.Schema(
     {
@@ -54,6 +61,11 @@ class PlejdConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Plejd."""
 
     VERSION = 1
+
+    @staticmethod
+    def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
+        """Return the options flow for managing on-device schedules."""
+        return PlejdOptionsFlow(config_entry)
 
     def __init__(self) -> None:
         self._discovered_address: str | None = None
@@ -119,3 +131,63 @@ class PlejdConfigFlow(ConfigFlow, domain=DOMAIN):
                 CONF_SCENES: [asdict(s) for s in site.scenes],
             },
         )
+
+
+class PlejdOptionsFlow(OptionsFlow):
+    """Manage on-device weekly schedules (time event -> scene)."""
+
+    def __init__(self, config_entry: ConfigEntry) -> None:
+        self._entry = config_entry
+
+    async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        schedules: list[dict] = list(self._entry.options.get(CONF_SCHEDULES, []))
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            to_delete = set(user_input.get("delete", []))
+            await self._clear_deleted([s for s in schedules if str(s["slot"]) in to_delete])
+            schedules = [s for s in schedules if str(s["slot"]) not in to_delete]
+            name = (user_input.get("name") or "").strip()
+            if name and user_input.get("scene") is not None:
+                used = {s["slot"] for s in schedules}
+                slot = next((i for i in range(TIME_EVENT_SLOTS) if i not in used), None)
+                if slot is None:
+                    errors["base"] = "no_free_slots"
+                else:
+                    schedules.append(
+                        {
+                            "slot": slot,
+                            "name": name,
+                            "days": [WEEKDAYS.index(d) for d in user_input.get("days", [])],
+                            "time": user_input.get("time", "00:00"),
+                            "scene": int(user_input["scene"]),
+                            "fade": int(user_input.get("fade", 0)),
+                        }
+                    )
+            if not errors:
+                return self.async_create_entry(title="", data={CONF_SCHEDULES: schedules})
+
+        scene_options = [{"value": str(s["index"]), "label": s["name"]} for s in self._entry.data.get(CONF_SCENES, [])]
+        day_options = [{"value": d, "label": d} for d in WEEKDAYS]
+        fields: dict[Any, Any] = {}
+        if schedules:
+            existing = [{"value": str(s["slot"]), "label": s["name"]} for s in schedules]
+            fields[vol.Optional("delete", default=[])] = SelectSelector(
+                SelectSelectorConfig(options=existing, multiple=True)
+            )
+        fields[vol.Optional("name", default="")] = str
+        fields[vol.Optional("days", default=[])] = SelectSelector(
+            SelectSelectorConfig(options=day_options, multiple=True)
+        )
+        fields[vol.Optional("time", default="07:00")] = str
+        fields[vol.Optional("scene")] = SelectSelector(SelectSelectorConfig(options=scene_options))
+        fields[vol.Optional("fade", default=0)] = int
+        return self.async_show_form(step_id="init", data_schema=vol.Schema(fields), errors=errors)
+
+    async def _clear_deleted(self, removed: list[dict]) -> None:
+        """Delete the device-side event for each removed schedule (best-effort)."""
+        coordinator = getattr(self._entry, "runtime_data", None)
+        for schedule in removed:
+            try:
+                await coordinator.async_remove_time_event(schedule["slot"])
+            except (AttributeError, HomeAssistantError):
+                _LOGGER.warning("Could not clear Plejd schedule slot %s from the mesh", schedule["slot"])

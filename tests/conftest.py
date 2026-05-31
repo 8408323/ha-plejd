@@ -106,8 +106,16 @@ except ImportError:
         def async_show_form(self, *, step_id, data_schema=None, errors=None):
             return {"type": "form", "step_id": step_id, "data_schema": data_schema, "errors": errors}
 
+    class _OptionsFlow:
+        def async_create_entry(self, *, title, data):
+            return {"type": "create_entry", "title": title, "data": data}
+
+        def async_show_form(self, *, step_id, data_schema=None, errors=None):
+            return {"type": "form", "step_id": step_id, "data_schema": data_schema, "errors": errors}
+
     _ce.ConfigEntry = _ConfigEntry  # type: ignore[attr-defined]
     _ce.ConfigFlow = _ConfigFlow  # type: ignore[attr-defined]
+    _ce.OptionsFlow = _OptionsFlow  # type: ignore[attr-defined]
     _ce.ConfigFlowResult = dict  # type: ignore[attr-defined]
     sys.modules.setdefault("homeassistant.config_entries", _ce)
 
@@ -179,6 +187,10 @@ except ImportError:
     _switch = types.ModuleType("homeassistant.components.switch")
 
     class _SwitchEntity:
+        @property
+        def is_on(self):
+            return getattr(self, "_attr_is_on", None)
+
         def async_on_remove(self, func):
             self._unsub = func
 
