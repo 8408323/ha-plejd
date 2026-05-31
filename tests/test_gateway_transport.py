@@ -267,3 +267,19 @@ async def test_disconnect_is_idempotent():
     await conn.disconnect()
     assert ws.closed and not conn.connected
     await conn.disconnect()  # no error second time
+
+
+async def test_connect_cancels_leftover_tasks():
+    import asyncio
+
+    conn = _conn(_FakeWS())
+
+    async def _sleeper():
+        await asyncio.sleep(100)
+
+    leftover = asyncio.ensure_future(_sleeper())
+    conn._ping_task = leftover  # a stale loop from a prior session
+    await conn.connect()
+    await asyncio.sleep(0)
+    assert leftover.cancelled()  # reconnect cancelled it, so it can't close the fresh socket
+    await conn.disconnect()

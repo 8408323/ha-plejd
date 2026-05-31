@@ -72,6 +72,9 @@ class PlejdGatewayConnection:
 
     async def connect(self) -> None:
         """Open the WebSocket, authenticate, subscribe, and request initial state."""
+        # A reconnect reuses this instance; cancel any leftover loops first so a stale
+        # ping task can't close the fresh socket.
+        self._cancel_tasks()
         token = await self._get_token()
         headers = {
             "Client-Type": "app",
@@ -150,13 +153,14 @@ class PlejdGatewayConnection:
         # Periodic app-level Ping; if the gateway misses a Pong, close to reconnect.
         while not self._closing:
             await asyncio.sleep(GATEWAY_PING_INTERVAL)
-            if self._closing or not self.connected:
+            ws = self._ws  # tie this round to the socket we ping, not a later reconnect's
+            if self._closing or ws is None or ws.closed:
                 return
             self._pong = False
             await self._publish_control({"controlType": gateway.CONTROL_TYPE_PING})
             await asyncio.sleep(GATEWAY_PONG_TIMEOUT)
-            if not self._pong and not self._closing and self.connected:
-                await self._ws.close()  # the receive loop will exit → owner reconnects
+            if not self._pong and not self._closing and self._ws is ws and not ws.closed:
+                await ws.close()  # the receive loop will exit → owner reconnects
                 return
 
     async def _receive_loop(self) -> None:
@@ -168,12 +172,15 @@ class PlejdGatewayConnection:
         if not self._closing and self._on_disconnect is not None:
             self._on_disconnect()
 
-    async def disconnect(self) -> None:
-        self._closing = True
+    def _cancel_tasks(self) -> None:
         for task in (self._recv_task, self._ping_task):
             if task is not None:
                 task.cancel()
         self._recv_task = self._ping_task = None
+
+    async def disconnect(self) -> None:
+        self._closing = True
+        self._cancel_tasks()
         if self._ws is not None:
             await self._ws.close()
             self._ws = None
