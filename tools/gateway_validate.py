@@ -68,7 +68,17 @@ async def _recv_control_type(ws, want: str, timeout: float = 8.0) -> dict | None
         data = frame.get("data")
         inner = json.loads(base64.b64decode(data)) if isinstance(data, str) else None
         ct = inner.get("controlType") if isinstance(inner, dict) else None
-        print(f"      · recv topic={frame.get('topic')} op={frame.get('op')} controlType={ct}")
+        decoded = ""
+        if isinstance(inner, dict) and isinstance(inner.get("raw"), str) and inner.get("index") is not None:
+            # mesh.out push: {raw: b64(23B pkt), index: nodeIndex} → decode like LastChanged
+            try:
+                vector = gateway.repackage_ws_to_command(base64.b64decode(inner["raw"]), int(inner["index"]))
+                cmd = protocol.decode_command(vector)
+                state = protocol.decode_output_state(cmd)
+                decoded = f"  PUSH addr={cmd.address} cmd={cmd.command:#06x} -> {state}"
+            except (ValueError, TypeError) as err:
+                decoded = f"  PUSH decode failed: {err}"
+        print(f"      · recv topic={frame.get('topic')} op={frame.get('op')} controlType={ct}{decoded}")
         if isinstance(inner, dict) and ct == want:
             return inner
     return None

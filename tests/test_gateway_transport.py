@@ -21,6 +21,11 @@ def _state_reply(**addrs: str) -> dict:
     return {"topic": "control.out", "op": "update", "data": base64.b64encode(json.dumps(inner).encode()).decode()}
 
 
+def _push_frame(address: int, vector: bytes) -> dict:
+    inner = {"raw": base64.b64encode(gateway.repackage_command_to_ws(vector)).decode(), "index": address}
+    return {"topic": "mesh.out", "op": "update", "data": base64.b64encode(json.dumps(inner).encode()).decode()}
+
+
 class _FakeWS:
     def __init__(self, incoming=()):
         self.closed = False
@@ -94,7 +99,7 @@ async def test_connect_handshake_and_headers():
     assert _sent_publishes(ws, gateway.TOPIC_CONTROL_IN)  # MeshStateRequest
 
 
-async def test_write_publishes_command_and_requests_state():
+async def test_write_publishes_command_fire_and_forget():
     ws = _FakeWS()
     conn = _conn(ws)
     await conn.connect()
@@ -106,8 +111,34 @@ async def test_write_publishes_command_and_requests_state():
     inner = json.loads(base64.b64decode(mesh_pubs[0]["data"]))
     assert inner["index"] == 11
     assert base64.b64decode(inner["raw"]) == gateway.repackage_command_to_ws(vector)
-    # a state refresh is requested after the command
-    assert len(_sent_publishes(ws, gateway.TOPIC_CONTROL_IN)) == 2  # initial + post-write
+    # only the connect-time snapshot is requested; state changes arrive via mesh.out push
+    assert len(_sent_publishes(ws, gateway.TOPIC_CONTROL_IN)) == 1
+
+
+def test_handle_push_updates_state():
+    fired = []
+    conn = _conn(_FakeWS(), on_state=lambda: fired.append(1))
+    vector = set_output_state_and_level(address=11, output=0, on=True, level=200)
+    conn._handle_frame(json.dumps(_push_frame(11, vector)))
+    assert conn.state_for(11) is not None and conn.state_for(11).level == 200 and fired == [1]
+
+
+def test_handle_push_ignores_non_output_command():
+    from plejd.protocol import encode_command
+
+    fired = []
+    conn = _conn(_FakeWS(), on_state=lambda: fired.append(1))
+    # A button (0x0097) push decodes but isn't an output state -> no state, no notify.
+    conn._handle_frame(json.dumps(_push_frame(10, encode_command(10, 0x0097, bytes([1])))))
+    assert conn.state == {} and fired == []
+
+
+def test_handle_push_ignores_undecodable_packet():
+    conn = _conn(_FakeWS())
+    inner = {"raw": base64.b64encode(b"too-short").decode(), "index": 11}  # not a 23-byte packet
+    frame = {"topic": "mesh.out", "op": "update", "data": base64.b64encode(json.dumps(inner).encode()).decode()}
+    conn._handle_frame(json.dumps(frame))  # repackage raises -> ignored, no crash
+    assert conn.state == {}
 
 
 async def test_receive_updates_state_and_signals_disconnect_on_close():
@@ -139,6 +170,7 @@ async def test_receive_loop_silent_when_closing():
         json.dumps(123),  # not a dict
         json.dumps({"op": "subscribed", "topic": ["control.out"]}),  # no data
         json.dumps({"data": "!!!not-base64!!!"}),  # undecodable
+        json.dumps({"data": base64.b64encode(b"123").decode()}),  # decodes to a non-dict
         json.dumps({"data": base64.b64encode(json.dumps({"controlType": "Pong"}).encode()).decode()}),  # other type
     ],
 )

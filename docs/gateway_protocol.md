@@ -112,6 +112,22 @@ out = [nodeIndex, 0x01, w[0], w[2], w[1]] + w[4:4+n]
 #       addr       marker  type  opHi  opLo  data
 ```
 
+## Incoming state push — `mesh.out`
+
+State changes (our own commands **and** physical/off-app changes) arrive unsolicited on
+`mesh.out`, op `"update"` (and `"published"` without a `publisher` flag — the gateway's
+own relay). The inner JSON is the **same shape as an outgoing command**:
+
+```jsonc
+{ "raw": "<base64(23-byte packet)>", "index": <nodeIndex> }
+```
+
+Decode it with the reverse repackage above (`repackage_ws_to_command(raw, index)`) →
+`protocol.decode_command` → `protocol.decode_output_state`, keyed by the vector's
+address — exactly like a BLE LastChanged broadcast. **Live-validated** 2026-05-31: after
+a command the gateway pushes the `0x00C8` echo and the keyed `0x0098` state broadcast.
+So the integration needs no polling beyond the connect-time snapshot.
+
 ## Mesh state — `control.in` → `control.out`
 
 To request a snapshot, publish to `control.in` (op `publish`) and await a
