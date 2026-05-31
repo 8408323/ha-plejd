@@ -44,9 +44,16 @@ class Command:
 
 
 def decode_command(vector: bytes) -> Command:
-    """Parse a decrypted Datavector vector into its fields."""
+    """Parse a decrypted Datavector vector into its fields.
+
+    Rejects vectors whose marker byte isn't 0x01: the payload cipher has no MAC, so
+    data decrypted with the wrong address/key (or corrupted) would otherwise be
+    mis-parsed as a real command and drive bogus state.
+    """
     if len(vector) < 5:
         raise ValueError(f"command vector too short: {len(vector)} bytes")
+    if vector[1] != _MARKER:
+        raise ValueError(f"bad command marker {vector[1]:#04x} (expected {_MARKER:#04x})")
     address = vector[0]
     command_type = vector[2]
     command = (vector[3] << 8) | vector[4]
@@ -66,8 +73,12 @@ def request_output_state_and_level(address: int, output: int) -> bytes:
 
 
 def execute_scene(address: int, scene: int) -> bytes:
-    """Trigger a scene by index (0x0021)."""
-    return encode_command(address, CMD_SCENE, bytes([scene & 0xFF]))
+    """Trigger a scene by index (0x0021).
+
+    The app's ExecuteScene sends only the 1-byte index with the DontRespond type;
+    the slewrate/level fields in the schema belong to scene *configuration* (0x0022).
+    """
+    return encode_command(address, CMD_SCENE, bytes([scene & 0xFF]), command_type=TYPE_DONT_RESPOND)
 
 
 @dataclass(frozen=True)

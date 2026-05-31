@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 from plejd.const import CMD_OUTPUT_STATE_AND_LEVEL, CMD_SCENE
 from plejd.protocol import (
+    TYPE_DONT_RESPOND,
     TYPE_READ,
     TYPE_WRITE,
     Command,
@@ -42,7 +43,15 @@ def test_request_uses_read_type_and_single_output_byte():
 def test_execute_scene_opcode():
     v = execute_scene(0x01, scene=9)
     assert (v[3] << 8) | v[4] == CMD_SCENE
+    assert v[2] == TYPE_DONT_RESPOND  # app sends ExecuteScene with DontRespond
     assert v[5:] == bytes([9])
+
+
+def test_decode_command_rejects_bad_marker():
+    v = bytearray(set_output_state_and_level(0x09, output=2, on=True, level=1))
+    v[1] = 0x02  # corrupt the marker (e.g. wrong-key decryption)
+    with pytest.raises(ValueError, match="bad command marker"):
+        decode_command(bytes(v))
 
 
 def test_decode_command_round_trip():
