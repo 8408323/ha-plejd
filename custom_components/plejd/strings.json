@@ -14,6 +14,12 @@
         "data": {
           "site_id": "Site"
         }
+      },
+      "reauth_confirm": {
+        "description": "Re-enter the password for your Plejd account ({email}).",
+        "data": {
+          "password": "Password"
+        }
       }
     },
     "error": {
@@ -22,7 +28,8 @@
       "no_sites": "No Plejd sites were found for this account."
     },
     "abort": {
-      "already_configured": "[%key:common::config_flow::abort::already_configured%]"
+      "already_configured": "[%key:common::config_flow::abort::already_configured%]",
+      "reauth_successful": "[%key:common::config_flow::abort::reauth_successful%]"
     }
   },
   "entity": {
