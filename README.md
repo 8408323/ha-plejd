@@ -8,7 +8,7 @@
 
 Home Assistant custom integration for [Plejd](https://www.plejd.com/) — the Swedish **Bluetooth-mesh** lighting and relay system.
 
-> **Status**: Reverse-engineering in progress — the BLE protocol (GATT, AES-128 crypto, mesh commands) and the cloud login are decoded; entity platforms are being built out. Not yet usable for controlling lights. Track progress in the [issues](https://github.com/8408323/ha-plejd/issues).
+> **Status**: Working. The BLE protocol (GATT, AES-128 crypto, mesh commands) and cloud login are fully decoded, and the core — lights, switches, scenes, buttons, and motion/illuminance — is **validated end-to-end against real hardware**. Covers, climate, and the device-config entities are decoded from the app but not yet hardware-validated. Reverse-engineered entirely from our own analysis of the Plejd Android app + BLE capture; not affiliated with Plejd.
 
 ## Support
 
@@ -50,27 +50,45 @@ Or manually:
 
 ## Configuration
 
-> ⚠️ Early but functional: setup signs in, fetches your site, connects over
-> Bluetooth, and exposes **lights** (on/off + brightness). More platforms
-> (switches, covers, climate, sensors) are in progress — see the
-> [issues](https://github.com/8408323/ha-plejd/issues).
-
-1. Go to **Settings → Devices & Services → Add Integration**.
+1. Go to **Settings → Devices & Services → Add Integration** (a Plejd device in
+   Bluetooth range is also auto-discovered).
 2. Search for *Plejd*.
 3. Sign in with your Plejd account; if you have more than one site, pick one. Your
    site's devices and crypto key are fetched once; control then happens locally
-   over Bluetooth.
+   over Bluetooth — no internet needed afterwards.
+
+Devices, scenes, buttons and sensors appear automatically. Per-device tuning and
+schedules are added as entities (see below).
 
 ## Features
 
-Tracked in [issues](https://github.com/8408323/ha-plejd/issues):
+Entities are created automatically from your site:
 
 - **Lights** ✅ — on/off + brightness for dimmers and LED drivers (DIM-01/02, LED-10/75, …)
-- **Switches/relays** — CTR-01, REL-01/02, OUT-01/02
-- **Scenes** — trigger Plejd scenes
-- **Covers** — JAL-01 / WIN-01 blinds and shades
-- **Climate** — Plejd thermostats
-- **Sensors** — motion (WMS-01), power/energy where reported
+- **Switches / relays** ✅ — CTR-01, REL-01/02, OUT-01/02
+- **Scenes** ✅ — trigger Plejd scenes
+- **Buttons** ✅ — wall switches / remotes (WPH-01, WRT-01) fire HA **events** (press / release) for automations
+- **Motion & illuminance** ✅ — WMS-01 reports occupancy (`binary_sensor`) and ambient light (`sensor`)
+- **Covers** — JAL-01 / MTR-01 blinds and shades *(decoded; not hardware-validated)*
+- **Climate** — TRM-01 thermostats: target temperature + Plejd presets *(decoded; not hardware-validated)*
+
+Per-output **device settings** (config entities):
+
+- **Minimum / maximum brightness** — `number` entities that set a dimmer's range
+- **Dimming curve** — linear / logarithmic / anti-logarithmic (`select`)
+- **Phase dimming** — leading / trailing edge, on phase-cut dimmers (`select`)
+
+**On-device scheduling** — Plejd devices can run weekly time→scene events from their
+own clock, so they keep firing even when Home Assistant is offline:
+
+- A **Sync clock** button (and automatic sync on connect + daily) keeps device clocks correct.
+- Add **weekly schedules** (day + time → scene) under the integration's **Configure**
+  dialog; each becomes a `switch` you can enable/disable. Prefer HA automations? Just
+  don't add any — the choice is yours.
+
+> Astro (sunrise/sunset) schedules and firmware OTA are intentionally out of scope —
+> Home Assistant's `sun`-based automations cover the former, and OTA would require
+> Plejd's proprietary firmware images.
 
 ## Privacy & security
 
