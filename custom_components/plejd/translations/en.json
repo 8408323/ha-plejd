@@ -8,10 +8,21 @@
           "email": "Email",
           "password": "Password"
         }
+      },
+      "site": {
+        "description": "Choose which Plejd site to add.",
+        "data": {
+          "site_id": "Site"
+        }
       }
     },
+    "error": {
+      "invalid_auth": "Invalid email or password.",
+      "cannot_connect": "Failed to reach the Plejd cloud. Please try again.",
+      "no_sites": "No Plejd sites were found for this account."
+    },
     "abort": {
-      "already_configured": "Plejd is already configured."
+      "already_configured": "This Plejd site is already configured."
     }
   }
 }
