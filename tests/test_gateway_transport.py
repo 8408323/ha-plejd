@@ -141,6 +141,70 @@ def test_handle_push_ignores_undecodable_packet():
     assert conn.state == {}
 
 
+def test_handle_frame_pong_sets_flag():
+    conn = _conn(_FakeWS())
+    frame = {"data": base64.b64encode(json.dumps({"controlType": "Pong"}).encode()).decode()}
+    conn._handle_frame(json.dumps(frame))
+    assert conn._pong is True
+
+
+def _ping_sent(ws) -> bool:
+    for s in ws.sent:
+        msg = json.loads(s)
+        data = msg.get("data")
+        if isinstance(data, str) and json.loads(base64.b64decode(data)).get("controlType") == "Ping":
+            return True
+    return False
+
+
+async def test_ping_loop_survives_on_pong(monkeypatch):
+    from plejd import gateway_transport as gt
+
+    ws = _FakeWS()
+    conn = _conn(ws)
+    conn._ws = ws
+
+    async def fake_sleep(delay):
+        if delay == gt.GATEWAY_PONG_TIMEOUT:
+            conn._pong = True  # gateway answered in time
+            conn._closing = True  # stop the loop after this cycle
+
+    monkeypatch.setattr(gt.asyncio, "sleep", fake_sleep)
+    await conn._ping_loop()
+    assert _ping_sent(ws) and not ws.closed
+
+
+async def test_ping_loop_closes_on_missed_pong(monkeypatch):
+    from plejd import gateway_transport as gt
+
+    ws = _FakeWS()
+    conn = _conn(ws)
+    conn._ws = ws
+
+    async def fake_sleep(_delay):
+        pass  # never set _pong → missed pong
+
+    monkeypatch.setattr(gt.asyncio, "sleep", fake_sleep)
+    await conn._ping_loop()
+    assert _ping_sent(ws) and ws.closed  # missed pong → closed so the owner reconnects
+
+
+async def test_ping_loop_stops_when_disconnected(monkeypatch):
+    from plejd import gateway_transport as gt
+
+    ws = _FakeWS()
+    ws.closed = True  # socket already gone
+    conn = _conn(ws)
+    conn._ws = ws
+
+    async def fake_sleep(_delay):
+        pass
+
+    monkeypatch.setattr(gt.asyncio, "sleep", fake_sleep)
+    await conn._ping_loop()
+    assert ws.sent == []  # bailed before sending a ping
+
+
 async def test_receive_updates_state_and_signals_disconnect_on_close():
     fired = []
     dropped = []

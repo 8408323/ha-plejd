@@ -23,6 +23,12 @@ import aiohttp
 from . import gateway, protocol
 from .protocol import OutputState
 
+# App-level keep-alive: ping the gateway and reconnect if it doesn't pong. This
+# catches a hung gateway behind a still-open WebSocket (the WS heartbeat only
+# detects a dead socket).
+GATEWAY_PING_INTERVAL = 60.0
+GATEWAY_PONG_TIMEOUT = 10.0
+
 
 class PlejdGatewayConnection:
     """WebSocket client to the Plejd remote-control gateway."""
@@ -49,6 +55,8 @@ class PlejdGatewayConnection:
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._state: dict[int, OutputState] = {}
         self._recv_task: asyncio.Task | None = None
+        self._ping_task: asyncio.Task | None = None
+        self._pong = False
         self._closing = False
 
     @property
@@ -78,6 +86,7 @@ class PlejdGatewayConnection:
         await self._subscribe(gateway.TOPIC_MESH_OUT)
         await self.async_request_state()
         self._recv_task = asyncio.ensure_future(self._receive_loop())
+        self._ping_task = asyncio.ensure_future(self._ping_loop())
 
     async def write(self, vector: bytes) -> None:
         """Publish a plaintext mesh command, fire-and-forget.
@@ -89,7 +98,10 @@ class PlejdGatewayConnection:
 
     async def async_request_state(self) -> None:
         """Ask the gateway for a full mesh-state snapshot."""
-        data = base64.b64encode(json.dumps({"controlType": "MeshStateRequest"}).encode()).decode()
+        await self._publish_control({"controlType": "MeshStateRequest"})
+
+    async def _publish_control(self, inner: dict) -> None:
+        data = base64.b64encode(json.dumps(inner).encode()).decode()
         await self._send({"op": "publish", "data": data, "topic": [gateway.TOPIC_CONTROL_IN]})
 
     async def _subscribe(self, topic: str) -> None:
@@ -113,9 +125,12 @@ class PlejdGatewayConnection:
             return
         if not isinstance(inner, dict):
             return
-        if inner.get("controlType") == gateway.CONTROL_TYPE_MESH_STATE:
+        control_type = inner.get("controlType")
+        if control_type == gateway.CONTROL_TYPE_MESH_STATE:
             self._state.update(gateway.parse_mesh_state_report(inner))
             self._on_state()
+        elif control_type == gateway.CONTROL_TYPE_PONG:
+            self._pong = True
         elif isinstance(inner.get("raw"), str) and inner.get("index") is not None:
             self._handle_push(inner["raw"], inner["index"])
 
@@ -131,6 +146,19 @@ class PlejdGatewayConnection:
             self._state[command.address] = state
             self._on_state()
 
+    async def _ping_loop(self) -> None:
+        # Periodic app-level Ping; if the gateway misses a Pong, close to reconnect.
+        while not self._closing:
+            await asyncio.sleep(GATEWAY_PING_INTERVAL)
+            if self._closing or not self.connected:
+                return
+            self._pong = False
+            await self._publish_control({"controlType": gateway.CONTROL_TYPE_PING})
+            await asyncio.sleep(GATEWAY_PONG_TIMEOUT)
+            if not self._pong and not self._closing and self.connected:
+                await self._ws.close()  # the receive loop will exit → owner reconnects
+                return
+
     async def _receive_loop(self) -> None:
         assert self._ws is not None
         async for msg in self._ws:
@@ -142,9 +170,10 @@ class PlejdGatewayConnection:
 
     async def disconnect(self) -> None:
         self._closing = True
-        if self._recv_task is not None:
-            self._recv_task.cancel()
-            self._recv_task = None
+        for task in (self._recv_task, self._ping_task):
+            if task is not None:
+                task.cancel()
+        self._recv_task = self._ping_task = None
         if self._ws is not None:
             await self._ws.close()
             self._ws = None
