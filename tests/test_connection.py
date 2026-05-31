@@ -84,7 +84,9 @@ async def test_notify_updates_state_and_fires_callback(monkeypatch):
     fired = []
     c = PlejdConnection(_KEY, on_event=lambda cmd: fired.append(cmd))
     await c.connect(_device())
-    vector = c.mesh.set_output(address=5, output=0, on=True, level=99)  # a real encrypted state vector
+    from plejd.protocol import set_output_state_and_level
+
+    vector = c.mesh.encrypt(set_output_state_and_level(5, 0, on=True, level=99))  # a real encrypted state vector
     client.notify_cb(None, bytearray(vector))
     assert len(fired) == 1 and fired[0].command == 0x00C8  # the decoded command was dispatched
     assert c.mesh.state[5].level == 99

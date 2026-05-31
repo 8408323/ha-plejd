@@ -68,7 +68,8 @@
           "days": "Days",
           "time": "Time (HH:MM)",
           "scene": "Scene",
-          "fade": "Fade (seconds)"
+          "fade": "Fade (seconds)",
+          "transport": "Communication"
         }
       }
     },

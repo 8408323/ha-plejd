@@ -24,6 +24,12 @@ CONF_GATEWAYS = "gateways"  # gateway (GWY-01) device ids; remote control is ava
 CONF_RESOURCE_SET_ID = "resource_set_id"  # Resource-Set-ID for the remote-control WebSocket
 CONF_INSTALLATION_ID = "installation_id"  # stable client GUID (Client-ID header)
 
+# Transport preference (entry option) — force a comms interface, or auto-select.
+CONF_TRANSPORT = "transport"
+TRANSPORT_AUTO = "auto"  # gateway first when present, else Bluetooth (with fallback)
+TRANSPORT_GATEWAY = "gateway"  # remote/cloud gateway only
+TRANSPORT_BLE = "ble"  # local Bluetooth only
+
 # ── BLE GATT layout (confirmed from Plejd.Shared PlejdConstants.BleCharacteristics) ──
 # All characteristics live under the service base UUID with the 3rd 16-bit group
 # (the "0001") swapped for the role suffix below.
