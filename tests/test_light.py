@@ -97,6 +97,13 @@ async def test_turn_on_without_brightness_defaults_full():
     assert coord.commands == [(5, 0, True, 255)]
 
 
+async def test_turn_on_without_brightness_restores_last_level():
+    coord = _Coordinator([], state=OutputState(output=0, on=False, level=140))
+    light = PlejdLight(coord, _device())
+    await light.async_turn_on()
+    assert coord.commands == [(5, 0, True, 140)]
+
+
 async def test_turn_off():
     coord = _Coordinator([])
     light = PlejdLight(coord, _device())

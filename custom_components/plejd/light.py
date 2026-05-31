@@ -58,8 +58,11 @@ class PlejdLight(LightEntity):
         return state.level if state is not None else None
 
     async def async_turn_on(self, **kwargs: Any) -> None:
-        brightness = kwargs.get(ATTR_BRIGHTNESS)
-        level = brightness if brightness is not None else (self.brightness or 255)
+        level = kwargs.get(ATTR_BRIGHTNESS)
+        if level is None:
+            # No brightness requested: restore the last level, or full if unknown/off.
+            current = self.brightness
+            level = current if current else 255
         await self._coordinator.async_set_output(self._device.address, 0, True, level)
 
     async def async_turn_off(self, **kwargs: Any) -> None:

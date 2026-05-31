@@ -14,7 +14,7 @@ from collections.abc import Callable
 from homeassistant.components import bluetooth
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
 
 from .cloud import PlejdCloudDevice
 from .connection import PlejdConnection
@@ -64,7 +64,8 @@ class PlejdCoordinator:
         if not candidates:
             return None
         # Prefer the device the config flow discovered, else the strongest signal.
-        candidates.sort(key=lambda info: (info.address != self._preferred, -info.rssi))
+        # rssi can be None for adverts without a reported signal — treat as weakest.
+        candidates.sort(key=lambda info: (info.address != self._preferred, -(info.rssi or -127)))
         return candidates[0]
 
     async def async_start(self) -> None:
@@ -75,6 +76,7 @@ class PlejdCoordinator:
         device = bluetooth.async_ble_device_from_address(self.hass, info.address, connectable=True)
         if device is None:
             raise ConfigEntryNotReady(f"could not resolve {info.address}")
+        _LOGGER.debug("connecting to Plejd mesh via %s", info.address)
         try:
             await self._connection.connect(device)
         except Exception as err:  # noqa: BLE001 - surface any BLE failure as a setup retry
@@ -83,7 +85,7 @@ class PlejdCoordinator:
     async def async_set_output(self, address: int, output: int, on: bool, level: int) -> None:
         """Send an on/off + level command for an output."""
         if self._connection.mesh is None:
-            raise RuntimeError("not connected")
+            raise HomeAssistantError("Plejd mesh is not connected")
         await self._connection.write(self._connection.mesh.set_output(address, output, on, level))
 
     async def async_shutdown(self) -> None:

@@ -138,9 +138,17 @@ async def test_set_output_writes_and_state_reflects(monkeypatch):
 
 
 async def test_set_output_without_connection_raises():
+    from homeassistant.exceptions import HomeAssistantError
+
     c = PlejdCoordinator(_hass(), _entry())
-    with pytest.raises(RuntimeError, match="not connected"):
+    with pytest.raises(HomeAssistantError, match="not connected"):
         await c.async_set_output(5, 0, True, 1)
+
+
+def test_pick_device_handles_missing_rssi():
+    hass = _hass([_info("X", rssi=None), _info("Y", rssi=-40)])
+    c = PlejdCoordinator(hass, _entry(discovered=None))
+    assert c._pick_device().address == "Y"  # None rssi treated as weakest, no crash
 
 
 def test_state_for_none_before_connect():

@@ -5,6 +5,7 @@ from __future__ import annotations
 import types
 
 import plejd
+import pytest
 from plejd import PLATFORMS, async_setup_entry, async_unload_entry
 
 
@@ -49,6 +50,20 @@ async def test_setup_starts_coordinator_and_forwards(monkeypatch):
     coord = entry.runtime_data
     assert coord.started is True
     assert hass.config_entries.forwarded == PLATFORMS
+
+
+async def test_setup_shuts_down_when_forward_fails(monkeypatch):
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    _FakeCoordinator.instances.clear()
+    hass, entry = _hass(), _entry()
+
+    async def _boom(entry, platforms):
+        raise RuntimeError("platform setup failed")
+
+    hass.config_entries.async_forward_entry_setups = _boom
+    with pytest.raises(RuntimeError, match="platform setup failed"):
+        await async_setup_entry(hass, entry)
+    assert _FakeCoordinator.instances[-1].shutdown is True
 
 
 async def test_unload_shuts_down_coordinator(monkeypatch):
