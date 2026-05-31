@@ -12,6 +12,7 @@ from plejd.cloud import (
     PlejdCloudDevice,
     PlejdCloudError,
     PlejdCloudInput,
+    PlejdCloudMotion,
     PlejdCloudScene,
     PlejdCloudSite,
 )
@@ -49,6 +50,7 @@ def _site(site_id="S1"):
         crypto_key=bytes(16),
         devices=[dev],
         inputs=[PlejdCloudInput("d1", "Kitchen", 11)],
+        motion=[PlejdCloudMotion("w1", "Motion", 33)],
         scenes=[scene],
     )
 

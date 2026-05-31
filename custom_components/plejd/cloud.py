@@ -18,6 +18,7 @@ from .const import (
     CATEGORY_NONE,
     DEFAULT_CATEGORY,
     HARDWARE_TYPES,
+    HARDWARE_WMS_01,
     PLEJD_FN_SITE_BY_ID,
     PLEJD_FN_SITE_LIST,
     PLEJD_PARSE_APP_ID,
@@ -70,6 +71,15 @@ class PlejdCloudInput:
 
 
 @dataclass
+class PlejdCloudMotion:
+    """A motion sensor (WMS-01): broadcasts motion + ambient light."""
+
+    device_id: str
+    name: str
+    address: int
+
+
+@dataclass
 class PlejdCloudScene:
     """A Plejd scene: name + its mesh index (triggered as a broadcast)."""
 
@@ -87,6 +97,7 @@ class PlejdCloudSite:
     crypto_key: bytes
     devices: list[PlejdCloudDevice]
     inputs: list[PlejdCloudInput]
+    motion: list[PlejdCloudMotion]
     scenes: list[PlejdCloudScene]
 
 
@@ -201,6 +212,14 @@ def parse_site(site: dict) -> PlejdCloudSite:
                 PlejdCloudInput(device_id=device_id, name=name_by_device.get(device_id) or "Button", address=address)
             )
 
+    motion: list[PlejdCloudMotion] = []
+    for phys in site.get("plejdDevices") or []:
+        if int(phys.get("hardwareId") or 0) == HARDWARE_WMS_01:
+            device_id = phys.get("deviceId")
+            addr = device_address.get(device_id)
+            if addr is not None:
+                motion.append(PlejdCloudMotion(device_id=device_id, name="Motion sensor", address=int(addr)))
+
     scene_index = site.get("sceneIndex") or {}
     scenes = [
         PlejdCloudScene(scene_id=sc["sceneId"], name=sc.get("title") or sc["sceneId"], index=int(idx))
@@ -215,5 +234,6 @@ def parse_site(site: dict) -> PlejdCloudSite:
         crypto_key=crypto_key,
         devices=devices,
         inputs=inputs,
+        motion=motion,
         scenes=scenes,
     )
