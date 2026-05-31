@@ -29,9 +29,15 @@ def reversed_mac(address: str) -> bytes:
 class PlejdConnection:
     """Owns the bleak client for one mesh device and the mesh state."""
 
-    def __init__(self, crypto_key: bytes, on_event: Callable[[object], None]) -> None:
+    def __init__(
+        self,
+        crypto_key: bytes,
+        on_event: Callable[[object], None],
+        on_disconnect: Callable[[], None] | None = None,
+    ) -> None:
         self._key = crypto_key
         self._on_event = on_event
+        self._on_disconnect = on_disconnect
         self._client: BleakClientWithServiceCache | None = None
         self.mesh: PlejdMesh | None = None
 
@@ -42,11 +48,19 @@ class PlejdConnection:
     async def connect(self, device: BLEDevice) -> None:
         """Connect to ``device``, authenticate, and subscribe to state updates."""
         _LOGGER.debug("connecting to Plejd device %s", device.address)
-        self._client = await establish_connection(BleakClientWithServiceCache, device, device.address)
+        self._client = await establish_connection(
+            BleakClientWithServiceCache, device, device.address, disconnected_callback=self._handle_disconnect
+        )
         self.mesh = PlejdMesh(self._key, reversed_mac(device.address))
         await self._authenticate()
         await self._client.start_notify(PLEJD_CHAR_LAST_DATA_UUID, self._handle_notify)
         _LOGGER.debug("connected and authenticated to Plejd mesh via %s", device.address)
+
+    def _handle_disconnect(self, _client: object) -> None:
+        # bleak fires this when the link drops; the mesh state is no longer live.
+        self.mesh = None
+        if self._on_disconnect is not None:
+            self._on_disconnect()
 
     async def _authenticate(self) -> None:
         # Trigger a fresh challenge, read it, write back the folded SHA-256 response.

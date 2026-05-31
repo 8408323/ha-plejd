@@ -32,6 +32,7 @@ class _Coordinator:
         self.setpoints: list = []
         self.modes: list = []
         self.listeners: list = []
+        self.available = True
 
     def async_add_listener(self, cb):
         self.listeners.append(cb)
@@ -50,6 +51,14 @@ async def test_setup_creates_climate_only_for_climate_devices():
     added = []
     await async_setup_entry(None, entry, lambda entities: added.extend(entities))
     assert len(added) == 1
+
+
+def test_climate_available_follows_coordinator():
+    coord = _Coordinator([])
+    c = PlejdClimate(coord, _device())
+    assert c.available is True
+    coord.available = False
+    assert c.available is False
 
 
 def test_attributes():

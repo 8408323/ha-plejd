@@ -28,5 +28,9 @@ class PlejdScene(Scene):
         self._attr_unique_id = f"scene_{scene.scene_id}"
         self._attr_name = scene.name
 
+    @property
+    def available(self) -> bool:
+        return self._coordinator.available
+
     async def async_activate(self, **kwargs: Any) -> None:
         await self._coordinator.async_execute_scene(self._scene.index)

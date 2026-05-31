@@ -59,6 +59,10 @@ class PlejdClimate(ClimateEntity):
         )
         self._attr_preset_mode = TRM_PRESETS[TRM_MODE_NORMAL]
 
+    @property
+    def available(self) -> bool:
+        return self._coordinator.available
+
     async def async_set_temperature(self, **kwargs: Any) -> None:
         temperature = kwargs.get(ATTR_TEMPERATURE)
         if temperature is not None:

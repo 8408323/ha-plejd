@@ -35,6 +35,7 @@ class _Coordinator:
         self.listeners = []
         self.programmed = []
         self.removed = []
+        self.available = True
 
     def state_for(self, address):
         return self._state
@@ -116,6 +117,14 @@ async def test_schedule_switch_defaults_on_without_prior_state():
 def test_is_on_from_state():
     coord = _Coordinator([], state=OutputState(output=0, on=True, level=255))
     assert PlejdSwitch(coord, _device()).is_on is True
+
+
+def test_switch_available_follows_coordinator():
+    coord = _Coordinator([])
+    switch = PlejdSwitch(coord, _device())
+    assert switch.available is True
+    coord.available = False
+    assert switch.available is False
 
 
 def test_is_on_unknown():

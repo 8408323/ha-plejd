@@ -158,6 +158,48 @@ def test_dimmable_follows_traits_when_present():
     assert by_id["b"].dimmable is True and by_id["b"].traits == 0x03
 
 
+def test_parse_site_extracts_gateway_and_resource_set():
+    site = parse_site(
+        {
+            "plejdMesh": {"cryptoKey": "00" * 16},
+            "devices": [],
+            "gateways": [{"deviceId": "gw1", "hardwareId": "4", "resourceSetId": "rsABC"}],
+            "resourceSets": [{"objectId": "rsXYZ"}],
+        }
+    )
+    assert site.gateways == ["gw1"]
+    assert site.resource_set_id == "rsABC"  # the gateway's own resourceSetId wins
+
+
+def test_parse_site_resource_set_falls_back_to_resource_sets():
+    site = parse_site(
+        {
+            "plejdMesh": {"cryptoKey": "00" * 16},
+            "devices": [],
+            "gateways": [{"deviceId": "gw1"}],  # no resourceSetId on the gateway
+            "resourceSets": [{"objectId": "rsXYZ"}],
+        }
+    )
+    assert site.gateways == ["gw1"] and site.resource_set_id == "rsXYZ"
+
+
+def test_parse_site_ambiguous_resource_sets_yields_none():
+    site = parse_site(
+        {
+            "plejdMesh": {"cryptoKey": "00" * 16},
+            "devices": [],
+            "gateways": [{"deviceId": "gw1"}],  # no resourceSetId on the gateway
+            "resourceSets": [{"objectId": "rsA"}, {"objectId": "rsB"}],  # ambiguous
+        }
+    )
+    assert site.gateways == ["gw1"] and site.resource_set_id is None
+
+
+def test_parse_site_no_gateway():
+    site = parse_site({"plejdMesh": {"cryptoKey": "00" * 16}, "devices": []})
+    assert site.gateways == [] and site.resource_set_id is None
+
+
 def test_parse_site_handles_missing_address_and_hardware():
     site = parse_site(
         {

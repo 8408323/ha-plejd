@@ -80,8 +80,12 @@ except ImportError:
     class _ConfigEntryNotReady(_HomeAssistantError):
         pass
 
+    class _ConfigEntryAuthFailed(_HomeAssistantError):
+        pass
+
     _exc.HomeAssistantError = _HomeAssistantError  # type: ignore[attr-defined]
     _exc.ConfigEntryNotReady = _ConfigEntryNotReady  # type: ignore[attr-defined]
+    _exc.ConfigEntryAuthFailed = _ConfigEntryAuthFailed  # type: ignore[attr-defined]
     sys.modules.setdefault("homeassistant.exceptions", _exc)
 
     _ce = types.ModuleType("homeassistant.config_entries")

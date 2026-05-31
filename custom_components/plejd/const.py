@@ -20,6 +20,9 @@ CONF_SCENES = "scenes"  # cached scene list
 CONF_INPUTS = "inputs"  # cached button-input list
 CONF_MOTION = "motion"  # cached motion-sensor list
 HARDWARE_WMS_01 = 70  # motion sensor
+CONF_GATEWAYS = "gateways"  # gateway (GWY-01) device ids; remote control is available when non-empty
+CONF_RESOURCE_SET_ID = "resource_set_id"  # Resource-Set-ID for the remote-control WebSocket
+CONF_INSTALLATION_ID = "installation_id"  # stable client GUID (Client-ID header)
 
 # ── BLE GATT layout (confirmed from Plejd.Shared PlejdConstants.BleCharacteristics) ──
 # All characteristics live under the service base UUID with the 3rd 16-bit group
