@@ -43,9 +43,13 @@ from .const import (
     CONF_RESOURCE_SET_ID,
     CONF_SCENES,
     CONF_SITE_ID,
+    CONF_TRANSPORT,
     PLEJD_SERVICE_UUID,
     TIME_EVENT_REP_FOREVER,
     TIME_EVENT_RESULT_SCENE,
+    TRANSPORT_AUTO,
+    TRANSPORT_BLE,
+    TRANSPORT_GATEWAY,
 )
 from .gateway_transport import PlejdGatewayConnection
 from .protocol import Command, MotionEvent, OutputState, decode_motion
@@ -69,6 +73,7 @@ class PlejdCoordinator:
         self._motion_addresses = {m.address for m in self.motion}
         self.site_id = entry.data.get(CONF_SITE_ID, entry.entry_id)
         self._preferred = entry.data.get(CONF_DISCOVERED_ADDRESS)
+        self._transport_pref = (getattr(entry, "options", None) or {}).get(CONF_TRANSPORT, TRANSPORT_AUTO)
         self._connection = PlejdConnection(
             bytes.fromhex(entry.data[CONF_CRYPTO_KEY]), self._on_event, self._handle_disconnect
         )
@@ -187,7 +192,19 @@ class PlejdCoordinator:
         await self._async_select_and_connect()
 
     async def _async_select_and_connect(self) -> None:
-        """Prefer the gateway; fall back to BLE if it is absent or unreachable."""
+        """Connect over the chosen transport.
+
+        Honour the user's forced preference; otherwise prefer the gateway and fall
+        back to BLE when it's absent or unreachable.
+        """
+        if self._transport_pref == TRANSPORT_BLE:
+            await self._async_connect_ble()
+            return
+        if self._transport_pref == TRANSPORT_GATEWAY:
+            if self._gateway is None:
+                raise ConfigEntryNotReady("Gateway transport selected, but this site has no gateway")
+            await self._async_connect_gateway()
+            return
         if self._gateway is not None:
             try:
                 await self._async_connect_gateway()

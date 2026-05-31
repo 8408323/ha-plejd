@@ -17,6 +17,7 @@ from plejd.const import (
     CONF_INSTALLATION_ID,
     CONF_RESOURCE_SET_ID,
     CONF_SITE_ID,
+    CONF_TRANSPORT,
     PLEJD_CHAR_DATA_UUID,
     PLEJD_SERVICE_UUID,
 )
@@ -461,6 +462,41 @@ async def test_gateway_auth_failure_raises_reauth(monkeypatch):
     with pytest.raises(ConfigEntryAuthFailed):
         await c.async_start()
     assert c._active is None  # did not connect over BLE
+
+
+async def test_transport_force_ble_skips_gateway(monkeypatch):
+    monkeypatch.setattr(coordinator_mod, "PlejdGatewayConnection", _FakeGateway)
+    client = _FakeClient()
+    _patch_connect(monkeypatch, client)
+    ble = types.SimpleNamespace(address="01:02:03:04:05:a0")
+    hass = _hass([_info("01:02:03:04:05:a0")], {"01:02:03:04:05:a0": ble})
+    hass.session = object()
+    entry = _gateway_entry()
+    entry.options = {CONF_TRANSPORT: "ble"}
+    c = PlejdCoordinator(hass, entry)
+    await c.async_start()
+    assert c._active == "ble" and c._gateway.connected is False  # gateway present but unused
+
+
+async def test_transport_force_gateway(monkeypatch):
+    monkeypatch.setattr(coordinator_mod, "PlejdGatewayConnection", _FakeGateway)
+    hass = _hass()
+    hass.session = object()
+    entry = _gateway_entry()
+    entry.options = {CONF_TRANSPORT: "gateway"}
+    c = PlejdCoordinator(hass, entry)
+    await c.async_start()
+    assert c._active == "gateway"
+
+
+async def test_transport_force_gateway_without_gateway_raises():
+    from homeassistant.exceptions import ConfigEntryNotReady
+
+    entry = _entry()
+    entry.options = {CONF_TRANSPORT: "gateway"}
+    c = PlejdCoordinator(_hass(), entry)
+    with pytest.raises(ConfigEntryNotReady, match="no gateway"):
+        await c.async_start()
 
 
 async def test_gateway_get_token(monkeypatch):
