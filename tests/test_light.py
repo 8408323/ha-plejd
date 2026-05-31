@@ -32,6 +32,7 @@ class _Coordinator:
         self._state = state
         self.commands = []
         self.listeners = []
+        self.available = True
 
     def state_for(self, address):
         return self._state
@@ -50,6 +51,14 @@ async def test_setup_entry_creates_lights_only_for_light_devices():
     added = []
     await async_setup_entry(None, entry, lambda entities: added.extend(entities))
     assert len(added) == 1  # the switch and the address-less light are skipped
+
+
+def test_light_available_follows_coordinator():
+    coord = _Coordinator([])
+    light = PlejdLight(coord, _device())
+    assert light.available is True
+    coord.available = False
+    assert light.available is False
 
 
 def test_dimmable_light_color_mode():

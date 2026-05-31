@@ -90,7 +90,7 @@ class PlejdCloudScene:
 
 @dataclass
 class PlejdCloudSite:
-    """A site: its crypto key, devices, and scenes."""
+    """A site: its crypto key, devices, scenes, and any gateway."""
 
     site_id: str
     title: str
@@ -99,6 +99,8 @@ class PlejdCloudSite:
     inputs: list[PlejdCloudInput]
     motion: list[PlejdCloudMotion]
     scenes: list[PlejdCloudScene]
+    gateways: list[str]  # gateway (GWY-01) device ids; empty if none
+    resource_set_id: str | None  # for the remote-control WebSocket (Resource-Set-ID)
 
 
 def _headers(token: str | None = None) -> dict[str, str]:
@@ -227,6 +229,17 @@ def parse_site(site: dict) -> PlejdCloudSite:
         if (idx := scene_index.get(sc.get("sceneId"))) is not None
     ]
 
+    # A gateway (GWY-01) has no controllable output, so it is absent from devices[];
+    # it lives only in gateways[]. Its resourceSetId authorises the remote WebSocket.
+    gateway_objs = site.get("gateways") or []
+    gateways = [g["deviceId"] for g in gateway_objs if g.get("deviceId")]
+    # The gateway's own resourceSetId is authoritative. Only fall back to a site
+    # resourceSet when there's exactly one (otherwise we can't tell which grants access).
+    resource_sets = site.get("resourceSets") or []
+    resource_set_id = next((g.get("resourceSetId") for g in gateway_objs if g.get("resourceSetId")), None)
+    if resource_set_id is None and len(resource_sets) == 1:
+        resource_set_id = resource_sets[0].get("objectId")
+
     meta = site.get("site") or site  # id/title are nested under "site" in the real payload
     return PlejdCloudSite(
         site_id=meta.get("siteId") or "",
@@ -236,4 +249,6 @@ def parse_site(site: dict) -> PlejdCloudSite:
         inputs=inputs,
         motion=motion,
         scenes=scenes,
+        gateways=gateways,
+        resource_set_id=resource_set_id,
     )

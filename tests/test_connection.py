@@ -115,3 +115,22 @@ def test_handle_notify_ignores_when_not_connected():
     c = PlejdConnection(_KEY, on_event=lambda cmd: fired.append(cmd))
     c._handle_notify(None, bytearray(b"\x00" * 9))  # no mesh yet -> ignored
     assert fired == []
+
+
+async def test_disconnect_callback_clears_mesh_and_fires(monkeypatch):
+    client = _FakeClient()
+    _patch(monkeypatch, client)
+    fired = []
+    c = PlejdConnection(_KEY, on_event=lambda cmd: None, on_disconnect=lambda: fired.append(True))
+    await c.connect(_device())
+    c._handle_disconnect(client)  # bleak signals an unexpected drop
+    assert c.mesh is None and fired == [True]
+
+
+async def test_disconnect_callback_without_handler(monkeypatch):
+    client = _FakeClient()
+    _patch(monkeypatch, client)
+    c = PlejdConnection(_KEY, on_event=lambda cmd: None)  # no on_disconnect
+    await c.connect(_device())
+    c._handle_disconnect(client)
+    assert c.mesh is None  # still clears state, no callback to fire
