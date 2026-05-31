@@ -107,8 +107,14 @@ except ImportError:
         def async_create_entry(self, *, title, data):
             return {"type": "create_entry", "title": title, "data": data}
 
-        def async_show_form(self, *, step_id, data_schema=None, errors=None):
+        def async_show_form(self, *, step_id, data_schema=None, errors=None, **kwargs):
             return {"type": "form", "step_id": step_id, "data_schema": data_schema, "errors": errors}
+
+        def _get_reauth_entry(self):
+            return getattr(self, "_reauth_entry", None)
+
+        def async_update_reload_and_abort(self, entry, *, data_updates=None, **kwargs):
+            return {"type": "abort", "reason": "reauth_successful", "data_updates": data_updates}
 
     class _OptionsFlow:
         def async_create_entry(self, *, title, data):

@@ -128,6 +128,33 @@ class PlejdConfigFlow(ConfigFlow, domain=DOMAIN):
         schema = vol.Schema({vol.Required(CONF_SITE_ID): SelectSelector(SelectSelectorConfig(options=options))})
         return self.async_show_form(step_id="site", data_schema=schema)
 
+    async def async_step_reauth(self, entry_data: dict[str, Any]) -> ConfigFlowResult:
+        """Re-authentication started (e.g. the gateway rejected stored credentials)."""
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """Ask for the password again and verify it against the Plejd cloud."""
+        entry = self._get_reauth_entry()
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            session = async_get_clientsession(self.hass)
+            try:
+                await async_login(session, entry.data[CONF_EMAIL], user_input[CONF_PASSWORD])
+            except PlejdAuthError:
+                errors["base"] = "invalid_auth"
+            except PlejdCloudError:
+                errors["base"] = "cannot_connect"
+            else:
+                return self.async_update_reload_and_abort(
+                    entry, data_updates={CONF_PASSWORD: user_input[CONF_PASSWORD]}
+                )
+        return self.async_show_form(
+            step_id="reauth_confirm",
+            data_schema=vol.Schema({vol.Required(CONF_PASSWORD): str}),
+            errors=errors,
+            description_placeholders={"email": entry.data[CONF_EMAIL]},
+        )
+
     async def _create_entry(self, site_id: str) -> ConfigFlowResult:
         session = async_get_clientsession(self.hass)
         try:

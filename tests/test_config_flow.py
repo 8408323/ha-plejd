@@ -166,6 +166,40 @@ async def test_site_label_fallback(monkeypatch, title):
     assert result["step_id"] == "site"
 
 
+def _reauth_flow(reauth_entry):
+    flow = _flow()
+    flow._reauth_entry = reauth_entry
+    return flow
+
+
+async def test_reauth_routes_to_confirm():
+    flow = _reauth_flow(types.SimpleNamespace(data={CONF_EMAIL: "u@x.se"}))
+    res = await flow.async_step_reauth({CONF_EMAIL: "u@x.se"})
+    assert res["type"] == "form" and res["step_id"] == "reauth_confirm"
+
+
+async def test_reauth_confirm_success_updates_password(monkeypatch):
+    _patch_cloud(monkeypatch, login="tok")
+    flow = _reauth_flow(types.SimpleNamespace(data={CONF_EMAIL: "u@x.se", CONF_PASSWORD: "old"}))
+    res = await flow.async_step_reauth_confirm({CONF_PASSWORD: "newpw"})
+    assert res["type"] == "abort" and res["reason"] == "reauth_successful"
+    assert res["data_updates"] == {CONF_PASSWORD: "newpw"}
+
+
+async def test_reauth_confirm_invalid_auth(monkeypatch):
+    _patch_cloud(monkeypatch, login=PlejdAuthError("bad"))
+    flow = _reauth_flow(types.SimpleNamespace(data={CONF_EMAIL: "u@x.se"}))
+    res = await flow.async_step_reauth_confirm({CONF_PASSWORD: "x"})
+    assert res["errors"] == {"base": "invalid_auth"}
+
+
+async def test_reauth_confirm_cannot_connect(monkeypatch):
+    _patch_cloud(monkeypatch, login=PlejdCloudError("down"))
+    flow = _reauth_flow(types.SimpleNamespace(data={CONF_EMAIL: "u@x.se"}))
+    res = await flow.async_step_reauth_confirm({CONF_PASSWORD: "x"})
+    assert res["errors"] == {"base": "cannot_connect"}
+
+
 def _opt_flow(options=None, scenes=None, runtime_data=None, gateways=None, resource_set_id="rs1"):
     data = {"scenes": scenes if scenes is not None else [{"index": 3, "name": "Movie"}]}
     if gateways is not None:
