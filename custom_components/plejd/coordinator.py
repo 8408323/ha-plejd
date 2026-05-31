@@ -29,7 +29,8 @@ class PlejdCoordinator:
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         self.hass = hass
-        self.devices = [PlejdCloudDevice(**device) for device in entry.data[CONF_DEVICES]]
+        # Tolerate entries stored before a field existed (e.g. output_index).
+        self.devices = [PlejdCloudDevice(**{"output_index": 0, **device}) for device in entry.data[CONF_DEVICES]]
         self._preferred = entry.data.get(CONF_DISCOVERED_ADDRESS)
         self._connection = PlejdConnection(bytes.fromhex(entry.data[CONF_CRYPTO_KEY]), self._notify)
         self._listeners: list[Callable[[], None]] = []

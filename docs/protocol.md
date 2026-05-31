@@ -9,6 +9,18 @@ Two surfaces: a one-time **Parse cloud** login (to get the site crypto key +
 devices) and the local **BLE mesh** (everyday control). No protobuf anywhere —
 the cloud is JSON, the mesh is the fixed binary command format below.
 
+> ✅ **Live-validated against real hardware** (a real site + mesh): the GATT
+> layout, crypto key, auth handshake, command framing, and state decode below are
+> confirmed on-air. Corrections the static decode missed:
+> - `plejdMesh.cryptoKey` is **dash-separated hex** (`"XX-XX-.."`, 16 bytes).
+> - cloud `outputType` is **UPPERCASE** (`LIGHT`/`RELAY`/`COVERABLE`/`THERMOSTAT`).
+> - `getSiteList` items nest the id/title under a `site` object.
+> - `deviceId` **is the BLE MAC** (no colons); `deviceAddress`/`outputAddress` are keyed by it.
+> - Devices broadcast state changes on opcode **`0x0098`** keyed by the output's
+>   mesh address: `[state, level_lo, level_hi, …]`; HA brightness = the level
+>   **high byte** (level is 16-bit on the wire). Outgoing control still uses
+>   `0x00C8` `[output, on, level, level]` (DontRespond).
+
 ## 1. Cloud (Parse Server)
 
 Production: `https://cloud.plejd.com/parse/`, app id

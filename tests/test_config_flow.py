@@ -26,6 +26,7 @@ def _site(site_id="S1"):
         device_id="d1",
         name="Kitchen",
         address=1,
+        output_index=0,
         outputs=[11],
         hardware_id=1,
         model="DIM-01",

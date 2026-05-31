@@ -13,6 +13,7 @@ from plejd.protocol import OutputState
 def _device(category="light", dimmable=True, address=5):
     return PlejdCloudDevice(
         device_id="d1",
+        output_index=0,
         name="Kitchen",
         address=address,
         outputs=[address],

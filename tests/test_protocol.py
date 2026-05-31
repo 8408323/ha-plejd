@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from plejd.const import CMD_OUTPUT_STATE_AND_LEVEL, CMD_SCENE
+from plejd.const import CMD_GROUP_STATE_AND_LEVEL, CMD_OUTPUT_STATE_AND_LEVEL, CMD_SCENE
 from plejd.protocol import (
     TYPE_DONT_RESPOND,
     TYPE_READ,
@@ -80,12 +80,24 @@ def test_decode_output_state_off():
     assert st is not None and st.on is False
 
 
-def test_decode_output_state_read_reply_without_state_byte():
-    cmd = Command(address=0, command_type=0, command=CMD_OUTPUT_STATE_AND_LEVEL, data=bytes([3]))
+def test_decode_state_report_0x0098_keyed_by_address():
+    # Real devices broadcast state on 0x0098: [state, level_lo, level_hi, ...]; the
+    # vector address identifies the output, brightness = the level high byte.
+    cmd = Command(
+        address=11, command_type=0x10, command=CMD_GROUP_STATE_AND_LEVEL, data=bytes([0x01, 0xC8, 0xC8, 0x00])
+    )
     st = decode_output_state(cmd)
-    assert st == st.__class__(output=3, on=False, level=0)
+    assert st == st.__class__(output=11, on=True, level=0xC8)
 
 
-def test_decode_output_state_ignores_other_opcodes():
+def test_decode_state_report_off():
+    cmd = Command(
+        address=11, command_type=0x10, command=CMD_GROUP_STATE_AND_LEVEL, data=bytes([0x00, 0x00, 0x00, 0x00])
+    )
+    assert decode_output_state(cmd).on is False
+
+
+def test_decode_output_state_ignores_other_opcodes_and_short_data():
     assert decode_output_state(Command(0, 0, CMD_SCENE, b"\x01")) is None
     assert decode_output_state(Command(0, 0, CMD_OUTPUT_STATE_AND_LEVEL, b"")) is None
+    assert decode_output_state(Command(11, 0, CMD_GROUP_STATE_AND_LEVEL, b"\x01")) is None
