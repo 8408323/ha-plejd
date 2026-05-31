@@ -23,6 +23,7 @@ from .const import (
     CMD_OUTPUT_SET,
     CMD_OUTPUT_STATE_AND_LEVEL,
     CMD_SCENE,
+    CMD_SYSTEM_TIME,
     CMD_TRM_MODE,
     CMD_TRM_SETPOINT,
     SOURCE_APP,
@@ -110,6 +111,17 @@ def set_output_max_level(address: int, output: int, fraction: float) -> bytes:
     """Set an output's maximum dim level (0x00CA): [output, u16le of fraction*65535]."""
     payload = bytes([output & 0xFF]) + _level_fraction_to_u16le(fraction)
     return encode_command(address, CMD_OUTPUT_MAX_LEVEL, payload, command_type=TYPE_DONT_RESPOND)
+
+
+def set_timestamp(epoch: int) -> bytes:
+    """Broadcast a clock sync (0x001B): [u32le local-time epoch][0x00].
+
+    The app sends local wall-clock seconds since 1970 (not UTC) so the device RTC
+    reads wall-clock; broadcast to address 0, fire-and-forget.
+    """
+    ts = epoch & 0xFFFFFFFF
+    payload = bytes([ts & 0xFF, (ts >> 8) & 0xFF, (ts >> 16) & 0xFF, (ts >> 24) & 0xFF, 0x00])
+    return encode_command(0, CMD_SYSTEM_TIME, payload, command_type=TYPE_DONT_RESPOND)
 
 
 def set_output_curve(address: int, output: int, curve: int) -> bytes:
