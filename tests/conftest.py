@@ -267,6 +267,26 @@ except ImportError:
     _evt_helper.async_call_later = _async_call_later  # type: ignore[attr-defined]
     sys.modules.setdefault("homeassistant.helpers.event", _evt_helper)
 
+    _cover = types.ModuleType("homeassistant.components.cover")
+    _cover.ATTR_POSITION = "position"  # type: ignore[attr-defined]
+
+    class _CoverEntityFeature(enum.IntFlag):
+        OPEN = 1
+        CLOSE = 2
+        SET_POSITION = 4
+        STOP = 8
+
+    class _CoverEntity:
+        def async_on_remove(self, func):
+            self._unsub = func
+
+        def async_write_ha_state(self):
+            return None
+
+    _cover.CoverEntityFeature = _CoverEntityFeature  # type: ignore[attr-defined]
+    _cover.CoverEntity = _CoverEntity  # type: ignore[attr-defined]
+    sys.modules.setdefault("homeassistant.components.cover", _cover)
+
     _dr = types.ModuleType("homeassistant.helpers.device_registry")
 
     class _DeviceInfo(dict):

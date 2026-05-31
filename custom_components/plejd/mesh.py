@@ -60,6 +60,14 @@ class PlejdMesh:
         """Encrypted thermostat operating-mode command (0x045F)."""
         return self.encrypt(protocol.set_climate_mode(address, mode))
 
+    def set_cover_position(self, address: int, position: int) -> bytes:
+        """Encrypted cover position command (0x0420 WindowControl)."""
+        return self.encrypt(protocol.set_cover_position(address, position))
+
+    def cover_stop(self, address: int) -> bytes:
+        """Encrypted cover stop command (0x0420 WindowControl)."""
+        return self.encrypt(protocol.cover_stop(address))
+
     def handle_notification(self, ciphertext: bytes) -> protocol.Command | None:
         """Decrypt + decode an incoming vector, updating output state as a side effect.
 

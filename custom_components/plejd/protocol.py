@@ -21,9 +21,13 @@ from .const import (
     CMD_SCENE,
     CMD_TRM_MODE,
     CMD_TRM_SETPOINT,
+    SOURCE_APP,
     SOURCE_MOTION,
     SUBPKG_LUX,
     SUBPKG_SOURCE,
+    SUBPKG_WINDOW,
+    WINDOW_LEVEL,
+    WINDOW_STOP,
 )
 
 # CommandType byte (from the app's CommandType enum).
@@ -93,6 +97,33 @@ def execute_scene(address: int, scene: int) -> bytes:
     the slewrate/level fields in the schema belong to scene *configuration* (0x0022).
     """
     return encode_command(address, CMD_SCENE, bytes([scene & 0xFF]), command_type=TYPE_DONT_RESPOND)
+
+
+def _mini_header(flag: int, size: int) -> int:
+    """Single-byte mini-package header: low nibble = flag, bits 4-6 = size-1."""
+    return (flag & 0x0F) | (((size - 1) & 7) << 4)
+
+
+def _source_app() -> bytes:
+    return bytes([_mini_header(SUBPKG_SOURCE, 1), SOURCE_APP])
+
+
+def set_cover_position(address: int, position: int) -> bytes:
+    """Set a cover position 0-100 (0x0420 WindowControl mini-package).
+
+    Plejd stores an 8-bit level inverted (255-level); HA 0 (closed) -> level 0.
+    Decoded from the app, not hardware-validated (no cover on the test mesh).
+    """
+    level = max(0, min(255, round(position / 100 * 255)))
+    inverted = 255 - level
+    payload = _source_app() + bytes([_mini_header(SUBPKG_WINDOW, 3), WINDOW_LEVEL, inverted, inverted])
+    return encode_command(address, CMD_OUTPUT_SET, payload, command_type=TYPE_DONT_RESPOND)
+
+
+def cover_stop(address: int) -> bytes:
+    """Halt a cover (0x0420 WindowControl Stop)."""
+    payload = _source_app() + bytes([_mini_header(SUBPKG_WINDOW, 1), WINDOW_STOP])
+    return encode_command(address, CMD_OUTPUT_SET, payload, command_type=TYPE_DONT_RESPOND)
 
 
 def set_climate_setpoint(address: int, celsius: float) -> bytes:

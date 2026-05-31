@@ -264,3 +264,21 @@ def test_motion_event_dispatches_to_listeners():
     c._on_event(Command(99, 0x10, CMD_OUTPUT_SET, b"\x03\x03"))  # not a motion address -> ignored
     remove()
     assert len(events) == 1 and events[0].motion is True and events[0].lux == 2
+
+
+async def test_cover_commands(monkeypatch):
+    from plejd.const import CMD_OUTPUT_SET
+    from plejd.protocol import decode_command
+
+    client = _FakeClient()
+    _patch_connect(monkeypatch, client)
+    ble = types.SimpleNamespace(address="01:02:03:04:05:a0")
+    hass = _hass([_info("01:02:03:04:05:a0")], {"01:02:03:04:05:a0": ble})
+    c = PlejdCoordinator(hass, _entry(discovered=None))
+    await c.async_start()
+    await c.async_set_cover_position(7, 100)
+    pos = decode_command(c._connection.mesh.decrypt(client.writes[-1][1]))
+    assert pos.command == CMD_OUTPUT_SET and pos.data[:2] == bytes([0x03, 0x08])
+    await c.async_cover_stop(7)
+    stop = decode_command(c._connection.mesh.decrypt(client.writes[-1][1]))
+    assert stop.data == bytes([0x03, 0x08, 0x07, 0x00])

@@ -84,5 +84,15 @@ async def test_failed_unload_keeps_coordinator(monkeypatch):
     assert entry.runtime_data.shutdown is False
 
 
-def test_platforms_includes_light():
-    assert "light" in PLATFORMS
+def test_every_platform_module_is_forwarded():
+    # Guard against adding a platform file but forgetting to forward it.
+    import pathlib
+
+    cc = pathlib.Path(__file__).parent.parent / "custom_components" / "plejd"
+    platform_files = {
+        f.stem
+        for f in cc.glob("*.py")
+        if f.stem in {"light", "switch", "cover", "climate", "binary_sensor", "sensor", "event", "scene"}
+    }
+    forwarded = {p.value for p in PLATFORMS}
+    assert platform_files <= forwarded, f"not forwarded: {platform_files - forwarded}"
