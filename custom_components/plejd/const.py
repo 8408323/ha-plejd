@@ -65,6 +65,25 @@ CMD_GROUP_STATE_AND_LEVEL = 0x0098  # broadcast on/off + level to a group/all
 CMD_OUTPUT_SET = 0x0420  # modern "mini-package" output protocol (newer firmware)
 CMD_NOTIFY_EVENTS = 0x002B  # device fault flags (NotifyEvents bitfield)
 CMD_HARDFAULT_REASON = 0x001D  # struct: code(u32 le), line(u16 le), message(ascii)
+CMD_TRM_SETPOINT = 0x045C  # thermostat target temperature: u16le = round(C*10)
+CMD_TRM_MODE = 0x045F  # thermostat operating mode (OperatingMode enum)
+CMD_TRM_TEMP_READING = 0x045B  # temperature reading [sensor] -> u16le C*10
+
+# Thermostat operating modes (Plejd OperatingMode enum) -> HA presets.
+TRM_MODE_VACATION = 2
+TRM_MODE_BOOST = 3
+TRM_MODE_FROST_PROTECTION = 4
+TRM_MODE_NIGHT_REDUCTION = 5
+TRM_MODE_DAY_REDUCTION = 6
+TRM_MODE_NORMAL = 7
+TRM_PRESETS = {
+    TRM_MODE_NORMAL: "none",
+    TRM_MODE_BOOST: "boost",
+    TRM_MODE_FROST_PROTECTION: "frost",
+    TRM_MODE_NIGHT_REDUCTION: "night",
+    TRM_MODE_DAY_REDUCTION: "day",
+    TRM_MODE_VACATION: "vacation",
+}
 
 # ── Cloud (Parse Server) — production constants, app-level (not user secrets) ──
 PLEJD_PARSE_URL = "https://cloud.plejd.com/parse/"

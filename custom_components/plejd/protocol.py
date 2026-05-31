@@ -18,6 +18,8 @@ from .const import (
     CMD_GROUP_STATE_AND_LEVEL,
     CMD_OUTPUT_STATE_AND_LEVEL,
     CMD_SCENE,
+    CMD_TRM_MODE,
+    CMD_TRM_SETPOINT,
 )
 
 # CommandType byte (from the app's CommandType enum).
@@ -87,6 +89,26 @@ def execute_scene(address: int, scene: int) -> bytes:
     the slewrate/level fields in the schema belong to scene *configuration* (0x0022).
     """
     return encode_command(address, CMD_SCENE, bytes([scene & 0xFF]), command_type=TYPE_DONT_RESPOND)
+
+
+def set_climate_setpoint(address: int, celsius: float) -> bytes:
+    """Set a thermostat target temperature (0x045C): u16 little-endian of round(C*10)."""
+    val = max(0, min(0xFFFF, round(celsius * 10)))
+    return encode_command(
+        address, CMD_TRM_SETPOINT, bytes([val & 0xFF, (val >> 8) & 0xFF]), command_type=TYPE_DONT_RESPOND
+    )
+
+
+def set_climate_mode(address: int, mode: int) -> bytes:
+    """Set a thermostat operating mode (0x045F, OperatingMode enum)."""
+    return encode_command(address, CMD_TRM_MODE, bytes([mode & 0xFF]), command_type=TYPE_DONT_RESPOND)
+
+
+def decode_temperature(data: bytes) -> float | None:
+    """Decode a temperature value (u16 little-endian of C*10), e.g. a 0x045B reply."""
+    if len(data) >= 2:
+        return ((data[1] << 8) | data[0]) / 10
+    return None
 
 
 @dataclass(frozen=True)
