@@ -56,6 +56,14 @@ class PlejdMesh:
         """Encrypted maximum-dim-level setting (0x00CA)."""
         return self.encrypt(protocol.set_output_max_level(address, output, fraction))
 
+    def set_output_curve(self, address: int, output: int, curve: int) -> bytes:
+        """Encrypted dimming-curve setting (0x00CC)."""
+        return self.encrypt(protocol.set_output_curve(address, output, curve))
+
+    def set_output_phase_dim(self, address: int, output: int, phase: int) -> bytes:
+        """Encrypted phase-dim-edge setting (0x00CE)."""
+        return self.encrypt(protocol.set_output_phase_dim(address, output, phase))
+
     def scene(self, address: int, scene: int) -> bytes:
         """Encrypted command to execute a scene (0x0021)."""
         return self.encrypt(protocol.execute_scene(address, scene))
