@@ -16,6 +16,8 @@ from dataclasses import dataclass
 
 from .const import (
     CMD_GROUP_STATE_AND_LEVEL,
+    CMD_OUTPUT_MAX_LEVEL,
+    CMD_OUTPUT_MIN_LEVEL,
     CMD_OUTPUT_SET,
     CMD_OUTPUT_STATE_AND_LEVEL,
     CMD_SCENE,
@@ -88,6 +90,24 @@ def set_output_state_and_level(
 def request_output_state_and_level(address: int, output: int) -> bytes:
     """Read an output's current state and level (0x00C8, Read)."""
     return encode_command(address, CMD_OUTPUT_STATE_AND_LEVEL, bytes([output & 0xFF]), command_type=TYPE_READ)
+
+
+def _level_fraction_to_u16le(fraction: float) -> bytes:
+    """Encode a 0-1 dim-level fraction as the app's u16 little-endian (round(f*65535))."""
+    val = max(0, min(0xFFFF, round(fraction * 0xFFFF)))
+    return bytes([val & 0xFF, (val >> 8) & 0xFF])
+
+
+def set_output_min_level(address: int, output: int, fraction: float) -> bytes:
+    """Set an output's minimum dim level (0x00C9): [output, u16le of fraction*65535]."""
+    payload = bytes([output & 0xFF]) + _level_fraction_to_u16le(fraction)
+    return encode_command(address, CMD_OUTPUT_MIN_LEVEL, payload, command_type=TYPE_DONT_RESPOND)
+
+
+def set_output_max_level(address: int, output: int, fraction: float) -> bytes:
+    """Set an output's maximum dim level (0x00CA): [output, u16le of fraction*65535]."""
+    payload = bytes([output & 0xFF]) + _level_fraction_to_u16le(fraction)
+    return encode_command(address, CMD_OUTPUT_MAX_LEVEL, payload, command_type=TYPE_DONT_RESPOND)
 
 
 def execute_scene(address: int, scene: int) -> bytes:

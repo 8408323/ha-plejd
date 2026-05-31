@@ -24,5 +24,15 @@
     "abort": {
       "already_configured": "This Plejd site is already configured."
     }
+  },
+  "entity": {
+    "number": {
+      "min_dim_level": {
+        "name": "Minimum brightness"
+      },
+      "max_dim_level": {
+        "name": "Maximum brightness"
+      }
+    }
   }
 }

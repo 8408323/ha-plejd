@@ -77,3 +77,13 @@ def test_climate_commands_round_trip():
     assert sp.command == CMD_TRM_SETPOINT and sp.data == bytes([200 & 0xFF, 0])
     md = decode_command(mesh.decrypt(mesh.set_climate_mode(9, 7)))
     assert md.command == CMD_TRM_MODE and md.data == bytes([7])
+
+
+def test_dim_level_settings_round_trip():
+    from plejd.const import CMD_OUTPUT_MAX_LEVEL, CMD_OUTPUT_MIN_LEVEL
+
+    mesh = _mesh()
+    lo = decode_command(mesh.decrypt(mesh.set_output_min_level(9, 1, 0.5)))
+    assert lo.command == CMD_OUTPUT_MIN_LEVEL and lo.data == bytes([1, 0x00, 0x80])
+    hi = decode_command(mesh.decrypt(mesh.set_output_max_level(9, 1, 1.0)))
+    assert hi.command == CMD_OUTPUT_MAX_LEVEL and hi.data == bytes([1, 0xFF, 0xFF])

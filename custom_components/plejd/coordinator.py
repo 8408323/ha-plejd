@@ -141,6 +141,14 @@ class PlejdCoordinator:
         """Send an on/off + level command for an output."""
         await self._send(lambda mesh: mesh.set_output(address, output, on, level))
 
+    async def async_set_output_min_level(self, address: int, output: int, fraction: float) -> None:
+        """Set an output's minimum dim level (0-1 fraction)."""
+        await self._send(lambda mesh: mesh.set_output_min_level(address, output, fraction))
+
+    async def async_set_output_max_level(self, address: int, output: int, fraction: float) -> None:
+        """Set an output's maximum dim level (0-1 fraction)."""
+        await self._send(lambda mesh: mesh.set_output_max_level(address, output, fraction))
+
     async def async_execute_scene(self, index: int) -> None:
         """Trigger a Plejd scene (broadcast to address 0)."""
         await self._send(lambda mesh: mesh.scene(0, index))
