@@ -76,5 +76,5 @@ async def test_added_to_hass_subscribes():
 
 def test_device_info():
     sw = PlejdSwitch(_Coordinator([]), _device())
-    assert sw._attr_unique_id == "r1_0"
+    assert sw._attr_unique_id == "r1"
     assert sw._attr_device_info["model"] == "REL-02"

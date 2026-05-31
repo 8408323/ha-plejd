@@ -34,7 +34,9 @@ class PlejdLight(LightEntity):
     def __init__(self, coordinator: PlejdCoordinator, device: PlejdCloudDevice) -> None:
         self._coordinator = coordinator
         self._device = device
-        self._attr_unique_id = f"{device.device_id}_{device.output_index}"
+        self._attr_unique_id = (
+            device.device_id if device.output_index == 0 else f"{device.device_id}_{device.output_index}"
+        )
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, device.device_id)},
             name=device.name,
