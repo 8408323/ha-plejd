@@ -174,14 +174,26 @@ async def main() -> int:
         nudge = 80 if orig_level >= 160 else 220
         print(f"\n[5/5] write test (will restore): set '{light.name}' ON @ level {nudge}")
         events.clear()
-        await conn.write(conn.mesh.set_output(addr, out, on=True, level=nudge))
+        await conn.write(
+            conn.mesh.encrypt(
+                protocol.set_output_state_and_level(
+                    addr, out, on=True, level=nudge, command_type=protocol.TYPE_DONT_RESPOND
+                )
+            )
+        )
         await asyncio.sleep(4.0)
         confirmed = _echoed(addr, want_on=True)
         print(f"      ↳ command confirmed by a state broadcast on addr {addr}: {'YES ✅' if confirmed else 'NO'}")
 
         await asyncio.sleep(1.0)
         print(f"      restoring '{light.name}' to original (on={bool(before and before.on)} level={orig_level})")
-        await conn.write(conn.mesh.set_output(addr, out, on=bool(before and before.on), level=orig_level))
+        await conn.write(
+            conn.mesh.encrypt(
+                protocol.set_output_state_and_level(
+                    addr, out, on=bool(before and before.on), level=orig_level, command_type=protocol.TYPE_DONT_RESPOND
+                )
+            )
+        )
         await asyncio.sleep(1.5)
 
         print("\n== RESULT ==")
