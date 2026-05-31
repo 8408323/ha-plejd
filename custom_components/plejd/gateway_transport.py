@@ -16,15 +16,12 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
-import logging
 from collections.abc import Awaitable, Callable
 
 import aiohttp
 
 from . import gateway
 from .protocol import OutputState
-
-_LOGGER = logging.getLogger(__name__)
 
 
 class PlejdGatewayConnection:

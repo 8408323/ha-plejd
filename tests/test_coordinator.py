@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import types
 
 import pytest
@@ -370,8 +369,8 @@ async def test_shutdown_cancels_reconnect_task(monkeypatch):
     task = c._reconnect_task
     await c.async_shutdown()
     assert c._reconnect_task is None and not client.is_connected
-    with contextlib.suppress(asyncio.CancelledError):
-        await task
+    drained = await asyncio.gather(task, return_exceptions=True)
+    assert isinstance(drained[0], asyncio.CancelledError)  # shutdown cancelled the reconnect task
 
 
 class _FakeGateway:
