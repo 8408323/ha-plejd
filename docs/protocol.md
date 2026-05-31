@@ -16,12 +16,14 @@ Production: `https://cloud.plejd.com/parse/`, app id
 `X-Parse-Application-Id`. Login is plain Parse (the `auth.api.plejd.cloud` OAuth
 host is a separate remote-gateway/NATS system, not needed for setup).
 
-1. `POST /parse/login` header `X-Parse-Application-Id`, body
+Paths below are relative to the Parse base above (`…/parse/`).
+
+1. `POST login` header `X-Parse-Application-Id`, body
    `{"username": <email lowercased>, "password": <pw>}` → user object with
    `sessionToken` (`"r:…"`). Error `code 101` = bad credentials.
 2. Add `X-Parse-Session-Token: <sessionToken>` to all later calls.
-3. `POST /parse/functions/getSiteList` (no body) → `{"result": [{siteId, …}]}`.
-4. `POST /parse/functions/getSiteById` body `{"siteId": <id>}` →
+3. `POST functions/getSiteList` (no body) → `{"result": [{siteId, …}]}`.
+4. `POST functions/getSiteById` body `{"siteId": <id>}` →
    `{"result": [site]}`. This one object carries everything below.
 
 ### Site JSON (the fields the integration needs)

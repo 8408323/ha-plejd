@@ -129,16 +129,19 @@ OUTPUT_TYPE_RELAY = 2
 OUTPUT_TYPE_COVERABLE = 3
 OUTPUT_TYPE_THERMOSTAT = 4
 
-# Default HA category by hardware type when cloud OutputType/traits are absent.
-# Refine with the per-output OutputType + Dimmable trait (see model/docs).
+# Internal device categories (NOT HA platform names) → HA platform mapping:
+#   light/switch/cover/climate map 1:1; motion/contact → binary_sensor;
+#   button → event; none → device-only (no entity).
+# This is the default by hardware type when cloud OutputType/traits are absent;
+# refine with the per-output OutputType + Dimmable trait (see model/docs).
 CATEGORY_LIGHT = "light"
 CATEGORY_SWITCH = "switch"
 CATEGORY_COVER = "cover"
 CATEGORY_CLIMATE = "climate"
-CATEGORY_MOTION = "motion"
-CATEGORY_CONTACT = "contact"
-CATEGORY_BUTTON = "button"
-CATEGORY_NONE = "none"
+CATEGORY_MOTION = "motion"  # → binary_sensor (motion)
+CATEGORY_CONTACT = "contact"  # → binary_sensor (opening)
+CATEGORY_BUTTON = "button"  # → event
+CATEGORY_NONE = "none"  # gateway/aux — no entity
 
 DEFAULT_CATEGORY: dict[int, str] = {
     1: CATEGORY_LIGHT,
