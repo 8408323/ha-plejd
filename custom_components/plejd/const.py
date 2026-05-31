@@ -12,6 +12,11 @@ DOMAIN = "plejd"
 # BLE address of the mesh device discovered during the config flow.
 CONF_DISCOVERED_ADDRESS = "discovered_address"
 
+# Config-entry data keys.
+CONF_SITE_ID = "site_id"
+CONF_CRYPTO_KEY = "crypto_key"  # hex string of the 16-byte site key
+CONF_DEVICES = "devices"  # cached device list (so HA works offline after setup)
+
 # ── BLE GATT layout (confirmed from Plejd.Shared PlejdConstants.BleCharacteristics) ──
 # All characteristics live under the service base UUID with the 3rd 16-bit group
 # (the "0001") swapped for the role suffix below.

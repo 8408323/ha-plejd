@@ -50,13 +50,15 @@ Or manually:
 
 ## Configuration
 
-> ⚠️ The config flow is still a work in progress — signing in does not yet fetch
-> your devices. This is the intended setup once the cloud login lands (tracked in
-> the [issues](https://github.com/8408323/ha-plejd/issues)).
+> ⚠️ Setup signs in and fetches your site (devices + crypto key), but entity
+> platforms (lights, switches, …) aren't built yet — so no controllable entities
+> appear in HA yet. Tracked in the [issues](https://github.com/8408323/ha-plejd/issues).
 
 1. Go to **Settings → Devices & Services → Add Integration**.
 2. Search for *Plejd*.
-3. Sign in with your Plejd account. Your site's devices and crypto key are fetched once; control then happens locally over Bluetooth.
+3. Sign in with your Plejd account; if you have more than one site, pick one. Your
+   site's devices and crypto key are fetched once; control then happens locally
+   over Bluetooth.
 
 ## Features
 

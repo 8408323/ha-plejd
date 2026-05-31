@@ -68,3 +68,31 @@ except ImportError:
     _ce.ConfigFlow = _ConfigFlow  # type: ignore[attr-defined]
     _ce.ConfigFlowResult = dict  # type: ignore[attr-defined]
     sys.modules.setdefault("homeassistant.config_entries", _ce)
+
+    _helpers = types.ModuleType("homeassistant.helpers")
+    sys.modules.setdefault("homeassistant.helpers", _helpers)
+
+    _aiohttp = types.ModuleType("homeassistant.helpers.aiohttp_client")
+
+    def _async_get_clientsession(hass):
+        return getattr(hass, "session", None)
+
+    _aiohttp.async_get_clientsession = _async_get_clientsession  # type: ignore[attr-defined]
+    sys.modules.setdefault("homeassistant.helpers.aiohttp_client", _aiohttp)
+
+    _selector = types.ModuleType("homeassistant.helpers.selector")
+
+    class _SelectSelectorConfig:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    class _SelectSelector:
+        def __init__(self, config=None):
+            self.config = config
+
+        def __call__(self, value):
+            return value
+
+    _selector.SelectSelector = _SelectSelector  # type: ignore[attr-defined]
+    _selector.SelectSelectorConfig = _SelectSelectorConfig  # type: ignore[attr-defined]
+    sys.modules.setdefault("homeassistant.helpers.selector", _selector)
