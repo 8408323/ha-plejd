@@ -156,12 +156,13 @@ class PlejdOptionsFlow(OptionsFlow):
         errors: dict[str, str] = {}
         if user_input is not None:
             to_delete = set(user_input.get("delete", []))
-            await self._clear_deleted([s for s in schedules if str(s["slot"]) in to_delete])
-            schedules = [s for s in schedules if str(s["slot"]) not in to_delete]
+            kept = [s for s in schedules if str(s["slot"]) not in to_delete]
+            removed = [s for s in schedules if str(s["slot"]) in to_delete]
+            new_schedule: dict | None = None
             name = (user_input.get("name") or "").strip()
             if name:
                 parsed = _parse_time(user_input.get("time", ""))
-                used = {s["slot"] for s in schedules}
+                used = {s["slot"] for s in kept}
                 slot = next((i for i in range(TIME_EVENT_SLOTS) if i not in used), None)
                 if user_input.get("scene") is None:
                     errors["base"] = "scene_required"
@@ -171,20 +172,22 @@ class PlejdOptionsFlow(OptionsFlow):
                     errors["base"] = "no_free_slots"
                 else:
                     hour, minute, second = parsed
-                    schedules.append(
-                        {
-                            "id": next_id,
-                            "slot": slot,
-                            "name": name,
-                            "days": [WEEKDAYS.index(d) for d in user_input.get("days", [])],
-                            "time": f"{hour:02d}:{minute:02d}:{second:02d}",
-                            "scene": int(user_input["scene"]),
-                            "fade": int(user_input.get("fade", 0)),
-                        }
-                    )
-                    next_id += 1
+                    new_schedule = {
+                        "id": next_id,
+                        "slot": slot,
+                        "name": name,
+                        "days": [WEEKDAYS.index(d) for d in user_input.get("days", [])],
+                        "time": f"{hour:02d}:{minute:02d}:{second:02d}",
+                        "scene": int(user_input["scene"]),
+                        "fade": int(user_input.get("fade", 0)),
+                    }
             if not errors:
-                return self.async_create_entry(title="", data={CONF_SCHEDULES: schedules, "next_schedule_id": next_id})
+                # Only once the save is certain: clear deleted device events, then persist.
+                await self._clear_deleted(removed)
+                if new_schedule is not None:
+                    kept.append(new_schedule)
+                    next_id += 1
+                return self.async_create_entry(title="", data={CONF_SCHEDULES: kept, "next_schedule_id": next_id})
 
         scene_options = [{"value": str(s["index"]), "label": s["name"]} for s in self._entry.data.get(CONF_SCENES, [])]
         day_options = [{"value": d, "label": d} for d in WEEKDAYS]

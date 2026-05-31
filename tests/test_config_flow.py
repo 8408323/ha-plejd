@@ -238,6 +238,21 @@ async def test_options_delete_persists_even_if_ble_write_fails():
     assert res["data"]["schedules"] == []
 
 
+async def test_options_delete_not_applied_when_same_submit_is_invalid():
+    existing = [{"id": 0, "slot": 0, "name": "X", "days": [0], "time": "07:00", "scene": 1, "fade": 0}]
+    removed = []
+
+    class _Coord:
+        async def async_remove_time_event(self, slot):
+            removed.append(slot)
+
+    flow = _opt_flow(options={"schedules": existing}, runtime_data=_Coord())
+    # Delete slot 0 AND add an invalid-time schedule in one submit -> validation error.
+    res = await flow.async_step_init({"delete": ["0"], "name": "New", "time": "nope", "scene": "3"})
+    assert res["type"] == "form" and res["errors"] == {"time": "invalid_time"}
+    assert removed == []  # device event must NOT be cleared since the save didn't happen
+
+
 async def test_options_save_without_adding():
     existing = [{"slot": 2, "name": "Keep", "days": [1], "time": "08:00", "scene": 1, "fade": 0}]
     res = await _opt_flow(options={"schedules": existing}).async_step_init({"name": "", "delete": []})
