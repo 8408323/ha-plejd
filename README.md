@@ -50,9 +50,10 @@ Or manually:
 
 ## Configuration
 
-> ⚠️ Setup signs in and fetches your site (devices + crypto key), but entity
-> platforms (lights, switches, …) aren't built yet — so no controllable entities
-> appear in HA yet. Tracked in the [issues](https://github.com/8408323/ha-plejd/issues).
+> ⚠️ Early but functional: setup signs in, fetches your site, connects over
+> Bluetooth, and exposes **lights** (on/off + brightness). More platforms
+> (switches, covers, climate, sensors) are in progress — see the
+> [issues](https://github.com/8408323/ha-plejd/issues).
 
 1. Go to **Settings → Devices & Services → Add Integration**.
 2. Search for *Plejd*.
@@ -62,9 +63,9 @@ Or manually:
 
 ## Features
 
-Planned, tracked in [issues](https://github.com/8408323/ha-plejd/issues):
+Tracked in [issues](https://github.com/8408323/ha-plejd/issues):
 
-- **Lights** — on/off + brightness for dimmers and LED drivers (DIM-01/02, LED-10/75, …)
+- **Lights** ✅ — on/off + brightness for dimmers and LED drivers (DIM-01/02, LED-10/75, …)
 - **Switches/relays** — CTR-01, REL-01/02, OUT-01/02
 - **Scenes** — trigger Plejd scenes
 - **Covers** — JAL-01 / WIN-01 blinds and shades

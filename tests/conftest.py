@@ -7,6 +7,7 @@ as the top-level `plejd` package so tests can `from plejd... import ...`.
 
 from __future__ import annotations
 
+import enum
 import os
 import sys
 import types
@@ -28,8 +29,14 @@ except ImportError:
     for _k, _v in _CONF.items():
         setattr(_const, _k, _v)
 
-    class _Platform(str):
-        pass
+    class _Platform(str, enum.Enum):
+        LIGHT = "light"
+        SWITCH = "switch"
+        COVER = "cover"
+        CLIMATE = "climate"
+        BINARY_SENSOR = "binary_sensor"
+        SENSOR = "sensor"
+        EVENT = "event"
 
     _const.Platform = _Platform  # type: ignore[attr-defined]
     sys.modules.setdefault("homeassistant.const", _const)
@@ -39,8 +46,24 @@ except ImportError:
     class _HomeAssistant:
         pass
 
+    def _callback(func):
+        return func
+
     _core.HomeAssistant = _HomeAssistant  # type: ignore[attr-defined]
+    _core.callback = _callback  # type: ignore[attr-defined]
     sys.modules.setdefault("homeassistant.core", _core)
+
+    _exc = types.ModuleType("homeassistant.exceptions")
+
+    class _HomeAssistantError(Exception):
+        pass
+
+    class _ConfigEntryNotReady(_HomeAssistantError):
+        pass
+
+    _exc.HomeAssistantError = _HomeAssistantError  # type: ignore[attr-defined]
+    _exc.ConfigEntryNotReady = _ConfigEntryNotReady  # type: ignore[attr-defined]
+    sys.modules.setdefault("homeassistant.exceptions", _exc)
 
     _ce = types.ModuleType("homeassistant.config_entries")
 
@@ -96,3 +119,53 @@ except ImportError:
     _selector.SelectSelector = _SelectSelector  # type: ignore[attr-defined]
     _selector.SelectSelectorConfig = _SelectSelectorConfig  # type: ignore[attr-defined]
     sys.modules.setdefault("homeassistant.helpers.selector", _selector)
+
+    _components = types.ModuleType("homeassistant.components")
+    sys.modules.setdefault("homeassistant.components", _components)
+
+    _bt = types.ModuleType("homeassistant.components.bluetooth")
+
+    class _BluetoothServiceInfoBleak:
+        pass
+
+    def _async_discovered_service_info(hass, connectable=True):
+        return getattr(hass, "service_infos", [])
+
+    def _async_ble_device_from_address(hass, address, connectable=True):
+        return getattr(hass, "ble_devices", {}).get(address)
+
+    _bt.BluetoothServiceInfoBleak = _BluetoothServiceInfoBleak  # type: ignore[attr-defined]
+    _bt.async_discovered_service_info = _async_discovered_service_info  # type: ignore[attr-defined]
+    _bt.async_ble_device_from_address = _async_ble_device_from_address  # type: ignore[attr-defined]
+    sys.modules.setdefault("homeassistant.components.bluetooth", _bt)
+
+    _light = types.ModuleType("homeassistant.components.light")
+    _light.ATTR_BRIGHTNESS = "brightness"  # type: ignore[attr-defined]
+
+    class _ColorMode(str, enum.Enum):
+        ONOFF = "onoff"
+        BRIGHTNESS = "brightness"
+
+    class _LightEntity:
+        def async_on_remove(self, func):
+            self._unsub = func
+
+        def async_write_ha_state(self):
+            return None
+
+    _light.ColorMode = _ColorMode  # type: ignore[attr-defined]
+    _light.LightEntity = _LightEntity  # type: ignore[attr-defined]
+    sys.modules.setdefault("homeassistant.components.light", _light)
+
+    _dr = types.ModuleType("homeassistant.helpers.device_registry")
+
+    class _DeviceInfo(dict):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+
+    _dr.DeviceInfo = _DeviceInfo  # type: ignore[attr-defined]
+    sys.modules.setdefault("homeassistant.helpers.device_registry", _dr)
+
+    _ep = types.ModuleType("homeassistant.helpers.entity_platform")
+    _ep.AddEntitiesCallback = object  # type: ignore[attr-defined]
+    sys.modules.setdefault("homeassistant.helpers.entity_platform", _ep)
