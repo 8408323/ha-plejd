@@ -60,11 +60,18 @@ def decode_command(vector: bytes) -> Command:
     return Command(address=address, command_type=command_type, command=command, data=vector[5:])
 
 
-def set_output_state_and_level(address: int, output: int, on: bool, level: int) -> bytes:
-    """Set an output on/off and dim level (0x00C8). `level` is the 8-bit dim value."""
+def set_output_state_and_level(
+    address: int, output: int, on: bool, level: int, command_type: int = TYPE_WRITE
+) -> bytes:
+    """Set an output on/off and dim level (0x00C8). `level` is the 8-bit dim value.
+
+    Defaults to the app's Write `StateAndLevelCommand`; callers that don't need an
+    ack (live control relies on the LastChangedDatavector broadcast) pass
+    `TYPE_DONT_RESPOND`.
+    """
     lvl = level & 0xFF
     payload = bytes([output & 0xFF, 1 if on else 0, lvl, lvl])
-    return encode_command(address, CMD_OUTPUT_STATE_AND_LEVEL, payload)
+    return encode_command(address, CMD_OUTPUT_STATE_AND_LEVEL, payload, command_type=command_type)
 
 
 def request_output_state_and_level(address: int, output: int) -> bytes:

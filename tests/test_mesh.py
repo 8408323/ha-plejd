@@ -20,6 +20,7 @@ def test_set_output_round_trips_through_encryption():
     cmd = decode_command(plain)
     assert cmd.address == 5
     assert cmd.command == CMD_OUTPUT_STATE_AND_LEVEL
+    assert cmd.command_type == TYPE_DONT_RESPOND  # fire-and-forget control
     assert cmd.data == bytes([0, 1, 200, 200])
 
 

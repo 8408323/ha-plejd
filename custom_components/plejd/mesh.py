@@ -36,8 +36,13 @@ class PlejdMesh:
         return crypto.encrypt_decrypt(self._address, ciphertext, self._key)
 
     def set_output(self, address: int, output: int, on: bool, level: int) -> bytes:
-        """Encrypted command to set an output on/off + dim level (0x00C8)."""
-        return self.encrypt(protocol.set_output_state_and_level(address, output, on, level))
+        """Encrypted command to set an output on/off + dim level (0x00C8).
+
+        Sent fire-and-forget (DontRespond); the resulting state arrives on the
+        LastChangedDatavector broadcast.
+        """
+        plaintext = protocol.set_output_state_and_level(address, output, on, level, command_type=TYPE_DONT_RESPOND)
+        return self.encrypt(plaintext)
 
     def request_output(self, address: int, output: int) -> bytes:
         """Encrypted command to read an output's current state (0x00C8, Read)."""
