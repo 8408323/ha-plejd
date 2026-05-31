@@ -186,6 +186,36 @@ def test_dim_level_setting_bytes():
     assert zero[5:] == bytes([0x00, 0x00, 0x00])
 
 
+def test_weekday_mask():
+    from plejd.protocol import weekday_mask
+
+    assert weekday_mask([0, 6]) == 0x41  # Monday + Sunday
+    assert weekday_mask([0, 1, 2, 3, 4, 5, 6]) == 0x7F
+    assert weekday_mask([]) == 0
+
+
+def test_time_event_bytes():
+    from plejd.const import CMD_TIME_EVENT_SCENE, CMD_TIME_EVENT_TIME, CMD_TIME_EVENT_TYPE
+    from plejd.protocol import (
+        remove_time_event,
+        set_time_event_scene,
+        set_time_event_time,
+        set_time_event_type,
+    )
+
+    t = set_time_event_time(3, 0x7F, 7, 30, 0, 0xFFFFFFFF)
+    assert t[0] == 0x00 and (t[3] << 8) | t[4] == CMD_TIME_EVENT_TIME
+    assert t[5:] == bytes([3, 1, 0x7F, 7, 30, 0, 0xFF, 0xFF, 0xFF, 0xFF])
+    ty = set_time_event_type(3, 0)
+    assert (ty[3] << 8) | ty[4] == CMD_TIME_EVENT_TYPE and ty[5:] == bytes([3, 0])
+    s = set_time_event_scene(3, 5)
+    assert (s[3] << 8) | s[4] == CMD_TIME_EVENT_SCENE and s[5:] == bytes([3, 1, 5])
+    faded = set_time_event_scene(3, 5, 10)  # 65535//10 = 6553 = 0x1999 le
+    assert faded[5:] == bytes([3, 1, 5, 0x99, 0x19])
+    rm = remove_time_event(3)
+    assert (rm[3] << 8) | rm[4] == CMD_TIME_EVENT_TIME and rm[5:] == bytes([3])
+
+
 def test_set_timestamp_bytes():
     from plejd.const import CMD_SYSTEM_TIME
     from plejd.protocol import TYPE_DONT_RESPOND, set_timestamp

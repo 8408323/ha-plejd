@@ -344,6 +344,26 @@ async def test_periodic_sync_and_shutdown_cancels(monkeypatch):
     assert cancelled == [True] and c._clock_unsub is None
 
 
+async def test_program_and_remove_time_event(monkeypatch):
+    from plejd.const import CMD_TIME_EVENT_SCENE, CMD_TIME_EVENT_TIME, CMD_TIME_EVENT_TYPE
+    from plejd.protocol import decode_command
+
+    client = _FakeClient()
+    _patch_connect(monkeypatch, client)
+    ble = types.SimpleNamespace(address="01:02:03:04:05:a0")
+    hass = _hass([_info("01:02:03:04:05:a0")], {"01:02:03:04:05:a0": ble})
+    c = PlejdCoordinator(hass, _entry(discovered=None))
+    await c.async_start()
+    start = len(client.writes)
+    await c.async_program_time_event(2, 0x7F, 6, 0, 0, 4, 0)
+    cmds = [decode_command(c._connection.mesh.decrypt(w[1])) for w in client.writes[start:]]
+    assert [x.command for x in cmds] == [CMD_TIME_EVENT_TIME, CMD_TIME_EVENT_TYPE, CMD_TIME_EVENT_SCENE]
+    assert cmds[2].data == bytes([2, 1, 4])
+    await c.async_remove_time_event(2)
+    rm = decode_command(c._connection.mesh.decrypt(client.writes[-1][1]))
+    assert rm.command == CMD_TIME_EVENT_TIME and rm.data == bytes([2])
+
+
 async def test_clock_sync_failures_are_logged_not_raised(monkeypatch):
     client = _FakeClient()
     _patch_connect(monkeypatch, client)

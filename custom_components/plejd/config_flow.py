@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import asdict
 from typing import TYPE_CHECKING, Any
 
 import voluptuous as vol
-from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
+from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlow
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.selector import SelectSelector, SelectSelectorConfig
@@ -25,12 +26,17 @@ from .const import (
     CONF_INPUTS,
     CONF_MOTION,
     CONF_SCENES,
+    CONF_SCHEDULES,
     CONF_SITE_ID,
     DOMAIN,
+    TIME_EVENT_SLOTS,
+    WEEKDAYS,
 )
 
 if TYPE_CHECKING:
     from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
+
+_LOGGER = logging.getLogger(__name__)
 
 STEP_USER_SCHEMA = vol.Schema(
     {
@@ -38,6 +44,18 @@ STEP_USER_SCHEMA = vol.Schema(
         vol.Required(CONF_PASSWORD): str,
     }
 )
+
+
+def _parse_time(value: str) -> tuple[int, int, int] | None:
+    """Parse 'HH:MM' or 'HH:MM:SS' into (hour, minute, second), or None if invalid."""
+    parts = value.split(":")
+    if len(parts) not in (2, 3) or not all(p.isdigit() for p in parts):
+        return None
+    hour, minute = int(parts[0]), int(parts[1])
+    second = int(parts[2]) if len(parts) == 3 else 0
+    if hour > 23 or minute > 59 or second > 59:
+        return None
+    return hour, minute, second
 
 
 def _site_id(item: dict) -> str:
@@ -54,6 +72,11 @@ class PlejdConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Plejd."""
 
     VERSION = 1
+
+    @staticmethod
+    def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
+        """Return the options flow for managing on-device schedules."""
+        return PlejdOptionsFlow(config_entry)
 
     def __init__(self) -> None:
         self._discovered_address: str | None = None
@@ -119,3 +142,77 @@ class PlejdConfigFlow(ConfigFlow, domain=DOMAIN):
                 CONF_SCENES: [asdict(s) for s in site.scenes],
             },
         )
+
+
+class PlejdOptionsFlow(OptionsFlow):
+    """Manage on-device weekly schedules (time event -> scene)."""
+
+    def __init__(self, config_entry: ConfigEntry) -> None:
+        self._entry = config_entry
+
+    async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        schedules: list[dict] = list(self._entry.options.get(CONF_SCHEDULES, []))
+        next_id: int = self._entry.options.get("next_schedule_id", 0)
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            to_delete = set(user_input.get("delete", []))
+            kept = [s for s in schedules if str(s["slot"]) not in to_delete]
+            removed = [s for s in schedules if str(s["slot"]) in to_delete]
+            new_schedule: dict | None = None
+            name = (user_input.get("name") or "").strip()
+            if name:
+                parsed = _parse_time(user_input.get("time", ""))
+                used = {s["slot"] for s in kept}
+                slot = next((i for i in range(TIME_EVENT_SLOTS) if i not in used), None)
+                if user_input.get("scene") is None:
+                    errors["base"] = "scene_required"
+                elif not user_input.get("days"):
+                    errors["base"] = "days_required"
+                elif parsed is None:
+                    errors["time"] = "invalid_time"
+                elif slot is None:
+                    errors["base"] = "no_free_slots"
+                else:
+                    hour, minute, second = parsed
+                    new_schedule = {
+                        "id": next_id,
+                        "slot": slot,
+                        "name": name,
+                        "days": [WEEKDAYS.index(d) for d in user_input.get("days", [])],
+                        "time": f"{hour:02d}:{minute:02d}:{second:02d}",
+                        "scene": int(user_input["scene"]),
+                        "fade": int(user_input.get("fade", 0)),
+                    }
+            if not errors:
+                # Only once the save is certain: clear deleted device events, then persist.
+                await self._clear_deleted(removed)
+                if new_schedule is not None:
+                    kept.append(new_schedule)
+                    next_id += 1
+                return self.async_create_entry(title="", data={CONF_SCHEDULES: kept, "next_schedule_id": next_id})
+
+        scene_options = [{"value": str(s["index"]), "label": s["name"]} for s in self._entry.data.get(CONF_SCENES, [])]
+        day_options = [{"value": d, "label": d} for d in WEEKDAYS]
+        fields: dict[Any, Any] = {}
+        if schedules:
+            existing = [{"value": str(s["slot"]), "label": s["name"]} for s in schedules]
+            fields[vol.Optional("delete", default=[])] = SelectSelector(
+                SelectSelectorConfig(options=existing, multiple=True)
+            )
+        fields[vol.Optional("name", default="")] = str
+        fields[vol.Optional("days", default=[])] = SelectSelector(
+            SelectSelectorConfig(options=day_options, multiple=True)
+        )
+        fields[vol.Optional("time", default="07:00")] = str
+        fields[vol.Optional("scene")] = SelectSelector(SelectSelectorConfig(options=scene_options))
+        fields[vol.Optional("fade", default=0)] = int
+        return self.async_show_form(step_id="init", data_schema=vol.Schema(fields), errors=errors)
+
+    async def _clear_deleted(self, removed: list[dict]) -> None:
+        """Delete the device-side event for each removed schedule (best-effort)."""
+        coordinator = getattr(self._entry, "runtime_data", None)
+        for schedule in removed:
+            try:
+                await coordinator.async_remove_time_event(schedule["slot"])
+            except Exception:  # noqa: BLE001 - best-effort; persist the deletion whatever the mesh does
+                _LOGGER.warning("Could not clear Plejd schedule slot %s from the mesh", schedule["slot"])

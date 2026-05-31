@@ -33,13 +33,23 @@ class _FakeConfigEntries:
     async def async_unload_platforms(self, entry, platforms):
         return self.unload_result
 
+    async def async_reload(self, entry_id):
+        self.reloaded = entry_id
+
 
 def _hass():
     return types.SimpleNamespace(config_entries=_FakeConfigEntries())
 
 
 def _entry():
-    return types.SimpleNamespace(data={}, runtime_data=None)
+    return types.SimpleNamespace(
+        entry_id="e1",
+        data={},
+        options={},
+        runtime_data=None,
+        async_on_unload=lambda f: None,
+        add_update_listener=lambda f: lambda: None,
+    )
 
 
 async def test_setup_starts_coordinator_and_forwards(monkeypatch):
@@ -82,6 +92,14 @@ async def test_failed_unload_keeps_coordinator(monkeypatch):
     hass.config_entries.unload_result = False
     assert await async_unload_entry(hass, entry) is False
     assert entry.runtime_data.shutdown is False
+
+
+async def test_reload_listener_reloads_entry():
+    from plejd import _async_reload_entry
+
+    hass, entry = _hass(), _entry()
+    await _async_reload_entry(hass, entry)
+    assert hass.config_entries.reloaded == "e1"
 
 
 def test_every_platform_module_is_forwarded():
