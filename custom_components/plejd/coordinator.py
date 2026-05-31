@@ -116,6 +116,11 @@ class PlejdCoordinator:
         transport = self._active_transport()
         return self._available and transport is not None and transport.connected
 
+    @property
+    def active_transport(self) -> str | None:
+        """The connected transport ('gateway' or 'ble'), or None when not connected."""
+        return self._active if self.available else None
+
     @callback
     def _notify_outputs(self) -> None:
         for update in list(self._listeners):

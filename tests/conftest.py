@@ -165,6 +165,20 @@ except ImportError:
     _components = types.ModuleType("homeassistant.components")
     sys.modules.setdefault("homeassistant.components", _components)
 
+    _diag = types.ModuleType("homeassistant.components.diagnostics")
+
+    def _async_redact_data(data, to_redact):
+        if isinstance(data, dict):
+            return {
+                k: ("**REDACTED**" if k in to_redact else _async_redact_data(v, to_redact)) for k, v in data.items()
+            }
+        if isinstance(data, list):
+            return [_async_redact_data(v, to_redact) for v in data]
+        return data
+
+    _diag.async_redact_data = _async_redact_data  # type: ignore[attr-defined]
+    sys.modules.setdefault("homeassistant.components.diagnostics", _diag)
+
     _bt = types.ModuleType("homeassistant.components.bluetooth")
 
     class _BluetoothServiceInfoBleak:

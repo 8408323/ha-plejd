@@ -499,6 +499,16 @@ async def test_transport_force_gateway_without_gateway_raises():
         await c.async_start()
 
 
+async def test_active_transport_reflects_connection(monkeypatch):
+    monkeypatch.setattr(coordinator_mod, "PlejdGatewayConnection", _FakeGateway)
+    hass = _hass()
+    hass.session = object()
+    c = PlejdCoordinator(hass, _gateway_entry())
+    assert c.active_transport is None  # not connected yet
+    await c.async_start()
+    assert c.active_transport == "gateway"
+
+
 async def test_gateway_get_token(monkeypatch):
     monkeypatch.setattr(coordinator_mod, "PlejdGatewayConnection", _FakeGateway)
 
