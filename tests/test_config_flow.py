@@ -166,13 +166,26 @@ async def test_site_label_fallback(monkeypatch, title):
     assert result["step_id"] == "site"
 
 
-def _opt_flow(options=None, scenes=None, runtime_data=None):
-    entry = types.SimpleNamespace(
-        options=options or {},
-        data={"scenes": scenes if scenes is not None else [{"index": 3, "name": "Movie"}]},
-        runtime_data=runtime_data,
-    )
+def _opt_flow(options=None, scenes=None, runtime_data=None, gateways=None):
+    data = {"scenes": scenes if scenes is not None else [{"index": 3, "name": "Movie"}]}
+    if gateways is not None:
+        data["gateways"] = gateways
+    entry = types.SimpleNamespace(options=options or {}, data=data, runtime_data=runtime_data)
     return cf.PlejdOptionsFlow(entry)
+
+
+def _schema_keys(result) -> list[str]:
+    return [getattr(k, "schema", None) for k in result["data_schema"].schema]
+
+
+async def test_options_transport_field_only_with_gateway():
+    assert "transport" not in _schema_keys(await _opt_flow().async_step_init())
+    assert "transport" in _schema_keys(await _opt_flow(gateways=["gw1"]).async_step_init())
+
+
+async def test_options_saves_transport_choice():
+    res = await _opt_flow(gateways=["gw1"]).async_step_init({"name": "", "delete": [], "transport": "ble"})
+    assert res["type"] == "create_entry" and res["data"]["transport"] == "ble"
 
 
 def test_get_options_flow_returns_options_flow():
