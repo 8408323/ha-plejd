@@ -153,5 +153,13 @@ class PlejdCoordinator:
         """Set a thermostat operating mode."""
         await self._send(lambda mesh: mesh.set_climate_mode(address, mode))
 
+    async def async_set_cover_position(self, address: int, position: int) -> None:
+        """Move a cover to a position (0-100)."""
+        await self._send(lambda mesh: mesh.set_cover_position(address, position))
+
+    async def async_cover_stop(self, address: int) -> None:
+        """Halt a cover."""
+        await self._send(lambda mesh: mesh.cover_stop(address))
+
     async def async_shutdown(self) -> None:
         await self._connection.disconnect()

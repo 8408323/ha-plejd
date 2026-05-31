@@ -152,3 +152,20 @@ def test_decode_motion_ignores_other_opcodes():
     from plejd.protocol import Command, decode_motion
 
     assert decode_motion(Command(0, 0, CMD_SCENE, b"\x01")) is None
+
+
+def test_set_cover_position_bytes():
+    from plejd.const import CMD_OUTPUT_SET
+    from plejd.protocol import set_cover_position
+
+    open_cmd = set_cover_position(5, 100)  # level 255 -> inverted 0
+    assert (open_cmd[3] << 8) | open_cmd[4] == CMD_OUTPUT_SET
+    assert open_cmd[5:] == bytes([0x03, 0x08, 0x27, 0x01, 0x00, 0x00])
+    close_cmd = set_cover_position(5, 0)  # level 0 -> inverted 255
+    assert close_cmd[5:] == bytes([0x03, 0x08, 0x27, 0x01, 0xFF, 0xFF])
+
+
+def test_cover_stop_bytes():
+    from plejd.protocol import cover_stop
+
+    assert cover_stop(5)[5:] == bytes([0x03, 0x08, 0x07, 0x00])
