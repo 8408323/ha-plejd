@@ -29,9 +29,9 @@ def reversed_mac(address: str) -> bytes:
 class PlejdConnection:
     """Owns the bleak client for one mesh device and the mesh state."""
 
-    def __init__(self, crypto_key: bytes, on_state: Callable[[], None]) -> None:
+    def __init__(self, crypto_key: bytes, on_event: Callable[[object], None]) -> None:
         self._key = crypto_key
-        self._on_state = on_state
+        self._on_event = on_event
         self._client: BleakClientWithServiceCache | None = None
         self.mesh: PlejdMesh | None = None
 
@@ -56,8 +56,11 @@ class PlejdConnection:
         await self._client.write_gatt_char(PLEJD_CHAR_AUTH_UUID, response, response=False)
 
     def _handle_notify(self, _characteristic: object, data: bytearray) -> None:
-        if self.mesh is not None and self.mesh.handle_notification(bytes(data)) is not None:
-            self._on_state()
+        if self.mesh is None:
+            return
+        command = self.mesh.handle_notification(bytes(data))
+        if command is not None:
+            self._on_event(command)
 
     async def write(self, payload: bytes) -> None:
         """Write an encrypted command to the Datavector characteristic."""

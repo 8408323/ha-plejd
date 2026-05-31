@@ -61,6 +61,15 @@ class PlejdCloudDevice:
 
 
 @dataclass
+class PlejdCloudInput:
+    """A button input (fires press/release events)."""
+
+    device_id: str
+    name: str
+    address: int
+
+
+@dataclass
 class PlejdCloudScene:
     """A Plejd scene: name + its mesh index (triggered as a broadcast)."""
 
@@ -77,6 +86,7 @@ class PlejdCloudSite:
     title: str
     crypto_key: bytes
     devices: list[PlejdCloudDevice]
+    inputs: list[PlejdCloudInput]
     scenes: list[PlejdCloudScene]
 
 
@@ -177,6 +187,20 @@ def parse_site(site: dict) -> PlejdCloudSite:
             )
         )
 
+    input_address = site.get("inputAddress") or {}
+    name_by_device = {info.get("deviceId"): info.get("title") for info in site.get("devices") or []}
+    inputs: list[PlejdCloudInput] = []
+    seen_addr: set[int] = set()
+    for device_id, idx_map in input_address.items():
+        for addr in (idx_map or {}).values():
+            address = int(addr)
+            if address in seen_addr:
+                continue
+            seen_addr.add(address)
+            inputs.append(
+                PlejdCloudInput(device_id=device_id, name=name_by_device.get(device_id) or "Button", address=address)
+            )
+
     scene_index = site.get("sceneIndex") or {}
     scenes = [
         PlejdCloudScene(scene_id=sc["sceneId"], name=sc.get("title") or sc["sceneId"], index=int(idx))
@@ -190,5 +214,6 @@ def parse_site(site: dict) -> PlejdCloudSite:
         title=meta.get("title") or "Plejd",
         crypto_key=crypto_key,
         devices=devices,
+        inputs=inputs,
         scenes=scenes,
     )

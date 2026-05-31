@@ -16,10 +16,20 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
 
-from .cloud import PlejdCloudDevice, PlejdCloudScene
+from .cloud import PlejdCloudDevice, PlejdCloudInput, PlejdCloudScene
 from .connection import PlejdConnection
-from .const import CONF_CRYPTO_KEY, CONF_DEVICES, CONF_DISCOVERED_ADDRESS, CONF_SCENES, PLEJD_SERVICE_UUID
-from .protocol import OutputState
+from .const import (
+    CMD_GROUP_STATE_AND_LEVEL,
+    CMD_INPUT_BUTTON,
+    CMD_OUTPUT_STATE_AND_LEVEL,
+    CONF_CRYPTO_KEY,
+    CONF_DEVICES,
+    CONF_DISCOVERED_ADDRESS,
+    CONF_INPUTS,
+    CONF_SCENES,
+    PLEJD_SERVICE_UUID,
+)
+from .protocol import Command, OutputState
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -32,13 +42,15 @@ class PlejdCoordinator:
         # Tolerate entries stored before a field existed (e.g. output_index).
         self.devices = [PlejdCloudDevice(**{"output_index": 0, **device}) for device in entry.data[CONF_DEVICES]]
         self.scenes = [PlejdCloudScene(**scene) for scene in entry.data.get(CONF_SCENES, [])]
+        self.inputs = [PlejdCloudInput(**i) for i in entry.data.get(CONF_INPUTS, [])]
         self._preferred = entry.data.get(CONF_DISCOVERED_ADDRESS)
-        self._connection = PlejdConnection(bytes.fromhex(entry.data[CONF_CRYPTO_KEY]), self._notify)
+        self._connection = PlejdConnection(bytes.fromhex(entry.data[CONF_CRYPTO_KEY]), self._on_event)
         self._listeners: list[Callable[[], None]] = []
+        self._button_listeners: list[Callable[[int, bool], None]] = []
 
     @callback
     def async_add_listener(self, update: Callable[[], None]) -> Callable[[], None]:
-        """Register an entity update callback; returns an unsubscribe function."""
+        """Register an output-state update callback; returns an unsubscribe function."""
         self._listeners.append(update)
 
         def _remove() -> None:
@@ -47,9 +59,24 @@ class PlejdCoordinator:
         return _remove
 
     @callback
-    def _notify(self) -> None:
-        for update in list(self._listeners):
-            update()
+    def async_add_button_listener(self, cb: Callable[[int, bool], None]) -> Callable[[], None]:
+        """Register a button callback cb(address, pressed); returns an unsubscribe."""
+        self._button_listeners.append(cb)
+
+        def _remove() -> None:
+            self._button_listeners.remove(cb)
+
+        return _remove
+
+    @callback
+    def _on_event(self, command: Command) -> None:
+        if command.command in (CMD_GROUP_STATE_AND_LEVEL, CMD_OUTPUT_STATE_AND_LEVEL):
+            for update in list(self._listeners):
+                update()
+        elif command.command == CMD_INPUT_BUTTON:
+            pressed = bool(command.data and command.data[0])
+            for cb in list(self._button_listeners):
+                cb(command.address, pressed)
 
     def state_for(self, address: int) -> OutputState | None:
         """Last-known output state for a mesh address, if seen."""

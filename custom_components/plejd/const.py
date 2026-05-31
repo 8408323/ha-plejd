@@ -17,6 +17,7 @@ CONF_SITE_ID = "site_id"
 CONF_CRYPTO_KEY = "crypto_key"  # hex string of the 16-byte site key
 CONF_DEVICES = "devices"  # cached device list (so HA works offline after setup)
 CONF_SCENES = "scenes"  # cached scene list
+CONF_INPUTS = "inputs"  # cached button-input list
 
 # ── BLE GATT layout (confirmed from Plejd.Shared PlejdConstants.BleCharacteristics) ──
 # All characteristics live under the service base UUID with the 3rd 16-bit group
@@ -62,6 +63,7 @@ CMD_DEVICE_TYPE = 0x0000
 CMD_DEVICE_MAC = 0x0003
 CMD_DEVICE_FW_VERSION = 0x0004
 CMD_GROUP_STATE_AND_LEVEL = 0x0098  # broadcast on/off + level to a group/all
+CMD_INPUT_BUTTON = 0x0097  # button press broadcast on an input address: data=[01 pressed/00 released]
 CMD_OUTPUT_SET = 0x0420  # modern "mini-package" output protocol (newer firmware)
 CMD_NOTIFY_EVENTS = 0x002B  # device fault flags (NotifyEvents bitfield)
 CMD_HARDFAULT_REASON = 0x001D  # struct: code(u32 le), line(u16 le), message(ascii)
