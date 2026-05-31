@@ -157,6 +157,18 @@ except ImportError:
     _light.LightEntity = _LightEntity  # type: ignore[attr-defined]
     sys.modules.setdefault("homeassistant.components.light", _light)
 
+    _switch = types.ModuleType("homeassistant.components.switch")
+
+    class _SwitchEntity:
+        def async_on_remove(self, func):
+            self._unsub = func
+
+        def async_write_ha_state(self):
+            return None
+
+    _switch.SwitchEntity = _SwitchEntity  # type: ignore[attr-defined]
+    sys.modules.setdefault("homeassistant.components.switch", _switch)
+
     _dr = types.ModuleType("homeassistant.helpers.device_registry")
 
     class _DeviceInfo(dict):
