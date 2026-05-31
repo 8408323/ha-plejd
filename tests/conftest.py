@@ -48,6 +48,7 @@ except ImportError:
         SCENE = "scene"
         NUMBER = "number"
         SELECT = "select"
+        BUTTON = "button"
 
     _const.Platform = _Platform  # type: ignore[attr-defined]
     _const.PERCENTAGE = "%"  # type: ignore[attr-defined]
@@ -273,8 +274,37 @@ except ImportError:
     def _async_call_later(hass, delay, action):
         return lambda: None
 
+    def _async_track_time_interval(hass, action, interval):
+        return lambda: None
+
     _evt_helper.async_call_later = _async_call_later  # type: ignore[attr-defined]
+    _evt_helper.async_track_time_interval = _async_track_time_interval  # type: ignore[attr-defined]
     sys.modules.setdefault("homeassistant.helpers.event", _evt_helper)
+
+    _util = types.ModuleType("homeassistant.util")
+    _dt = types.ModuleType("homeassistant.util.dt")
+    import datetime as _datetime
+
+    def _now():
+        # Fixed aware local time (CEST, +02:00) for deterministic clock-sync tests.
+        return _datetime.datetime(2026, 5, 31, 12, 0, 0, tzinfo=_datetime.timezone(_datetime.timedelta(hours=2)))
+
+    _dt.now = _now  # type: ignore[attr-defined]
+    _util.dt = _dt  # type: ignore[attr-defined]
+    sys.modules.setdefault("homeassistant.util", _util)
+    sys.modules.setdefault("homeassistant.util.dt", _dt)
+
+    _button = types.ModuleType("homeassistant.components.button")
+
+    class _ButtonEntity:
+        def async_on_remove(self, func):
+            self._unsub = func
+
+        def async_write_ha_state(self):
+            return None
+
+    _button.ButtonEntity = _ButtonEntity  # type: ignore[attr-defined]
+    sys.modules.setdefault("homeassistant.components.button", _button)
 
     _cover = types.ModuleType("homeassistant.components.cover")
     _cover.ATTR_POSITION = "position"  # type: ignore[attr-defined]

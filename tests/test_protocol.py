@@ -186,6 +186,17 @@ def test_dim_level_setting_bytes():
     assert zero[5:] == bytes([0x00, 0x00, 0x00])
 
 
+def test_set_timestamp_bytes():
+    from plejd.const import CMD_SYSTEM_TIME
+    from plejd.protocol import TYPE_DONT_RESPOND, set_timestamp
+
+    cmd = set_timestamp(0x01020304)
+    assert cmd[0] == 0x00  # broadcast address
+    assert cmd[2] == TYPE_DONT_RESPOND
+    assert (cmd[3] << 8) | cmd[4] == CMD_SYSTEM_TIME
+    assert cmd[5:] == bytes([0x04, 0x03, 0x02, 0x01, 0x00])  # u32le epoch + trailing zero
+
+
 def test_dimmer_tuning_setting_bytes():
     from plejd.const import CMD_OUTPUT_CURVE_TYPE, CMD_OUTPUT_PHASE_DIM_TYPE
     from plejd.protocol import set_output_curve, set_output_phase_dim

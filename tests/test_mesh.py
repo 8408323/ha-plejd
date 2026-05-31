@@ -89,6 +89,15 @@ def test_dim_level_settings_round_trip():
     assert hi.command == CMD_OUTPUT_MAX_LEVEL and hi.data == bytes([1, 0xFF, 0xFF])
 
 
+def test_set_timestamp_round_trip():
+    from plejd.const import CMD_SYSTEM_TIME
+
+    mesh = _mesh()
+    cmd = decode_command(mesh.decrypt(mesh.set_timestamp(0x01020304)))
+    assert cmd.address == 0 and cmd.command == CMD_SYSTEM_TIME
+    assert cmd.data == bytes([0x04, 0x03, 0x02, 0x01, 0x00])
+
+
 def test_dimmer_tuning_round_trip():
     from plejd.const import CMD_OUTPUT_CURVE_TYPE, CMD_OUTPUT_PHASE_DIM_TYPE
 

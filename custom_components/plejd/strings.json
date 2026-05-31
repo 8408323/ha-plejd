@@ -50,6 +50,11 @@
           "leading_edge": "Leading edge"
         }
       }
+    },
+    "button": {
+      "sync_clock": {
+        "name": "Sync clock"
+      }
     }
   }
 }
