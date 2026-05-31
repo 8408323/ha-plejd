@@ -75,6 +75,7 @@
     "error": {
       "no_free_slots": "All 20 schedule slots are in use.",
       "scene_required": "Pick a scene for the new schedule.",
+      "days_required": "Pick at least one weekday for the new schedule.",
       "invalid_time": "Enter the time as HH:MM (24-hour)."
     }
   }

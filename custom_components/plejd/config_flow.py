@@ -166,6 +166,8 @@ class PlejdOptionsFlow(OptionsFlow):
                 slot = next((i for i in range(TIME_EVENT_SLOTS) if i not in used), None)
                 if user_input.get("scene") is None:
                     errors["base"] = "scene_required"
+                elif not user_input.get("days"):
+                    errors["base"] = "days_required"
                 elif parsed is None:
                     errors["time"] = "invalid_time"
                 elif slot is None:

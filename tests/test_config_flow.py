@@ -192,18 +192,23 @@ async def test_options_add_schedule_assigns_slot_and_maps_days():
 
 async def test_options_add_uses_monotonic_id_not_slot():
     opts = {"schedules": [], "next_schedule_id": 7}
-    res = await _opt_flow(options=opts).async_step_init({"name": "X", "time": "06:00", "scene": "3"})
+    res = await _opt_flow(options=opts).async_step_init({"name": "X", "days": ["mon"], "time": "06:00", "scene": "3"})
     assert res["data"]["schedules"][0]["id"] == 7 and res["data"]["next_schedule_id"] == 8
 
 
 async def test_options_add_without_scene_errors():
-    res = await _opt_flow().async_step_init({"name": "X", "time": "06:00"})
+    res = await _opt_flow().async_step_init({"name": "X", "days": ["mon"], "time": "06:00"})
     assert res["type"] == "form" and res["errors"] == {"base": "scene_required"}
+
+
+async def test_options_add_without_days_errors():
+    res = await _opt_flow().async_step_init({"name": "X", "days": [], "time": "06:00", "scene": "3"})
+    assert res["type"] == "form" and res["errors"] == {"base": "days_required"}
 
 
 async def test_options_add_with_invalid_time_errors():
     for bad in ("7", "25:00", "07:xx", ""):
-        res = await _opt_flow().async_step_init({"name": "X", "time": bad, "scene": "3"})
+        res = await _opt_flow().async_step_init({"name": "X", "days": ["mon"], "time": bad, "scene": "3"})
         assert res["type"] == "form" and res["errors"] == {"time": "invalid_time"}, bad
 
 
@@ -248,7 +253,7 @@ async def test_options_delete_not_applied_when_same_submit_is_invalid():
 
     flow = _opt_flow(options={"schedules": existing}, runtime_data=_Coord())
     # Delete slot 0 AND add an invalid-time schedule in one submit -> validation error.
-    res = await flow.async_step_init({"delete": ["0"], "name": "New", "time": "nope", "scene": "3"})
+    res = await flow.async_step_init({"delete": ["0"], "name": "New", "days": ["mon"], "time": "nope", "scene": "3"})
     assert res["type"] == "form" and res["errors"] == {"time": "invalid_time"}
     assert removed == []  # device event must NOT be cleared since the save didn't happen
 
@@ -261,5 +266,7 @@ async def test_options_save_without_adding():
 
 async def test_options_no_free_slots_errors():
     full = [{"slot": i, "name": f"s{i}", "days": [0], "time": "07:00", "scene": 1, "fade": 0} for i in range(20)]
-    res = await _opt_flow(options={"schedules": full}).async_step_init({"name": "More", "time": "06:00", "scene": "3"})
+    res = await _opt_flow(options={"schedules": full}).async_step_init(
+        {"name": "More", "days": ["mon"], "time": "06:00", "scene": "3"}
+    )
     assert res["type"] == "form" and res["errors"] == {"base": "no_free_slots"}
