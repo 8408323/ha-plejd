@@ -84,17 +84,27 @@ class PlejdCoordinator:
         except Exception as err:  # noqa: BLE001 - surface any BLE failure as a setup retry
             raise ConfigEntryNotReady(f"failed to connect: {err}") from err
 
+    async def _send(self, build: Callable[[object], bytes]) -> None:
+        mesh = self._connection.mesh
+        if mesh is None:
+            raise HomeAssistantError("Plejd mesh is not connected")
+        await self._connection.write(build(mesh))
+
     async def async_set_output(self, address: int, output: int, on: bool, level: int) -> None:
         """Send an on/off + level command for an output."""
-        if self._connection.mesh is None:
-            raise HomeAssistantError("Plejd mesh is not connected")
-        await self._connection.write(self._connection.mesh.set_output(address, output, on, level))
+        await self._send(lambda mesh: mesh.set_output(address, output, on, level))
 
     async def async_execute_scene(self, index: int) -> None:
         """Trigger a Plejd scene (broadcast to address 0)."""
-        if self._connection.mesh is None:
-            raise HomeAssistantError("Plejd mesh is not connected")
-        await self._connection.write(self._connection.mesh.scene(0, index))
+        await self._send(lambda mesh: mesh.scene(0, index))
+
+    async def async_set_climate_setpoint(self, address: int, celsius: float) -> None:
+        """Set a thermostat target temperature."""
+        await self._send(lambda mesh: mesh.set_climate_setpoint(address, celsius))
+
+    async def async_set_climate_mode(self, address: int, mode: int) -> None:
+        """Set a thermostat operating mode."""
+        await self._send(lambda mesh: mesh.set_climate_mode(address, mode))
 
     async def async_shutdown(self) -> None:
         await self._connection.disconnect()

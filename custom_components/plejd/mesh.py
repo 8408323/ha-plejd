@@ -52,6 +52,14 @@ class PlejdMesh:
         """Encrypted command to execute a scene (0x0021)."""
         return self.encrypt(protocol.execute_scene(address, scene))
 
+    def set_climate_setpoint(self, address: int, celsius: float) -> bytes:
+        """Encrypted thermostat target-temperature command (0x045C)."""
+        return self.encrypt(protocol.set_climate_setpoint(address, celsius))
+
+    def set_climate_mode(self, address: int, mode: int) -> bytes:
+        """Encrypted thermostat operating-mode command (0x045F)."""
+        return self.encrypt(protocol.set_climate_mode(address, mode))
+
     def handle_notification(self, ciphertext: bytes) -> OutputState | None:
         """Decrypt + decode an incoming vector; update and return output state.
 
