@@ -241,3 +241,26 @@ async def test_set_climate_commands(monkeypatch):
     assert decode_command(c._connection.mesh.decrypt(client.writes[-1][1])).command == CMD_TRM_SETPOINT
     await c.async_set_climate_mode(9, 3)
     assert decode_command(c._connection.mesh.decrypt(client.writes[-1][1])).command == CMD_TRM_MODE
+
+
+def test_motion_event_dispatches_to_listeners():
+    from plejd.const import CMD_OUTPUT_SET
+    from plejd.protocol import Command
+
+    # entry with a motion sensor at address 33
+    entry = types.SimpleNamespace(
+        data={
+            CONF_CRYPTO_KEY: _KEY_HEX,
+            CONF_DEVICES: [_DEV],
+            CONF_DISCOVERED_ADDRESS: None,
+            "motion": [{"device_id": "w1", "name": "Motion", "address": 33}],
+        }
+    )
+    c = PlejdCoordinator(_hass(), entry)
+    events = []
+    remove = c.async_add_motion_listener(events.append)
+    # a real WMS motion broadcast (Source=Motion + Lux=2)
+    c._on_event(Command(33, 0x10, CMD_OUTPUT_SET, bytes.fromhex("03031f0700b00f08460602")))
+    c._on_event(Command(99, 0x10, CMD_OUTPUT_SET, b"\x03\x03"))  # not a motion address -> ignored
+    remove()
+    assert len(events) == 1 and events[0].motion is True and events[0].lux == 2

@@ -125,3 +125,30 @@ def test_decode_temperature():
 
     assert decode_temperature(bytes([0xD7, 0x00])) == 21.5
     assert decode_temperature(b"\x00") is None
+
+
+def test_parse_mini_package_real_wms_capture():
+    from plejd.protocol import parse_mini_package
+
+    # captured live from a WMS-01 motion broadcast
+    data = bytes.fromhex("0303 1f07 00b0 0f08 46 0602".replace(" ", ""))
+    pkgs = parse_mini_package(data)
+    assert pkgs[0] == (3, bytes([0x03]))  # Source = Motion
+    assert (22, bytes([0x00, 0xB0])) in pkgs  # escaped type 15+7
+    assert (6, bytes([0x02])) in pkgs  # Lux
+
+
+def test_decode_motion_from_capture():
+    from plejd.const import CMD_OUTPUT_SET
+    from plejd.protocol import Command, decode_motion
+
+    cmd = Command(address=33, command_type=0x10, command=CMD_OUTPUT_SET, data=bytes.fromhex("03031f0700b00f08460602"))
+    m = decode_motion(cmd)
+    assert m.address == 33 and m.motion is True and m.lux == 2
+
+
+def test_decode_motion_ignores_other_opcodes():
+    from plejd.const import CMD_SCENE
+    from plejd.protocol import Command, decode_motion
+
+    assert decode_motion(Command(0, 0, CMD_SCENE, b"\x01")) is None

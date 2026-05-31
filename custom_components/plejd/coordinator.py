@@ -16,20 +16,22 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
 
-from .cloud import PlejdCloudDevice, PlejdCloudInput, PlejdCloudScene
+from .cloud import PlejdCloudDevice, PlejdCloudInput, PlejdCloudMotion, PlejdCloudScene
 from .connection import PlejdConnection
 from .const import (
     CMD_GROUP_STATE_AND_LEVEL,
     CMD_INPUT_BUTTON,
+    CMD_OUTPUT_SET,
     CMD_OUTPUT_STATE_AND_LEVEL,
     CONF_CRYPTO_KEY,
     CONF_DEVICES,
     CONF_DISCOVERED_ADDRESS,
     CONF_INPUTS,
+    CONF_MOTION,
     CONF_SCENES,
     PLEJD_SERVICE_UUID,
 )
-from .protocol import Command, OutputState
+from .protocol import Command, MotionEvent, OutputState, decode_motion
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -43,10 +45,13 @@ class PlejdCoordinator:
         self.devices = [PlejdCloudDevice(**{"output_index": 0, **device}) for device in entry.data[CONF_DEVICES]]
         self.scenes = [PlejdCloudScene(**scene) for scene in entry.data.get(CONF_SCENES, [])]
         self.inputs = [PlejdCloudInput(**i) for i in entry.data.get(CONF_INPUTS, [])]
+        self.motion = [PlejdCloudMotion(**m) for m in entry.data.get(CONF_MOTION, [])]
+        self._motion_addresses = {m.address for m in self.motion}
         self._preferred = entry.data.get(CONF_DISCOVERED_ADDRESS)
         self._connection = PlejdConnection(bytes.fromhex(entry.data[CONF_CRYPTO_KEY]), self._on_event)
         self._listeners: list[Callable[[], None]] = []
         self._button_listeners: list[Callable[[int, bool], None]] = []
+        self._motion_listeners: list[Callable[[MotionEvent], None]] = []
 
     @callback
     def async_add_listener(self, update: Callable[[], None]) -> Callable[[], None]:
@@ -69,6 +74,16 @@ class PlejdCoordinator:
         return _remove
 
     @callback
+    def async_add_motion_listener(self, cb: Callable[[MotionEvent], None]) -> Callable[[], None]:
+        """Register a motion callback cb(MotionEvent); returns an unsubscribe."""
+        self._motion_listeners.append(cb)
+
+        def _remove() -> None:
+            self._motion_listeners.remove(cb)
+
+        return _remove
+
+    @callback
     def _on_event(self, command: Command) -> None:
         if command.command in (CMD_GROUP_STATE_AND_LEVEL, CMD_OUTPUT_STATE_AND_LEVEL):
             for update in list(self._listeners):
@@ -77,6 +92,11 @@ class PlejdCoordinator:
             pressed = bool(command.data and command.data[0])
             for cb in list(self._button_listeners):
                 cb(command.address, pressed)
+        elif command.command == CMD_OUTPUT_SET and command.address in self._motion_addresses:
+            event = decode_motion(command)
+            if event is not None:
+                for motion_cb in list(self._motion_listeners):
+                    motion_cb(event)
 
     def state_for(self, address: int) -> OutputState | None:
         """Last-known output state for a mesh address, if seen."""
