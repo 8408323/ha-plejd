@@ -184,3 +184,15 @@ def test_dim_level_setting_bytes():
     assert full[5:] == bytes([0x00, 0xFF, 0xFF])
     zero = set_output_min_level(9, 0, 0.0)
     assert zero[5:] == bytes([0x00, 0x00, 0x00])
+
+
+def test_dimmer_tuning_setting_bytes():
+    from plejd.const import CMD_OUTPUT_CURVE_TYPE, CMD_OUTPUT_PHASE_DIM_TYPE
+    from plejd.protocol import set_output_curve, set_output_phase_dim
+
+    curve = set_output_curve(9, 1, 3)  # antilogarithmic
+    assert (curve[3] << 8) | curve[4] == CMD_OUTPUT_CURVE_TYPE
+    assert curve[5:] == bytes([0x01, 0x03])
+    phase = set_output_phase_dim(9, 0, 1)  # leading edge
+    assert (phase[3] << 8) | phase[4] == CMD_OUTPUT_PHASE_DIM_TYPE
+    assert phase[5:] == bytes([0x00, 0x01])

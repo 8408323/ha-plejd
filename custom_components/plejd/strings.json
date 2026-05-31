@@ -33,6 +33,23 @@
       "max_dim_level": {
         "name": "Maximum brightness"
       }
+    },
+    "select": {
+      "dim_curve": {
+        "name": "Dimming curve",
+        "state": {
+          "linear": "Linear",
+          "logarithmic": "Logarithmic",
+          "antilogarithmic": "Anti-logarithmic"
+        }
+      },
+      "phase_dim": {
+        "name": "Phase dimming",
+        "state": {
+          "trailing_edge": "Trailing edge",
+          "leading_edge": "Leading edge"
+        }
+      }
     }
   }
 }
