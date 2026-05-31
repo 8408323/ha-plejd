@@ -9,9 +9,11 @@ All notable changes to this project are documented here. The format follows
 ## [0.5.0] - 2026-05-31
 
 First feature-complete release: local Bluetooth-mesh control of a Plejd site,
-set up via a one-time cloud login. Lights, switches, scenes, buttons, and
-motion/illuminance are validated against real hardware; covers, climate, and the
-device-config entities are decoded from the app but not yet hardware-validated.
+set up via a one-time cloud login. Lights, switches, scenes, buttons,
+motion/illuminance, and on-device scheduling (clock sync + time→scene events,
+confirmed firing on real hardware) are validated against real hardware; covers,
+climate, and the device-config entities are decoded from the app but not yet
+hardware-validated.
 
 ### Added
 - **Entity platforms**: lights (on/off + brightness), switches/relays, scenes,

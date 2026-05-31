@@ -8,7 +8,7 @@
 
 Home Assistant custom integration for [Plejd](https://www.plejd.com/) — the Swedish **Bluetooth-mesh** lighting and relay system.
 
-> **Status**: Working. The BLE protocol (GATT, AES-128 crypto, mesh commands) and cloud login are fully decoded, and the core — lights, switches, scenes, buttons, and motion/illuminance — is **validated end-to-end against real hardware**. Covers, climate, and the device-config entities are decoded from the app but not yet hardware-validated. Reverse-engineered entirely from our own analysis of the Plejd Android app + BLE capture; not affiliated with Plejd.
+> **Status**: Working. The BLE protocol (GATT, AES-128 crypto, mesh commands) and cloud login are fully decoded, and the core — lights, switches, scenes, buttons, motion/illuminance, and on-device scheduling (a scheduled scene was confirmed firing on real hardware) — is **validated end-to-end against real hardware**. Covers, climate, and the device-config entities are decoded from the app but not yet hardware-validated. Reverse-engineered entirely from our own analysis of the Plejd Android app + BLE capture; not affiliated with Plejd.
 
 ## Support
 
