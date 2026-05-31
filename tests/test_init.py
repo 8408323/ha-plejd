@@ -2,53 +2,72 @@
 
 from __future__ import annotations
 
+import types
+
+import plejd
 from plejd import PLATFORMS, async_setup_entry, async_unload_entry
-from plejd.const import DOMAIN
+
+
+class _FakeCoordinator:
+    instances: list = []
+
+    def __init__(self, hass, entry):
+        self.started = False
+        self.shutdown = False
+        _FakeCoordinator.instances.append(self)
+
+    async def async_start(self):
+        self.started = True
+
+    async def async_shutdown(self):
+        self.shutdown = True
 
 
 class _FakeConfigEntries:
     unload_result = True
 
     async def async_forward_entry_setups(self, entry, platforms):
-        return None
+        self.forwarded = platforms
 
     async def async_unload_platforms(self, entry, platforms):
         return self.unload_result
 
 
-class _FakeHass:
-    def __init__(self):
-        self.data: dict = {}
-        self.config_entries = _FakeConfigEntries()
+def _hass():
+    return types.SimpleNamespace(config_entries=_FakeConfigEntries())
 
 
-class _FakeEntry:
-    entry_id = "entry-1"
-    data = {"email": "user@example.com"}
+def _entry():
+    return types.SimpleNamespace(data={}, runtime_data=None)
 
 
-async def test_setup_stores_entry_data():
-    hass = _FakeHass()
-    assert await async_setup_entry(hass, _FakeEntry()) is True
-    assert hass.data[DOMAIN]["entry-1"] == {"email": "user@example.com"}
+async def test_setup_starts_coordinator_and_forwards(monkeypatch):
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    _FakeCoordinator.instances.clear()
+    hass, entry = _hass(), _entry()
+    assert await async_setup_entry(hass, entry) is True
+    coord = entry.runtime_data
+    assert coord.started is True
+    assert hass.config_entries.forwarded == PLATFORMS
 
 
-async def test_unload_removes_entry_data():
-    hass = _FakeHass()
-    entry = _FakeEntry()
-    await async_setup_entry(hass, entry)
+async def test_unload_shuts_down_coordinator(monkeypatch):
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    entry = _entry()
+    entry.runtime_data = _FakeCoordinator(None, entry)
+    hass = _hass()
     assert await async_unload_entry(hass, entry) is True
-    assert "entry-1" not in hass.data[DOMAIN]
+    assert entry.runtime_data.shutdown is True
 
 
-async def test_failed_unload_keeps_entry_data():
-    hass = _FakeHass()
+async def test_failed_unload_keeps_coordinator(monkeypatch):
+    entry = _entry()
+    entry.runtime_data = _FakeCoordinator(None, entry)
+    hass = _hass()
     hass.config_entries.unload_result = False
-    entry = _FakeEntry()
-    await async_setup_entry(hass, entry)
     assert await async_unload_entry(hass, entry) is False
-    assert "entry-1" in hass.data[DOMAIN]
+    assert entry.runtime_data.shutdown is False
 
 
-def test_platforms_start_empty():
-    assert PLATFORMS == []
+def test_platforms_includes_light():
+    assert "light" in PLATFORMS
