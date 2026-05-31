@@ -60,11 +60,11 @@ class PlejdMesh:
         """Encrypted thermostat operating-mode command (0x045F)."""
         return self.encrypt(protocol.set_climate_mode(address, mode))
 
-    def handle_notification(self, ciphertext: bytes) -> OutputState | None:
-        """Decrypt + decode an incoming vector; update and return output state.
+    def handle_notification(self, ciphertext: bytes) -> protocol.Command | None:
+        """Decrypt + decode an incoming vector, updating output state as a side effect.
 
-        Returns None for vectors that aren't valid output-state commands (a wrong-key
-        or corrupt decryption fails the marker check and is dropped).
+        Returns the decoded Command so the coordinator can route non-output events
+        (buttons, motion), or None if it fails the marker check (wrong key / corrupt).
         """
         try:
             command = protocol.decode_command(self.decrypt(ciphertext))
@@ -73,4 +73,4 @@ class PlejdMesh:
         state = protocol.decode_output_state(command)
         if state is not None:
             self._state[command.address] = state
-        return state
+        return command

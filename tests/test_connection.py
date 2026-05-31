@@ -54,7 +54,7 @@ def test_reversed_mac():
 async def test_connect_runs_auth_handshake(monkeypatch):
     client = _FakeClient()
     _patch(monkeypatch, client)
-    c = PlejdConnection(_KEY, on_state=lambda: None)
+    c = PlejdConnection(_KEY, on_event=lambda cmd: None)
     await c.connect(_device())
     assert c.connected and c.mesh is not None
     # auth: write 0x00 to AuthKey, then the folded SHA-256 response
@@ -66,14 +66,14 @@ async def test_connect_runs_auth_handshake(monkeypatch):
 async def test_write_goes_to_datavector(monkeypatch):
     client = _FakeClient()
     _patch(monkeypatch, client)
-    c = PlejdConnection(_KEY, on_state=lambda: None)
+    c = PlejdConnection(_KEY, on_event=lambda cmd: None)
     await c.connect(_device())
     await c.write(b"payload")
     assert (PLEJD_CHAR_DATA_UUID, b"payload") in client.writes
 
 
 async def test_write_without_connection_raises():
-    c = PlejdConnection(_KEY, on_state=lambda: None)
+    c = PlejdConnection(_KEY, on_event=lambda cmd: None)
     with pytest.raises(RuntimeError, match="not connected"):
         await c.write(b"x")
 
@@ -82,11 +82,11 @@ async def test_notify_updates_state_and_fires_callback(monkeypatch):
     client = _FakeClient()
     _patch(monkeypatch, client)
     fired = []
-    c = PlejdConnection(_KEY, on_state=lambda: fired.append(True))
+    c = PlejdConnection(_KEY, on_event=lambda cmd: fired.append(cmd))
     await c.connect(_device())
     vector = c.mesh.set_output(address=5, output=0, on=True, level=99)  # a real encrypted state vector
     client.notify_cb(None, bytearray(vector))
-    assert fired == [True]
+    assert len(fired) == 1 and fired[0].command == 0x00C8  # the decoded command was dispatched
     assert c.mesh.state[5].level == 99
 
 
@@ -94,7 +94,7 @@ async def test_notify_ignores_garbage(monkeypatch):
     client = _FakeClient()
     _patch(monkeypatch, client)
     fired = []
-    c = PlejdConnection(_KEY, on_state=lambda: fired.append(True))
+    c = PlejdConnection(_KEY, on_event=lambda cmd: fired.append(cmd))
     await c.connect(_device())
     client.notify_cb(None, bytearray(bytes(9)))  # won't decode
     assert fired == []
@@ -103,8 +103,15 @@ async def test_notify_ignores_garbage(monkeypatch):
 async def test_disconnect(monkeypatch):
     client = _FakeClient()
     _patch(monkeypatch, client)
-    c = PlejdConnection(_KEY, on_state=lambda: None)
+    c = PlejdConnection(_KEY, on_event=lambda cmd: None)
     await c.connect(_device())
     await c.disconnect()
     assert not c.connected and c.mesh is None
     await c.disconnect()  # idempotent
+
+
+def test_handle_notify_ignores_when_not_connected():
+    fired = []
+    c = PlejdConnection(_KEY, on_event=lambda cmd: fired.append(cmd))
+    c._handle_notify(None, bytearray(b"\x00" * 9))  # no mesh yet -> ignored
+    assert fired == []
