@@ -207,6 +207,21 @@ except ImportError:
     _climate.ClimateEntity = _ClimateEntity  # type: ignore[attr-defined]
     sys.modules.setdefault("homeassistant.components.climate", _climate)
 
+    _event = types.ModuleType("homeassistant.components.event")
+
+    class _EventEntity:
+        def _trigger_event(self, event_type, *args):
+            self._last_event = event_type
+
+        def async_on_remove(self, func):
+            self._unsub = func
+
+        def async_write_ha_state(self):
+            return None
+
+    _event.EventEntity = _EventEntity  # type: ignore[attr-defined]
+    sys.modules.setdefault("homeassistant.components.event", _event)
+
     _dr = types.ModuleType("homeassistant.helpers.device_registry")
 
     class _DeviceInfo(dict):

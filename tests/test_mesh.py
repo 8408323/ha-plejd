@@ -41,10 +41,9 @@ def test_handle_notification_updates_state():
     mesh = _mesh()
     # A device reports output 5 as on at level 128: feed its own encrypted vector back.
     vector = mesh.set_output(address=5, output=0, on=True, level=128)
-    state = mesh.handle_notification(vector)
-    assert state is not None
-    assert (state.on, state.level) == (True, 128)
-    assert mesh.state[5] == state
+    command = mesh.handle_notification(vector)
+    assert command is not None
+    assert (mesh.state[5].on, mesh.state[5].level) == (True, 128)
 
 
 def test_handle_notification_drops_undecodable():
@@ -54,9 +53,11 @@ def test_handle_notification_drops_undecodable():
     assert mesh.state == {}
 
 
-def test_handle_notification_ignores_non_output_commands():
+def test_handle_notification_returns_command_without_touching_output_state():
     mesh = _mesh()
-    assert mesh.handle_notification(mesh.scene(address=1, scene=2)) is None
+    # A non-output command (scene) still decodes to a Command but updates no state.
+    command = mesh.handle_notification(mesh.scene(address=1, scene=2))
+    assert command is not None and command.command == 0x0021
     assert mesh.state == {}
 
 

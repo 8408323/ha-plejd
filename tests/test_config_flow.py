@@ -7,7 +7,14 @@ import types
 import pytest
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
 from plejd import config_flow as cf
-from plejd.cloud import PlejdAuthError, PlejdCloudDevice, PlejdCloudError, PlejdCloudScene, PlejdCloudSite
+from plejd.cloud import (
+    PlejdAuthError,
+    PlejdCloudDevice,
+    PlejdCloudError,
+    PlejdCloudInput,
+    PlejdCloudScene,
+    PlejdCloudSite,
+)
 from plejd.config_flow import PlejdConfigFlow
 from plejd.const import CONF_CRYPTO_KEY, CONF_DEVICES, CONF_SITE_ID
 
@@ -36,7 +43,14 @@ def _site(site_id="S1"):
         room_id="r1",
     )
     scene = PlejdCloudScene("sc1", "Movie", 3)
-    return PlejdCloudSite(site_id=site_id, title="Home", crypto_key=bytes(16), devices=[dev], scenes=[scene])
+    return PlejdCloudSite(
+        site_id=site_id,
+        title="Home",
+        crypto_key=bytes(16),
+        devices=[dev],
+        inputs=[PlejdCloudInput("d1", "Kitchen", 11)],
+        scenes=[scene],
+    )
 
 
 def _patch_cloud(monkeypatch, *, login=None, sites=None, site=None):

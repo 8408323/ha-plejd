@@ -188,14 +188,32 @@ def test_state_for_none_before_connect():
     assert PlejdCoordinator(_hass(), _entry()).state_for(5) is None
 
 
-def test_listeners_add_notify_remove():
+def test_output_event_notifies_listeners():
+    from plejd.const import CMD_GROUP_STATE_AND_LEVEL
+    from plejd.protocol import Command
+
     c = PlejdCoordinator(_hass(), _entry())
     seen = []
     remove = c.async_add_listener(lambda: seen.append(1))
-    c._notify()
+    state_cmd = Command(address=5, command_type=0x10, command=CMD_GROUP_STATE_AND_LEVEL, data=bytes([1, 0, 0]))
+    c._on_event(state_cmd)
     remove()
-    c._notify()
+    c._on_event(state_cmd)
     assert seen == [1]
+
+
+def test_button_event_dispatches_press_and_release():
+    from plejd.const import CMD_INPUT_BUTTON
+    from plejd.protocol import Command
+
+    c = PlejdCoordinator(_hass(), _entry())
+    events = []
+    remove = c.async_add_button_listener(lambda addr, pressed: events.append((addr, pressed)))
+    c._on_event(Command(address=11, command_type=0x10, command=CMD_INPUT_BUTTON, data=bytes([1])))
+    c._on_event(Command(address=11, command_type=0x10, command=CMD_INPUT_BUTTON, data=bytes([0])))
+    remove()
+    c._on_event(Command(address=11, command_type=0x10, command=CMD_INPUT_BUTTON, data=b""))
+    assert events == [(11, True), (11, False)]
 
 
 async def test_shutdown(monkeypatch):
