@@ -34,6 +34,8 @@ from .const import (
     CONF_SCENES,
     CONF_SITE_ID,
     PLEJD_SERVICE_UUID,
+    TIME_EVENT_REP_FOREVER,
+    TIME_EVENT_RESULT_SCENE,
 )
 from .protocol import Command, MotionEvent, OutputState, decode_motion
 
@@ -160,6 +162,20 @@ class PlejdCoordinator:
         now = dt_util.now()
         epoch = int(now.timestamp() + now.utcoffset().total_seconds())
         await self._send(lambda mesh: mesh.set_timestamp(epoch))
+
+    async def async_program_time_event(
+        self, slot: int, mask: int, hour: int, minute: int, second: int, scene: int, fade: int
+    ) -> None:
+        """Program an on-device weekly time event that runs a scene (3-step config)."""
+        await self._send(
+            lambda mesh: mesh.set_time_event_time(slot, mask, hour, minute, second, TIME_EVENT_REP_FOREVER)
+        )
+        await self._send(lambda mesh: mesh.set_time_event_type(slot, TIME_EVENT_RESULT_SCENE))
+        await self._send(lambda mesh: mesh.set_time_event_scene(slot, scene, fade))
+
+    async def async_remove_time_event(self, slot: int) -> None:
+        """Delete an on-device time event."""
+        await self._send(lambda mesh: mesh.remove_time_event(slot))
 
     async def async_set_output(self, address: int, output: int, on: bool, level: int) -> None:
         """Send an on/off + level command for an output."""

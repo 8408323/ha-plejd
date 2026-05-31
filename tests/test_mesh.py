@@ -89,6 +89,20 @@ def test_dim_level_settings_round_trip():
     assert hi.command == CMD_OUTPUT_MAX_LEVEL and hi.data == bytes([1, 0xFF, 0xFF])
 
 
+def test_time_event_round_trip():
+    from plejd.const import CMD_TIME_EVENT_SCENE, CMD_TIME_EVENT_TIME, CMD_TIME_EVENT_TYPE
+
+    mesh = _mesh()
+    t = decode_command(mesh.decrypt(mesh.set_time_event_time(3, 0x7F, 7, 30, 0, 0xFFFFFFFF)))
+    assert t.command == CMD_TIME_EVENT_TIME and t.data == bytes([3, 1, 0x7F, 7, 30, 0, 0xFF, 0xFF, 0xFF, 0xFF])
+    ty = decode_command(mesh.decrypt(mesh.set_time_event_type(3, 0)))
+    assert ty.command == CMD_TIME_EVENT_TYPE and ty.data == bytes([3, 0])
+    s = decode_command(mesh.decrypt(mesh.set_time_event_scene(3, 5, 0)))
+    assert s.command == CMD_TIME_EVENT_SCENE and s.data == bytes([3, 1, 5])
+    rm = decode_command(mesh.decrypt(mesh.remove_time_event(3)))
+    assert rm.command == CMD_TIME_EVENT_TIME and rm.data == bytes([3])
+
+
 def test_set_timestamp_round_trip():
     from plejd.const import CMD_SYSTEM_TIME
 
