@@ -6,12 +6,32 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-05-31
+
+First feature-complete release: local Bluetooth-mesh control of a Plejd site,
+set up via a one-time cloud login. Lights, switches, scenes, buttons, and
+motion/illuminance are validated against real hardware; covers, climate, and the
+device-config entities are decoded from the app but not yet hardware-validated.
+
 ### Added
+- **Entity platforms**: lights (on/off + brightness), switches/relays, scenes,
+  buttons (HA events on press/release), motion (`binary_sensor`) + illuminance
+  (`sensor`) from WMS-01, covers (JAL/MTR), and climate (TRM thermostats).
+- **Device settings** as config entities: per-output minimum/maximum brightness
+  (`number`), dimming curve and phase-dim edge (`select`, the latter only on
+  phase-cut dimmers).
+- **On-device scheduling**: clock sync (broadcast local time on connect + daily,
+  plus a Sync-clock button) and weekly time→scene schedules managed from the
+  integration's Configure dialog, each exposed as a `switch`.
+- Bluetooth-discovery config flow + account login; entry setup/teardown with
+  options-driven reload.
+- Decoded the Plejd protocol from the Android app (.NET MAUI): BLE GATT map,
+  AES-128-ECB mesh crypto + SHA-256 login handshake (`crypto.py`), mesh command
+  opcodes, and cloud architecture — see `docs/reverse_engineering.md`.
 - Project scaffold: HACS metadata, CI (ruff, pytest, hassfest, HACS validation,
-  CodeQL), issue/PR templates, and the dotclaude tooling layer.
-- Bluetooth-discovery config flow skeleton and integration entry setup/teardown.
-- Reverse-engineering tooling (`tools/`) and capture documentation.
-- Decoded the Plejd protocol from the Android app (.NET MAUI): authoritative BLE
-  GATT characteristic map, AES-128-ECB mesh crypto + SHA-256 login handshake
-  (`crypto.py`), mesh command opcodes, and cloud/NATS architecture — written up in
-  `docs/reverse_engineering.md` and `const.py`.
+  CodeQL), issue/PR templates, the dotclaude tooling layer, and RE tooling
+  (`tools/`) with capture documentation.
+
+### Not included
+- Firmware OTA updates (would require Plejd's proprietary firmware images) and
+  astro (sunrise/sunset) schedules (use Home Assistant's `sun` automations).
