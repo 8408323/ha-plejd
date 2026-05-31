@@ -18,7 +18,7 @@ If you find this integration useful, you can buy me a coffee ☕
 
 ## How it works
 
-Plejd has **no local control API** — devices form a local **Bluetooth mesh**. This integration:
+Plejd devices have no local network (IP) API and aren't controlled through the cloud — they form a local **Bluetooth mesh**. This integration:
 
 1. **Logs in to the Plejd cloud once** to fetch your site's *crypto key* and device list (BLE addresses, output addresses, device types).
 2. **Connects locally over Bluetooth** to one mesh device, which relays commands and state to the rest. Payloads are AES-128 encrypted with the site key.
@@ -49,6 +49,10 @@ Or manually:
 2. Restart Home Assistant.
 
 ## Configuration
+
+> ⚠️ The config flow is still a work in progress — signing in does not yet fetch
+> your devices. This is the intended setup once the cloud login lands (tracked in
+> the [issues](https://github.com/8408323/ha-plejd/issues)).
 
 1. Go to **Settings → Devices & Services → Add Integration**.
 2. Search for *Plejd*.
