@@ -6,9 +6,9 @@ reports. The cloud/gateway holds the site crypto key, so this path is unencrypte
 it reuses ``protocol.encode_command`` and the codec in ``gateway.py``. See
 docs/gateway_protocol.md.
 
-State is refreshed on connect and after each command. Physical (off-mesh) changes
-are not yet pushed — decoding the ``mesh.out`` update frames is a follow-up that
-needs a live capture (#38).
+An initial snapshot is requested on connect; after that, every state change (our own
+commands and physical/off-app changes) arrives as a ``mesh.out`` push and is decoded
+like a BLE LastChanged broadcast — no polling.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from collections.abc import Awaitable, Callable
 
 import aiohttp
 
-from . import gateway
+from . import gateway, protocol
 from .protocol import OutputState
 
 
@@ -80,13 +80,12 @@ class PlejdGatewayConnection:
         self._recv_task = asyncio.ensure_future(self._receive_loop())
 
     async def write(self, vector: bytes) -> None:
-        """Publish a plaintext mesh command, then ask for fresh state.
+        """Publish a plaintext mesh command, fire-and-forget.
 
-        Fire-and-forget like the BLE DontRespond path: we don't await the publish
-        ack (ack=False); the follow-up state request reconciles the real state.
+        Like the BLE DontRespond path: we don't await the publish ack (ack=False);
+        the resulting state change arrives as a mesh.out push (see _handle_frame).
         """
         await self._send({**gateway.build_mesh_publish(vector, ack=False), "topic": [gateway.TOPIC_MESH_IN]})
-        await self.async_request_state()
 
     async def async_request_state(self) -> None:
         """Ask the gateway for a full mesh-state snapshot."""
@@ -112,10 +111,25 @@ class PlejdGatewayConnection:
             inner = json.loads(base64.b64decode(frame["data"]))
         except (ValueError, TypeError):
             return
-        if not isinstance(inner, dict) or inner.get("controlType") != gateway.CONTROL_TYPE_MESH_STATE:
+        if not isinstance(inner, dict):
             return
-        self._state.update(gateway.parse_mesh_state_report(inner))
-        self._on_state()
+        if inner.get("controlType") == gateway.CONTROL_TYPE_MESH_STATE:
+            self._state.update(gateway.parse_mesh_state_report(inner))
+            self._on_state()
+        elif isinstance(inner.get("raw"), str) and inner.get("index") is not None:
+            self._handle_push(inner["raw"], inner["index"])
+
+    def _handle_push(self, raw_pkt: str, index: object) -> None:
+        # A mesh.out update/push: a LastChanged Datavector relayed as {raw, index}.
+        try:
+            vector = gateway.repackage_ws_to_command(base64.b64decode(raw_pkt), int(index))
+            command = protocol.decode_command(vector)
+        except (ValueError, TypeError):
+            return
+        state = protocol.decode_output_state(command)
+        if state is not None:
+            self._state[command.address] = state
+            self._on_state()
 
     async def _receive_loop(self) -> None:
         assert self._ws is not None
