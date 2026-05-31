@@ -12,6 +12,7 @@ from plejd.switch import PlejdSwitch, async_setup_entry
 def _device(category="switch", address=7):
     return PlejdCloudDevice(
         device_id="r1",
+        output_index=0,
         name="Pump",
         address=address,
         outputs=[address],
@@ -75,5 +76,5 @@ async def test_added_to_hass_subscribes():
 
 def test_device_info():
     sw = PlejdSwitch(_Coordinator([]), _device())
-    assert sw._attr_unique_id == "r1"
+    assert sw._attr_unique_id == "r1_0"
     assert sw._attr_device_info["model"] == "REL-02"

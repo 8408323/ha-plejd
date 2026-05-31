@@ -26,11 +26,12 @@ from .const import (
     TRAIT_DIMMABLE,
 )
 
+# Cloud outputType values are UPPERCASE (validated against the real API).
 _OUTPUT_TYPE_CATEGORY = {
-    "Light": "light",
-    "Relay": "switch",
-    "Coverable": "cover",
-    "Thermostat": "climate",
+    "LIGHT": "light",
+    "RELAY": "switch",
+    "COVERABLE": "cover",
+    "THERMOSTAT": "climate",
 }
 
 
@@ -49,6 +50,7 @@ class PlejdCloudDevice:
     device_id: str
     name: str
     address: int | None
+    output_index: int
     outputs: list[int]
     hardware_id: int
     model: str
@@ -121,24 +123,30 @@ def parse_site(site: dict) -> PlejdCloudSite:
     key_hex = mesh.get("cryptoKey")
     if not key_hex:
         raise PlejdCloudError("site has no cryptoKey")
-    crypto_key = bytes.fromhex(key_hex)
+    # cryptoKey is dash-separated hex ("XX-XX-..", 16 bytes) — validated against the API.
+    crypto_key = bytes.fromhex(key_hex.replace("-", ""))
 
     device_address = site.get("deviceAddress") or {}
     output_address = site.get("outputAddress") or {}
     hardware_by_id = {d.get("deviceId"): d for d in site.get("plejdDevices") or []}
 
     devices: list[PlejdCloudDevice] = []
+    seen_outputs: dict[str, int] = {}  # deviceId -> next output index (devices[] is one entry per output)
     for info in site.get("devices") or []:
         device_id = info.get("deviceId")
         if device_id is None:
             continue
+        output_index = seen_outputs.get(device_id, 0)
+        seen_outputs[device_id] = output_index + 1
         hardware = hardware_by_id.get(device_id, {})
         hardware_id = int(hardware.get("hardwareId") or 0)
         model = HARDWARE_TYPES.get(hardware_id, "Unknown")
-        output_type = info.get("outputType") or "Unknown"
+        output_type = (info.get("outputType") or "UNKNOWN").upper()
         category = _OUTPUT_TYPE_CATEGORY.get(output_type) or DEFAULT_CATEGORY.get(hardware_id, CATEGORY_NONE)
-        outputs = [int(a) for a in (output_address.get(device_id) or {}).values()]
-        address = device_address.get(device_id)
+        out_map = output_address.get(device_id) or {}
+        outputs = [int(a) for a in out_map.values()]
+        # Control targets the output's own mesh address; fall back to the device address.
+        address = out_map.get(str(output_index), device_address.get(device_id))
         # Prefer the per-output Dimmable trait; fall back to category when the cloud
         # omits traits (a light-category output can still be on/off only).
         traits = int(info.get("traits") or 0)
@@ -148,6 +156,7 @@ def parse_site(site: dict) -> PlejdCloudSite:
                 device_id=device_id,
                 name=info.get("title") or model,
                 address=int(address) if address is not None else None,
+                output_index=output_index,
                 outputs=outputs,
                 hardware_id=hardware_id,
                 model=model,

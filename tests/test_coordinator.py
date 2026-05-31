@@ -14,6 +14,7 @@ _DEV = {
     "device_id": "d1",
     "name": "Kitchen",
     "address": 5,
+    "output_index": 0,
     "outputs": [5],
     "hardware_id": 1,
     "model": "DIM-01",

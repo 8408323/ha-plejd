@@ -13,6 +13,7 @@ from plejd.protocol import OutputState
 def _device(category="light", dimmable=True, address=5):
     return PlejdCloudDevice(
         device_id="d1",
+        output_index=0,
         name="Kitchen",
         address=address,
         outputs=[address],
@@ -55,7 +56,7 @@ def test_dimmable_light_color_mode():
     light = PlejdLight(_Coordinator([]), _device(dimmable=True))
     assert light._attr_color_mode == ColorMode.BRIGHTNESS
     assert light._attr_supported_color_modes == {ColorMode.BRIGHTNESS}
-    assert light._attr_unique_id == "d1"
+    assert light._attr_unique_id == "d1_0"
     assert light._attr_device_info["model"] == "DIM-01"
 
 

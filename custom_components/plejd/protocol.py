@@ -15,6 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .const import (
+    CMD_GROUP_STATE_AND_LEVEL,
     CMD_OUTPUT_STATE_AND_LEVEL,
     CMD_SCENE,
 )
@@ -98,14 +99,17 @@ class OutputState:
 
 
 def decode_output_state(cmd: Command) -> OutputState | None:
-    """Decode an Output-state-and-level vector (0x00C8) into on/off + level.
+    """Decode an on/off + level state report (validated against real devices).
 
-    Returns None for other opcodes. State vectors carry [output, state, level, ...];
-    a read-reply without a state byte (length 1) is reported as unknown level 0.
+    Devices broadcast state changes on **0x0098** keyed by the output's mesh address:
+    ``[state, level_lo, level_hi, ...]`` — on = state, brightness (0-255) = the level
+    high byte (level is 16-bit on the wire). ``output`` is the broadcasting address.
+
+    A 0x00C8 read-reply (``[output, level_lo, level_hi]``) is also accepted.
     """
-    if cmd.command != CMD_OUTPUT_STATE_AND_LEVEL or not cmd.data:
-        return None
-    output = cmd.data[0]
-    on = len(cmd.data) > 1 and cmd.data[1] != 0
-    level = cmd.data[2] if len(cmd.data) > 2 else 0
-    return OutputState(output=output, on=on, level=level)
+    if cmd.command == CMD_GROUP_STATE_AND_LEVEL and len(cmd.data) >= 3:
+        return OutputState(output=cmd.address, on=cmd.data[0] != 0, level=cmd.data[2])
+    if cmd.command == CMD_OUTPUT_STATE_AND_LEVEL and len(cmd.data) >= 3:
+        level = cmd.data[2]
+        return OutputState(output=cmd.data[0], on=level > 0 or cmd.data[1] != 0, level=level)
+    return None
