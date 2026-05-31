@@ -56,5 +56,27 @@
         "name": "Sync clock"
       }
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Plejd schedules",
+        "description": "Add a weekly on-device schedule that runs a scene, or remove existing ones. These run on the Plejd devices themselves, so they work even when Home Assistant is offline.",
+        "data": {
+          "delete": "Remove schedules",
+          "name": "New schedule name",
+          "days": "Days",
+          "time": "Time (HH:MM)",
+          "scene": "Scene",
+          "fade": "Fade (seconds)"
+        }
+      }
+    },
+    "error": {
+      "no_free_slots": "All 20 schedule slots are in use.",
+      "scene_required": "Pick a scene for the new schedule.",
+      "days_required": "Pick at least one weekday for the new schedule.",
+      "invalid_time": "Enter the time as HH:MM (24-hour)."
+    }
   }
 }

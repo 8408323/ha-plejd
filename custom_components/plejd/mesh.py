@@ -60,6 +60,22 @@ class PlejdMesh:
         """Encrypted clock-sync broadcast (0x001B)."""
         return self.encrypt(protocol.set_timestamp(epoch))
 
+    def set_time_event_time(self, slot: int, mask: int, hour: int, minute: int, second: int, rep: int) -> bytes:
+        """Encrypted time-event schedule (0x0258)."""
+        return self.encrypt(protocol.set_time_event_time(slot, mask, hour, minute, second, rep))
+
+    def set_time_event_type(self, slot: int, result: int) -> bytes:
+        """Encrypted time-event action type (0x0259)."""
+        return self.encrypt(protocol.set_time_event_type(slot, result))
+
+    def set_time_event_scene(self, slot: int, scene: int, fade: int) -> bytes:
+        """Encrypted time-event scene (0x025A)."""
+        return self.encrypt(protocol.set_time_event_scene(slot, scene, fade))
+
+    def remove_time_event(self, slot: int) -> bytes:
+        """Encrypted time-event delete (0x0258)."""
+        return self.encrypt(protocol.remove_time_event(slot))
+
     def set_output_curve(self, address: int, output: int, curve: int) -> bytes:
         """Encrypted dimming-curve setting (0x00CC)."""
         return self.encrypt(protocol.set_output_curve(address, output, curve))

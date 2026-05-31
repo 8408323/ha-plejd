@@ -152,3 +152,121 @@ async def test_site_label_fallback(monkeypatch, title):
     await flow.async_step_user(_LOGIN)
     result = await flow.async_step_site()
     assert result["step_id"] == "site"
+
+
+def _opt_flow(options=None, scenes=None, runtime_data=None):
+    entry = types.SimpleNamespace(
+        options=options or {},
+        data={"scenes": scenes if scenes is not None else [{"index": 3, "name": "Movie"}]},
+        runtime_data=runtime_data,
+    )
+    return cf.PlejdOptionsFlow(entry)
+
+
+def test_get_options_flow_returns_options_flow():
+    flow = cf.PlejdConfigFlow.async_get_options_flow(types.SimpleNamespace())
+    assert isinstance(flow, cf.PlejdOptionsFlow)
+
+
+async def test_options_form_shown_first_time():
+    res = await _opt_flow().async_step_init()
+    assert res["type"] == "form" and res["step_id"] == "init"
+
+
+async def test_options_form_with_existing_offers_delete():
+    existing = [{"slot": 0, "name": "X", "days": [0], "time": "07:00", "scene": 1, "fade": 0}]
+    res = await _opt_flow(options={"schedules": existing}).async_step_init()
+    assert res["type"] == "form"
+
+
+async def test_options_add_schedule_assigns_slot_and_maps_days():
+    res = await _opt_flow().async_step_init(
+        {"name": "Evening", "days": ["mon", "sun"], "time": "18:30", "scene": "3", "fade": 5}
+    )
+    sched = res["data"]["schedules"]
+    assert len(sched) == 1
+    assert sched[0]["slot"] == 0 and sched[0]["days"] == [0, 6] and sched[0]["scene"] == 3 and sched[0]["fade"] == 5
+    assert sched[0]["id"] == 0 and sched[0]["time"] == "18:30:00"  # normalized
+    assert res["data"]["next_schedule_id"] == 1
+
+
+async def test_options_add_uses_monotonic_id_not_slot():
+    opts = {"schedules": [], "next_schedule_id": 7}
+    res = await _opt_flow(options=opts).async_step_init({"name": "X", "days": ["mon"], "time": "06:00", "scene": "3"})
+    assert res["data"]["schedules"][0]["id"] == 7 and res["data"]["next_schedule_id"] == 8
+
+
+async def test_options_add_without_scene_errors():
+    res = await _opt_flow().async_step_init({"name": "X", "days": ["mon"], "time": "06:00"})
+    assert res["type"] == "form" and res["errors"] == {"base": "scene_required"}
+
+
+async def test_options_add_without_days_errors():
+    res = await _opt_flow().async_step_init({"name": "X", "days": [], "time": "06:00", "scene": "3"})
+    assert res["type"] == "form" and res["errors"] == {"base": "days_required"}
+
+
+async def test_options_add_with_invalid_time_errors():
+    for bad in ("7", "25:00", "07:xx", ""):
+        res = await _opt_flow().async_step_init({"name": "X", "days": ["mon"], "time": bad, "scene": "3"})
+        assert res["type"] == "form" and res["errors"] == {"time": "invalid_time"}, bad
+
+
+async def test_options_delete_schedule_clears_device_event():
+    existing = [{"slot": 0, "name": "X", "days": [0], "time": "07:00", "scene": 1, "fade": 0}]
+    removed = []
+
+    class _Coord:
+        async def async_remove_time_event(self, slot):
+            removed.append(slot)
+
+    flow = _opt_flow(options={"schedules": existing}, runtime_data=_Coord())
+    res = await flow.async_step_init({"delete": ["0"]})
+    assert res["data"]["schedules"] == [] and removed == [0]
+
+
+async def test_options_delete_when_mesh_unavailable_is_best_effort():
+    existing = [{"slot": 0, "name": "X", "days": [0], "time": "07:00", "scene": 1, "fade": 0}]
+    # runtime_data None -> async_remove_time_event raises AttributeError, swallowed.
+    res = await _opt_flow(options={"schedules": existing}).async_step_init({"delete": ["0"]})
+    assert res["data"]["schedules"] == []
+
+
+async def test_options_delete_persists_even_if_ble_write_fails():
+    existing = [{"slot": 0, "name": "X", "days": [0], "time": "07:00", "scene": 1, "fade": 0}]
+
+    class _Coord:
+        async def async_remove_time_event(self, slot):
+            raise RuntimeError("BLE link dropped")  # transport error, not HomeAssistantError
+
+    res = await _opt_flow(options={"schedules": existing}, runtime_data=_Coord()).async_step_init({"delete": ["0"]})
+    assert res["data"]["schedules"] == []
+
+
+async def test_options_delete_not_applied_when_same_submit_is_invalid():
+    existing = [{"id": 0, "slot": 0, "name": "X", "days": [0], "time": "07:00", "scene": 1, "fade": 0}]
+    removed = []
+
+    class _Coord:
+        async def async_remove_time_event(self, slot):
+            removed.append(slot)
+
+    flow = _opt_flow(options={"schedules": existing}, runtime_data=_Coord())
+    # Delete slot 0 AND add an invalid-time schedule in one submit -> validation error.
+    res = await flow.async_step_init({"delete": ["0"], "name": "New", "days": ["mon"], "time": "nope", "scene": "3"})
+    assert res["type"] == "form" and res["errors"] == {"time": "invalid_time"}
+    assert removed == []  # device event must NOT be cleared since the save didn't happen
+
+
+async def test_options_save_without_adding():
+    existing = [{"slot": 2, "name": "Keep", "days": [1], "time": "08:00", "scene": 1, "fade": 0}]
+    res = await _opt_flow(options={"schedules": existing}).async_step_init({"name": "", "delete": []})
+    assert res["data"]["schedules"] == existing
+
+
+async def test_options_no_free_slots_errors():
+    full = [{"slot": i, "name": f"s{i}", "days": [0], "time": "07:00", "scene": 1, "fade": 0} for i in range(20)]
+    res = await _opt_flow(options={"schedules": full}).async_step_init(
+        {"name": "More", "days": ["mon"], "time": "06:00", "scene": "3"}
+    )
+    assert res["type"] == "form" and res["errors"] == {"base": "no_free_slots"}
