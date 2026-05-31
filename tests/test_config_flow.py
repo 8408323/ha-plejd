@@ -192,6 +192,13 @@ async def test_options_saves_transport_choice():
     assert res["type"] == "create_entry" and res["data"]["transport"] == "ble"
 
 
+async def test_options_resets_stale_gateway_pref_without_usable_gateway():
+    # A stored gateway-only pref must reset to auto when there's no usable gateway,
+    # else the next reload keeps failing in the gateway-only branch.
+    res = await _opt_flow(options={"schedules": [], "transport": "gateway"}).async_step_init({"name": "", "delete": []})
+    assert res["data"]["transport"] == "auto"
+
+
 def test_get_options_flow_returns_options_flow():
     flow = cf.PlejdConfigFlow.async_get_options_flow(types.SimpleNamespace())
     assert isinstance(flow, cf.PlejdOptionsFlow)

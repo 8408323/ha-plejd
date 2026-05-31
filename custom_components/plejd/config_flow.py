@@ -208,7 +208,8 @@ class PlejdOptionsFlow(OptionsFlow):
                     data={
                         CONF_SCHEDULES: kept,
                         "next_schedule_id": next_id,
-                        CONF_TRANSPORT: user_input.get("transport", transport),
+                        # Reset a stale gateway-only preference to auto when there's no usable gateway.
+                        CONF_TRANSPORT: user_input.get("transport", transport) if has_gateway else TRANSPORT_AUTO,
                     },
                 )
 
