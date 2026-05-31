@@ -16,9 +16,9 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
 
-from .cloud import PlejdCloudDevice
+from .cloud import PlejdCloudDevice, PlejdCloudScene
 from .connection import PlejdConnection
-from .const import CONF_CRYPTO_KEY, CONF_DEVICES, CONF_DISCOVERED_ADDRESS, PLEJD_SERVICE_UUID
+from .const import CONF_CRYPTO_KEY, CONF_DEVICES, CONF_DISCOVERED_ADDRESS, CONF_SCENES, PLEJD_SERVICE_UUID
 from .protocol import OutputState
 
 _LOGGER = logging.getLogger(__name__)
@@ -31,6 +31,7 @@ class PlejdCoordinator:
         self.hass = hass
         # Tolerate entries stored before a field existed (e.g. output_index).
         self.devices = [PlejdCloudDevice(**{"output_index": 0, **device}) for device in entry.data[CONF_DEVICES]]
+        self.scenes = [PlejdCloudScene(**scene) for scene in entry.data.get(CONF_SCENES, [])]
         self._preferred = entry.data.get(CONF_DISCOVERED_ADDRESS)
         self._connection = PlejdConnection(bytes.fromhex(entry.data[CONF_CRYPTO_KEY]), self._notify)
         self._listeners: list[Callable[[], None]] = []
@@ -88,6 +89,12 @@ class PlejdCoordinator:
         if self._connection.mesh is None:
             raise HomeAssistantError("Plejd mesh is not connected")
         await self._connection.write(self._connection.mesh.set_output(address, output, on, level))
+
+    async def async_execute_scene(self, index: int) -> None:
+        """Trigger a Plejd scene (broadcast to address 0)."""
+        if self._connection.mesh is None:
+            raise HomeAssistantError("Plejd mesh is not connected")
+        await self._connection.write(self._connection.mesh.scene(0, index))
 
     async def async_shutdown(self) -> None:
         await self._connection.disconnect()

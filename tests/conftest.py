@@ -37,6 +37,7 @@ except ImportError:
         BINARY_SENSOR = "binary_sensor"
         SENSOR = "sensor"
         EVENT = "event"
+        SCENE = "scene"
 
     _const.Platform = _Platform  # type: ignore[attr-defined]
     sys.modules.setdefault("homeassistant.const", _const)
@@ -168,6 +169,14 @@ except ImportError:
 
     _switch.SwitchEntity = _SwitchEntity  # type: ignore[attr-defined]
     sys.modules.setdefault("homeassistant.components.switch", _switch)
+
+    _scene = types.ModuleType("homeassistant.components.scene")
+
+    class _Scene:
+        pass
+
+    _scene.Scene = _Scene  # type: ignore[attr-defined]
+    sys.modules.setdefault("homeassistant.components.scene", _scene)
 
     _dr = types.ModuleType("homeassistant.helpers.device_registry")
 

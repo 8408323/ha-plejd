@@ -155,6 +155,29 @@ async def test_set_output_without_connection_raises():
         await c.async_set_output(5, 0, True, 1)
 
 
+async def test_execute_scene_broadcasts(monkeypatch):
+    client = _FakeClient()
+    _patch_connect(monkeypatch, client)
+    ble = types.SimpleNamespace(address="01:02:03:04:05:a0")
+    hass = _hass([_info("01:02:03:04:05:a0")], {"01:02:03:04:05:a0": ble})
+    c = PlejdCoordinator(hass, _entry(discovered=None))
+    await c.async_start()
+    await c.async_execute_scene(2)
+    # scene is a broadcast (address 0) of opcode 0x0021 with the index
+    from plejd.protocol import CMD_SCENE, decode_command
+
+    cmd = decode_command(c._connection.mesh.decrypt(client.writes[-1][1]))
+    assert cmd.address == 0 and cmd.command == CMD_SCENE and cmd.data == bytes([2])
+
+
+async def test_execute_scene_without_connection_raises():
+    from homeassistant.exceptions import HomeAssistantError
+
+    c = PlejdCoordinator(_hass(), _entry())
+    with pytest.raises(HomeAssistantError, match="not connected"):
+        await c.async_execute_scene(1)
+
+
 def test_pick_device_handles_missing_rssi():
     hass = _hass([_info("X", rssi=None), _info("Y", rssi=-40)])
     c = PlejdCoordinator(hass, _entry(discovered=None))

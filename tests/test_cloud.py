@@ -36,6 +36,8 @@ _SITE = {
         {"deviceId": "d3", "title": "Blind", "roomId": "r2", "outputType": "COVERABLE"},
         {"title": "ghost"},  # no deviceId -> skipped
     ],
+    "scenes": [{"sceneId": "sc1", "title": "Movie"}, {"sceneId": "sc2", "title": "NoIndex"}],
+    "sceneIndex": {"sc1": 3},
 }
 
 
@@ -102,6 +104,8 @@ async def test_get_site_parses_devices():
     assert by_id["d2"].category == "switch" and by_id["d2"].dimmable is False
     assert by_id["d2"].outputs == [21, 22] and by_id["d2"].address == 21
     assert by_id["d3"].category == "cover" and by_id["d3"].model == "JAL-01"
+    # scenes: only those with a sceneIndex entry are kept
+    assert [(s.name, s.index) for s in site.scenes] == [("Movie", 3)]
 
 
 async def test_get_site_accepts_dict_result():
