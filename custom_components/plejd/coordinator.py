@@ -20,13 +20,13 @@ from homeassistant.components import bluetooth
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
+from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady, HomeAssistantError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.util import dt as dt_util
 
 from . import protocol
-from .cloud import PlejdCloudDevice, PlejdCloudInput, PlejdCloudMotion, PlejdCloudScene, async_login
+from .cloud import PlejdAuthError, PlejdCloudDevice, PlejdCloudInput, PlejdCloudMotion, PlejdCloudScene, async_login
 from .connection import PlejdConnection
 from .const import (
     CMD_GROUP_STATE_AND_LEVEL,
@@ -199,7 +199,10 @@ class PlejdCoordinator:
     async def _async_connect_gateway(self) -> None:
         try:
             await self._gateway.connect()
-        except Exception as err:  # noqa: BLE001 - any failure means fall back / retry
+        except PlejdAuthError as err:
+            # Bad/expired cloud credentials: trigger reauth, don't mask as a transient outage.
+            raise ConfigEntryAuthFailed("Plejd cloud credentials rejected") from err
+        except Exception as err:  # noqa: BLE001 - transient gateway failure: fall back / retry
             raise ConfigEntryNotReady(f"gateway connect failed: {err}") from err
         self._active = "gateway"
         self._available = True

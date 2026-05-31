@@ -80,8 +80,12 @@ class PlejdGatewayConnection:
         self._recv_task = asyncio.ensure_future(self._receive_loop())
 
     async def write(self, vector: bytes) -> None:
-        """Publish a plaintext mesh command, then ask for fresh state."""
-        await self._send({**gateway.build_mesh_publish(vector), "topic": [gateway.TOPIC_MESH_IN]})
+        """Publish a plaintext mesh command, then ask for fresh state.
+
+        Fire-and-forget like the BLE DontRespond path: we don't await the publish
+        ack (ack=False); the follow-up state request reconciles the real state.
+        """
+        await self._send({**gateway.build_mesh_publish(vector, ack=False), "topic": [gateway.TOPIC_MESH_IN]})
         await self.async_request_state()
 
     async def async_request_state(self) -> None:

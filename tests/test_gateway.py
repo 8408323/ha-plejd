@@ -82,6 +82,12 @@ def test_parse_mesh_state_report():
     assert states[36].on is True and states[36].level == 0x50
 
 
+def test_parse_mesh_state_report_clamps_oversized_level():
+    # Untrusted level beyond uint16 must not yield brightness > 255.
+    states = gateway.parse_mesh_state_report({"controlType": "MeshStateReply", "11": "1,999999"})
+    assert states[11].level == 255
+
+
 def test_parse_mesh_state_report_rejects_other_control_type():
     with pytest.raises(ValueError, match="not a MeshStateReply"):
         gateway.parse_mesh_state_report({"controlType": "Pong"})

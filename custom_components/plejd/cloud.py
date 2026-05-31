@@ -233,10 +233,12 @@ def parse_site(site: dict) -> PlejdCloudSite:
     # it lives only in gateways[]. Its resourceSetId authorises the remote WebSocket.
     gateway_objs = site.get("gateways") or []
     gateways = [g["deviceId"] for g in gateway_objs if g.get("deviceId")]
+    # The gateway's own resourceSetId is authoritative. Only fall back to a site
+    # resourceSet when there's exactly one (otherwise we can't tell which grants access).
     resource_sets = site.get("resourceSets") or []
-    resource_set_id = next((g.get("resourceSetId") for g in gateway_objs if g.get("resourceSetId")), None) or next(
-        (rs.get("objectId") for rs in resource_sets if rs.get("objectId")), None
-    )
+    resource_set_id = next((g.get("resourceSetId") for g in gateway_objs if g.get("resourceSetId")), None)
+    if resource_set_id is None and len(resource_sets) == 1:
+        resource_set_id = resource_sets[0].get("objectId")
 
     meta = site.get("site") or site  # id/title are nested under "site" in the real payload
     return PlejdCloudSite(

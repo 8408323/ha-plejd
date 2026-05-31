@@ -183,6 +183,18 @@ def test_parse_site_resource_set_falls_back_to_resource_sets():
     assert site.gateways == ["gw1"] and site.resource_set_id == "rsXYZ"
 
 
+def test_parse_site_ambiguous_resource_sets_yields_none():
+    site = parse_site(
+        {
+            "plejdMesh": {"cryptoKey": "00" * 16},
+            "devices": [],
+            "gateways": [{"deviceId": "gw1"}],  # no resourceSetId on the gateway
+            "resourceSets": [{"objectId": "rsA"}, {"objectId": "rsB"}],  # ambiguous
+        }
+    )
+    assert site.gateways == ["gw1"] and site.resource_set_id is None
+
+
 def test_parse_site_no_gateway():
     site = parse_site({"plejdMesh": {"cryptoKey": "00" * 16}, "devices": []})
     assert site.gateways == [] and site.resource_set_id is None

@@ -95,6 +95,7 @@ def parse_mesh_state_report(report: dict) -> dict[int, OutputState]:
         parts = str(value).split(",")
         if len(parts) < 2 or parts[0] not in ("0", "1") or not parts[1].isdigit():
             continue
-        level = int(parts[1])
+        # Untrusted: clamp to the documented uint16 so brightness can't exceed 255.
+        level = min(int(parts[1]), 0xFFFF)
         states[address] = OutputState(output=address, on=parts[0] == "1", level=level >> 8)
     return states

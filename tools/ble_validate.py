@@ -32,8 +32,6 @@ cloud = importlib.import_module("plejd.cloud")
 protocol = importlib.import_module("plejd.protocol")
 connection_mod = importlib.import_module("plejd.connection")
 
-GATEWAY_HARDWARE_ID = 4  # GWY-01 — the device we must NOT depend on.
-
 
 def _redact(address: str) -> str:
     return f"{address[:8]}…{address[-2:]}"
@@ -92,11 +90,11 @@ async def main() -> int:
     print("[1/5] One-time cloud login → crypto key + device list (the only non-BLE step)")
     email, password = _load_env(Path(args.env))
     site = await _fetch_site(email, password)
-    gateways = [d for d in site.devices if d.hardware_id == GATEWAY_HARDWARE_ID]
+    # A GWY-01 has no output, so it lives in site.gateways, not site.devices.
     print(f"      site '{site.title}': {len(site.devices)} outputs, {len(site.scenes)} scenes")
     print(
-        f"      Plejd Gateway present on this site: {'yes' if gateways else 'no'} "
-        f"({len(gateways)} GWY-01) — we will not route through it"
+        f"      Plejd Gateway present on this site: {'yes' if site.gateways else 'no'} "
+        f"({len(site.gateways)} GWY-01) — this BLE path does not route through it"
     )
     for d in site.devices:
         print(f"        addr={str(d.address):>4} out={d.output_index} {d.category:<7} {d.model:<10} {d.name}")

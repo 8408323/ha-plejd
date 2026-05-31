@@ -442,6 +442,27 @@ async def test_gateway_failure_falls_back_to_ble(monkeypatch):
     assert c._active == "ble" and c.available is True
 
 
+async def test_gateway_auth_failure_raises_reauth(monkeypatch):
+    from homeassistant.exceptions import ConfigEntryAuthFailed
+    from plejd.cloud import PlejdAuthError
+
+    class _AuthFailGateway(_FakeGateway):
+        async def connect(self):
+            raise PlejdAuthError("bad creds")
+
+    monkeypatch.setattr(coordinator_mod, "PlejdGatewayConnection", _AuthFailGateway)
+    # BLE device is in range, but auth failure must NOT silently fall back to it.
+    client = _FakeClient()
+    _patch_connect(monkeypatch, client)
+    ble = types.SimpleNamespace(address="01:02:03:04:05:a0")
+    hass = _hass([_info("01:02:03:04:05:a0")], {"01:02:03:04:05:a0": ble})
+    hass.session = object()
+    c = PlejdCoordinator(hass, _gateway_entry())
+    with pytest.raises(ConfigEntryAuthFailed):
+        await c.async_start()
+    assert c._active is None  # did not connect over BLE
+
+
 async def test_gateway_get_token(monkeypatch):
     monkeypatch.setattr(coordinator_mod, "PlejdGatewayConnection", _FakeGateway)
 
