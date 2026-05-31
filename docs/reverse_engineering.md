@@ -102,7 +102,7 @@ Key opcodes (from the app's mesh command schema, 194 commands total):
 |--------|------|---------|
 | `0x00C8` | Output state and level | `output(1)`, `state(1)`, `level(2)` — on/off + brightness |
 | `0x00C9` / `0x00CA` | Output min / max level | `channel(1)`, `level(2)` |
-| `0x0021` | Execute scene | `scene(1)`, `slewrate(2)`, `level(2)` |
+| `0x0021` | Execute scene | `scene(1)` only, **DontRespond** type (the app's `ExecuteScene`; `index+0x80` = power-off variant). The `slewrate`/`level` fields belong to scene *configuration* (`0x0022`), not execution. |
 | `0x0195` | Input state and level | `channel(1)`, `state(1)`, `level(2)` — state notification |
 | `0x001B` | System time | `type(1)`, … |
 | `0x0000` / `0x0003` / `0x0004` | Device type / MAC / firmware | query/response |
