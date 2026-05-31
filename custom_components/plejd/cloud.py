@@ -61,13 +61,23 @@ class PlejdCloudDevice:
 
 
 @dataclass
+class PlejdCloudScene:
+    """A Plejd scene: name + its mesh index (triggered as a broadcast)."""
+
+    scene_id: str
+    name: str
+    index: int
+
+
+@dataclass
 class PlejdCloudSite:
-    """A site: its crypto key and devices."""
+    """A site: its crypto key, devices, and scenes."""
 
     site_id: str
     title: str
     crypto_key: bytes
     devices: list[PlejdCloudDevice]
+    scenes: list[PlejdCloudScene]
 
 
 def _headers(token: str | None = None) -> dict[str, str]:
@@ -167,9 +177,18 @@ def parse_site(site: dict) -> PlejdCloudSite:
             )
         )
 
+    scene_index = site.get("sceneIndex") or {}
+    scenes = [
+        PlejdCloudScene(scene_id=sc["sceneId"], name=sc.get("title") or sc["sceneId"], index=int(idx))
+        for sc in site.get("scenes") or []
+        if (idx := scene_index.get(sc.get("sceneId"))) is not None
+    ]
+
+    meta = site.get("site") or site  # id/title are nested under "site" in the real payload
     return PlejdCloudSite(
-        site_id=site.get("siteId") or "",
-        title=site.get("title") or "Plejd",
+        site_id=meta.get("siteId") or "",
+        title=meta.get("title") or "Plejd",
         crypto_key=crypto_key,
         devices=devices,
+        scenes=scenes,
     )

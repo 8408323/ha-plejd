@@ -22,6 +22,7 @@ from .const import (
     CONF_CRYPTO_KEY,
     CONF_DEVICES,
     CONF_DISCOVERED_ADDRESS,
+    CONF_SCENES,
     CONF_SITE_ID,
     DOMAIN,
 )
@@ -111,5 +112,6 @@ class PlejdConfigFlow(ConfigFlow, domain=DOMAIN):
                 CONF_CRYPTO_KEY: site.crypto_key.hex(),
                 CONF_DISCOVERED_ADDRESS: self._discovered_address,
                 CONF_DEVICES: [asdict(d) for d in site.devices],
+                CONF_SCENES: [asdict(s) for s in site.scenes],
             },
         )
