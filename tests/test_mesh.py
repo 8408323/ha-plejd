@@ -87,3 +87,13 @@ def test_dim_level_settings_round_trip():
     assert lo.command == CMD_OUTPUT_MIN_LEVEL and lo.data == bytes([1, 0x00, 0x80])
     hi = decode_command(mesh.decrypt(mesh.set_output_max_level(9, 1, 1.0)))
     assert hi.command == CMD_OUTPUT_MAX_LEVEL and hi.data == bytes([1, 0xFF, 0xFF])
+
+
+def test_dimmer_tuning_round_trip():
+    from plejd.const import CMD_OUTPUT_CURVE_TYPE, CMD_OUTPUT_PHASE_DIM_TYPE
+
+    mesh = _mesh()
+    cv = decode_command(mesh.decrypt(mesh.set_output_curve(9, 1, 1)))
+    assert cv.command == CMD_OUTPUT_CURVE_TYPE and cv.data == bytes([1, 1])
+    ph = decode_command(mesh.decrypt(mesh.set_output_phase_dim(9, 0, 0)))
+    assert ph.command == CMD_OUTPUT_PHASE_DIM_TYPE and ph.data == bytes([0, 0])

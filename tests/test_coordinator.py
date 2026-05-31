@@ -300,3 +300,21 @@ async def test_dim_level_settings(monkeypatch):
     await c.async_set_output_max_level(9, 1, 1.0)
     high = decode_command(c._connection.mesh.decrypt(client.writes[-1][1]))
     assert high.command == CMD_OUTPUT_MAX_LEVEL and high.data == bytes([1, 0xFF, 0xFF])
+
+
+async def test_dimmer_tuning_settings(monkeypatch):
+    from plejd.const import CMD_OUTPUT_CURVE_TYPE, CMD_OUTPUT_PHASE_DIM_TYPE
+    from plejd.protocol import decode_command
+
+    client = _FakeClient()
+    _patch_connect(monkeypatch, client)
+    ble = types.SimpleNamespace(address="01:02:03:04:05:a0")
+    hass = _hass([_info("01:02:03:04:05:a0")], {"01:02:03:04:05:a0": ble})
+    c = PlejdCoordinator(hass, _entry(discovered=None))
+    await c.async_start()
+    await c.async_set_output_curve(9, 1, 3)
+    cv = decode_command(c._connection.mesh.decrypt(client.writes[-1][1]))
+    assert cv.command == CMD_OUTPUT_CURVE_TYPE and cv.data == bytes([1, 3])
+    await c.async_set_output_phase_dim(9, 1, 1)
+    ph = decode_command(c._connection.mesh.decrypt(client.writes[-1][1]))
+    assert ph.command == CMD_OUTPUT_PHASE_DIM_TYPE and ph.data == bytes([1, 1])

@@ -1,0 +1,72 @@
+"""Plejd select platform — per-output dimmer tuning (curve + phase-dim edge).
+
+Device *settings*, not live state. Like the dim-level numbers, the read-back lands
+on the Datavector characteristic this push-based integration doesn't subscribe to,
+so the entities are optimistic and restore their last selection across restarts.
+Wire values are byte-exact, decoded from the app (LoadCurve / PhaseOutputType).
+"""
+
+from __future__ import annotations
+
+from collections.abc import Awaitable, Callable
+
+from homeassistant.components.select import SelectEntity
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EntityCategory
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.restore_state import RestoreEntity
+
+from .cloud import PlejdCloudDevice
+from .const import CATEGORY_LIGHT, CURVE_OPTIONS, DOMAIN, PHASE_DIM_OPTIONS
+from .coordinator import PlejdCoordinator
+
+
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> None:
+    """Set up Plejd dimmer-tuning selects (curve + phase edge per dimmable output)."""
+    coordinator: PlejdCoordinator = entry.runtime_data
+    entities: list[PlejdOutputSettingSelect] = []
+    for device in coordinator.devices:
+        if device.category == CATEGORY_LIGHT and device.dimmable and device.address is not None:
+            entities.append(PlejdOutputSettingSelect(coordinator, device, "curve"))
+            entities.append(PlejdOutputSettingSelect(coordinator, device, "phase"))
+    async_add_entities(entities)
+
+
+class PlejdOutputSettingSelect(SelectEntity, RestoreEntity):
+    """A dimmer's dimming curve or phase-dim edge, as a config select."""
+
+    _attr_has_entity_name = True
+    _attr_entity_category = EntityCategory.CONFIG
+
+    def __init__(self, coordinator: PlejdCoordinator, device: PlejdCloudDevice, kind: str) -> None:
+        self._device = device
+        if kind == "curve":
+            self._options_map = CURVE_OPTIONS
+            self._setter: Callable[[int, int, int], Awaitable[None]] = coordinator.async_set_output_curve
+            self._attr_translation_key = "dim_curve"
+        else:
+            self._options_map = PHASE_DIM_OPTIONS
+            self._setter = coordinator.async_set_output_phase_dim
+            self._attr_translation_key = "phase_dim"
+        self._attr_options = list(self._options_map)
+        base = device.device_id if device.output_index == 0 else f"{device.device_id}_{device.output_index}"
+        self._attr_unique_id = f"{base}_{kind}"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, device.device_id)},
+            name=device.name,
+            manufacturer="Plejd",
+            model=device.model,
+        )
+
+    async def async_select_option(self, option: str) -> None:
+        await self._setter(self._device.address, self._device.output_index, self._options_map[option])
+        self._attr_current_option = option
+        self.async_write_ha_state()
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        last = await self.async_get_last_state()
+        if last is not None and last.state in self._options_map:
+            self._attr_current_option = last.state

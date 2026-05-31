@@ -47,6 +47,7 @@ except ImportError:
         EVENT = "event"
         SCENE = "scene"
         NUMBER = "number"
+        SELECT = "select"
 
     _const.Platform = _Platform  # type: ignore[attr-defined]
     _const.PERCENTAGE = "%"  # type: ignore[attr-defined]
@@ -317,6 +318,32 @@ except ImportError:
     _number.NumberMode = _NumberMode  # type: ignore[attr-defined]
     _number.RestoreNumber = _RestoreNumber  # type: ignore[attr-defined]
     sys.modules.setdefault("homeassistant.components.number", _number)
+
+    _select = types.ModuleType("homeassistant.components.select")
+
+    class _SelectEntity:
+        pass
+
+    _select.SelectEntity = _SelectEntity  # type: ignore[attr-defined]
+    sys.modules.setdefault("homeassistant.components.select", _select)
+
+    _restore = types.ModuleType("homeassistant.helpers.restore_state")
+
+    class _RestoreEntity:
+        async def async_added_to_hass(self):
+            return None
+
+        async def async_get_last_state(self):
+            return None
+
+        def async_on_remove(self, func):
+            self._unsub = func
+
+        def async_write_ha_state(self):
+            return None
+
+    _restore.RestoreEntity = _RestoreEntity  # type: ignore[attr-defined]
+    sys.modules.setdefault("homeassistant.helpers.restore_state", _restore)
 
     _dr = types.ModuleType("homeassistant.helpers.device_registry")
 

@@ -149,6 +149,14 @@ class PlejdCoordinator:
         """Set an output's maximum dim level (0-1 fraction)."""
         await self._send(lambda mesh: mesh.set_output_max_level(address, output, fraction))
 
+    async def async_set_output_curve(self, address: int, output: int, curve: int) -> None:
+        """Set an output's dimming curve (LoadCurve byte)."""
+        await self._send(lambda mesh: mesh.set_output_curve(address, output, curve))
+
+    async def async_set_output_phase_dim(self, address: int, output: int, phase: int) -> None:
+        """Set an output's phase-dim edge (PhaseOutputType byte)."""
+        await self._send(lambda mesh: mesh.set_output_phase_dim(address, output, phase))
+
     async def async_execute_scene(self, index: int) -> None:
         """Trigger a Plejd scene (broadcast to address 0)."""
         await self._send(lambda mesh: mesh.scene(0, index))
