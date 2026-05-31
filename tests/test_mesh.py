@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from plejd.mesh import PlejdMesh
-from plejd.protocol import CMD_OUTPUT_STATE_AND_LEVEL, TYPE_READ, decode_command
+from plejd.protocol import CMD_OUTPUT_STATE_AND_LEVEL, TYPE_DONT_RESPOND, TYPE_READ, decode_command
 
 _KEY = bytes.fromhex("00112233445566778899aabbccddeeff")
 _MAC = bytes.fromhex("0102030405a0")  # connected device MAC, reversed

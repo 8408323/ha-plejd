@@ -10,7 +10,7 @@ fully unit-testable.
 from __future__ import annotations
 
 from . import crypto, protocol
-from .protocol import OutputState
+from .protocol import TYPE_DONT_RESPOND, OutputState
 
 
 class PlejdMesh:
