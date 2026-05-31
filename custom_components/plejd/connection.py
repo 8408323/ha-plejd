@@ -41,10 +41,12 @@ class PlejdConnection:
 
     async def connect(self, device: BLEDevice) -> None:
         """Connect to ``device``, authenticate, and subscribe to state updates."""
+        _LOGGER.debug("connecting to Plejd device %s", device.address)
         self._client = await establish_connection(BleakClientWithServiceCache, device, device.address)
         self.mesh = PlejdMesh(self._key, reversed_mac(device.address))
         await self._authenticate()
         await self._client.start_notify(PLEJD_CHAR_LAST_DATA_UUID, self._handle_notify)
+        _LOGGER.debug("connected and authenticated to Plejd mesh via %s", device.address)
 
     async def _authenticate(self) -> None:
         # Trigger a fresh challenge, read it, write back the folded SHA-256 response.
@@ -65,6 +67,7 @@ class PlejdConnection:
 
     async def disconnect(self) -> None:
         if self._client is not None:
+            _LOGGER.debug("disconnecting from Plejd mesh")
             await self._client.disconnect()
             self._client = None
             self.mesh = None
