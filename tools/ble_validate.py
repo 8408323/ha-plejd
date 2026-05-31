@@ -111,7 +111,7 @@ async def main() -> int:
     print(f"      → connecting via {_redact(device.address)} (strongest; this is a mesh node, not the gateway)\n")
 
     print("[3/5] BLE connect + authenticate (SHA-256 challenge/response)")
-    conn = connection_mod.PlejdConnection(site.crypto_key, lambda: None)
+    conn = connection_mod.PlejdConnection(site.crypto_key, lambda _cmd: None)
     # Install the logging wrapper BEFORE connect(): start_notify binds the handler
     # reference at subscribe time, so reassigning it afterwards would be ignored.
     orig_handle = conn._handle_notify
