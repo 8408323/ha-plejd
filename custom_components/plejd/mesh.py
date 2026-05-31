@@ -56,6 +56,10 @@ class PlejdMesh:
         """Encrypted maximum-dim-level setting (0x00CA)."""
         return self.encrypt(protocol.set_output_max_level(address, output, fraction))
 
+    def set_timestamp(self, epoch: int) -> bytes:
+        """Encrypted clock-sync broadcast (0x001B)."""
+        return self.encrypt(protocol.set_timestamp(epoch))
+
     def set_output_curve(self, address: int, output: int, curve: int) -> bytes:
         """Encrypted dimming-curve setting (0x00CC)."""
         return self.encrypt(protocol.set_output_curve(address, output, curve))

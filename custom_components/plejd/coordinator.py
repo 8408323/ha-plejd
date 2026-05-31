@@ -10,11 +10,14 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from datetime import timedelta
 
 from homeassistant.components import bluetooth
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
+from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.util import dt as dt_util
 
 from .cloud import PlejdCloudDevice, PlejdCloudInput, PlejdCloudMotion, PlejdCloudScene
 from .connection import PlejdConnection
@@ -29,6 +32,7 @@ from .const import (
     CONF_INPUTS,
     CONF_MOTION,
     CONF_SCENES,
+    CONF_SITE_ID,
     PLEJD_SERVICE_UUID,
 )
 from .protocol import Command, MotionEvent, OutputState, decode_motion
@@ -47,11 +51,13 @@ class PlejdCoordinator:
         self.inputs = [PlejdCloudInput(**i) for i in entry.data.get(CONF_INPUTS, [])]
         self.motion = [PlejdCloudMotion(**m) for m in entry.data.get(CONF_MOTION, [])]
         self._motion_addresses = {m.address for m in self.motion}
+        self.site_id = entry.data.get(CONF_SITE_ID, entry.entry_id)
         self._preferred = entry.data.get(CONF_DISCOVERED_ADDRESS)
         self._connection = PlejdConnection(bytes.fromhex(entry.data[CONF_CRYPTO_KEY]), self._on_event)
         self._listeners: list[Callable[[], None]] = []
         self._button_listeners: list[Callable[[int, bool], None]] = []
         self._motion_listeners: list[Callable[[MotionEvent], None]] = []
+        self._clock_unsub: Callable[[], None] | None = None
 
     @callback
     def async_add_listener(self, update: Callable[[], None]) -> Callable[[], None]:
@@ -130,12 +136,30 @@ class PlejdCoordinator:
             await self._connection.connect(device)
         except Exception as err:  # noqa: BLE001 - surface any BLE failure as a setup retry
             raise ConfigEntryNotReady(f"failed to connect: {err}") from err
+        try:
+            await self.async_sync_clock()
+        except Exception:  # noqa: BLE001 - clock sync is auxiliary, never fail setup over it
+            _LOGGER.warning("Plejd clock sync after connect failed", exc_info=True)
+        # Keep device RTCs aligned (they drive on-device time/astro events) across drift + DST.
+        self._clock_unsub = async_track_time_interval(self.hass, self._async_periodic_clock_sync, timedelta(days=1))
+
+    async def _async_periodic_clock_sync(self, _now: object) -> None:
+        try:
+            await self.async_sync_clock()
+        except Exception:  # noqa: BLE001 - best-effort; a missed daily sync is not fatal
+            _LOGGER.warning("Plejd periodic clock sync failed", exc_info=True)
 
     async def _send(self, build: Callable[[object], bytes]) -> None:
         mesh = self._connection.mesh
         if mesh is None:
             raise HomeAssistantError("Plejd mesh is not connected")
         await self._connection.write(build(mesh))
+
+    async def async_sync_clock(self) -> None:
+        """Broadcast the current local wall-clock to every mesh device (0x001B)."""
+        now = dt_util.now()
+        epoch = int(now.timestamp() + now.utcoffset().total_seconds())
+        await self._send(lambda mesh: mesh.set_timestamp(epoch))
 
     async def async_set_output(self, address: int, output: int, on: bool, level: int) -> None:
         """Send an on/off + level command for an output."""
@@ -178,4 +202,7 @@ class PlejdCoordinator:
         await self._send(lambda mesh: mesh.cover_stop(address))
 
     async def async_shutdown(self) -> None:
+        if self._clock_unsub is not None:
+            self._clock_unsub()
+            self._clock_unsub = None
         await self._connection.disconnect()

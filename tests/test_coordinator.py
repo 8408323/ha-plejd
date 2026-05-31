@@ -47,7 +47,8 @@ class _FakeClient:
 
 def _entry(discovered="AA:BB:CC:DD:EE:01"):
     return types.SimpleNamespace(
-        data={CONF_CRYPTO_KEY: _KEY_HEX, CONF_DEVICES: [_DEV], CONF_DISCOVERED_ADDRESS: discovered}
+        entry_id="e1",
+        data={CONF_CRYPTO_KEY: _KEY_HEX, CONF_DEVICES: [_DEV], CONF_DISCOVERED_ADDRESS: discovered},
     )
 
 
@@ -74,7 +75,8 @@ def test_devices_loaded_from_entry():
 def test_devices_migrate_when_output_index_missing():
     legacy = {k: v for k, v in _DEV.items() if k != "output_index"}  # entry stored before the field
     entry = types.SimpleNamespace(
-        data={CONF_CRYPTO_KEY: _KEY_HEX, CONF_DEVICES: [legacy], CONF_DISCOVERED_ADDRESS: None}
+        entry_id="e1",
+        data={CONF_CRYPTO_KEY: _KEY_HEX, CONF_DEVICES: [legacy], CONF_DISCOVERED_ADDRESS: None},
     )
     c = PlejdCoordinator(_hass(), entry)
     assert c.devices[0].output_index == 0
@@ -249,12 +251,13 @@ def test_motion_event_dispatches_to_listeners():
 
     # entry with a motion sensor at address 33
     entry = types.SimpleNamespace(
+        entry_id="e1",
         data={
             CONF_CRYPTO_KEY: _KEY_HEX,
             CONF_DEVICES: [_DEV],
             CONF_DISCOVERED_ADDRESS: None,
             "motion": [{"device_id": "w1", "name": "Motion", "address": 33}],
-        }
+        },
     )
     c = PlejdCoordinator(_hass(), entry)
     events = []
@@ -300,6 +303,61 @@ async def test_dim_level_settings(monkeypatch):
     await c.async_set_output_max_level(9, 1, 1.0)
     high = decode_command(c._connection.mesh.decrypt(client.writes[-1][1]))
     assert high.command == CMD_OUTPUT_MAX_LEVEL and high.data == bytes([1, 0xFF, 0xFF])
+
+
+def _expected_clock_bytes():
+    from homeassistant.util import dt as dt_util
+
+    now = dt_util.now()
+    epoch = int(now.timestamp() + now.utcoffset().total_seconds())
+    return bytes([epoch & 0xFF, (epoch >> 8) & 0xFF, (epoch >> 16) & 0xFF, (epoch >> 24) & 0xFF, 0x00])
+
+
+async def test_clock_synced_on_connect(monkeypatch):
+    from plejd.const import CMD_SYSTEM_TIME
+    from plejd.protocol import decode_command
+
+    client = _FakeClient()
+    _patch_connect(monkeypatch, client)
+    ble = types.SimpleNamespace(address="01:02:03:04:05:a0")
+    hass = _hass([_info("01:02:03:04:05:a0")], {"01:02:03:04:05:a0": ble})
+    c = PlejdCoordinator(hass, _entry(discovered=None))
+    await c.async_start()
+    clock = decode_command(c._connection.mesh.decrypt(client.writes[-1][1]))
+    assert clock.address == 0 and clock.command == CMD_SYSTEM_TIME
+    assert clock.data == _expected_clock_bytes()
+
+
+async def test_periodic_sync_and_shutdown_cancels(monkeypatch):
+    client = _FakeClient()
+    _patch_connect(monkeypatch, client)
+    ble = types.SimpleNamespace(address="01:02:03:04:05:a0")
+    hass = _hass([_info("01:02:03:04:05:a0")], {"01:02:03:04:05:a0": ble})
+    c = PlejdCoordinator(hass, _entry(discovered=None))
+    await c.async_start()
+    cancelled = []
+    c._clock_unsub = lambda: cancelled.append(True)
+    before = len(client.writes)
+    await c._async_periodic_clock_sync(None)
+    assert len(client.writes) == before + 1  # periodic tick re-broadcasts the clock
+    await c.async_shutdown()
+    assert cancelled == [True] and c._clock_unsub is None
+
+
+async def test_clock_sync_failures_are_logged_not_raised(monkeypatch):
+    client = _FakeClient()
+    _patch_connect(monkeypatch, client)
+    ble = types.SimpleNamespace(address="01:02:03:04:05:a0")
+    hass = _hass([_info("01:02:03:04:05:a0")], {"01:02:03:04:05:a0": ble})
+    c = PlejdCoordinator(hass, _entry(discovered=None))
+
+    async def _boom():
+        raise RuntimeError("mesh dropped")
+
+    monkeypatch.setattr(c, "async_sync_clock", _boom)
+    await c.async_start()  # on-connect sync raises -> warning, setup still succeeds
+    assert c._connection.mesh is not None
+    await c._async_periodic_clock_sync(None)  # periodic sync raises -> warning, no exception
 
 
 async def test_dimmer_tuning_settings(monkeypatch):
