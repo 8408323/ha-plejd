@@ -46,8 +46,16 @@ except ImportError:
         SENSOR = "sensor"
         EVENT = "event"
         SCENE = "scene"
+        NUMBER = "number"
 
     _const.Platform = _Platform  # type: ignore[attr-defined]
+    _const.PERCENTAGE = "%"  # type: ignore[attr-defined]
+
+    class _EntityCategory(str, enum.Enum):
+        CONFIG = "config"
+        DIAGNOSTIC = "diagnostic"
+
+    _const.EntityCategory = _EntityCategory  # type: ignore[attr-defined]
     sys.modules.setdefault("homeassistant.const", _const)
 
     _core = types.ModuleType("homeassistant.core")
@@ -286,6 +294,26 @@ except ImportError:
     _cover.CoverEntityFeature = _CoverEntityFeature  # type: ignore[attr-defined]
     _cover.CoverEntity = _CoverEntity  # type: ignore[attr-defined]
     sys.modules.setdefault("homeassistant.components.cover", _cover)
+
+    _number = types.ModuleType("homeassistant.components.number")
+
+    class _NumberMode(str, enum.Enum):
+        SLIDER = "slider"
+
+    class _RestoreNumber:
+        async def async_get_last_number_data(self):
+            return None
+
+        def async_on_remove(self, func):
+            self._unsub = func
+
+        def async_write_ha_state(self):
+            return None
+
+    _number.NumberEntity = _RestoreNumber  # type: ignore[attr-defined]
+    _number.NumberMode = _NumberMode  # type: ignore[attr-defined]
+    _number.RestoreNumber = _RestoreNumber  # type: ignore[attr-defined]
+    sys.modules.setdefault("homeassistant.components.number", _number)
 
     _dr = types.ModuleType("homeassistant.helpers.device_registry")
 

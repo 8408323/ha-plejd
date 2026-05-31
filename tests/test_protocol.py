@@ -169,3 +169,18 @@ def test_cover_stop_bytes():
     from plejd.protocol import cover_stop
 
     assert cover_stop(5)[5:] == bytes([0x03, 0x08, 0x07, 0x00])
+
+
+def test_dim_level_setting_bytes():
+    from plejd.const import CMD_OUTPUT_MAX_LEVEL, CMD_OUTPUT_MIN_LEVEL
+    from plejd.protocol import TYPE_DONT_RESPOND, set_output_max_level, set_output_min_level
+
+    minimum = set_output_min_level(9, 1, 0.5)  # 0.5 * 65535 = 32768 (0x8000) le
+    assert (minimum[3] << 8) | minimum[4] == CMD_OUTPUT_MIN_LEVEL
+    assert minimum[2] == TYPE_DONT_RESPOND
+    assert minimum[5:] == bytes([0x01, 0x00, 0x80])
+    full = set_output_max_level(9, 0, 1.0)  # 65535 -> 0xFFFF
+    assert (full[3] << 8) | full[4] == CMD_OUTPUT_MAX_LEVEL
+    assert full[5:] == bytes([0x00, 0xFF, 0xFF])
+    zero = set_output_min_level(9, 0, 0.0)
+    assert zero[5:] == bytes([0x00, 0x00, 0x00])
