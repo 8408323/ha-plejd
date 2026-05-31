@@ -37,6 +37,16 @@ STEP_USER_SCHEMA = vol.Schema(
 )
 
 
+def _site_id(item: dict) -> str:
+    # getSiteList items nest the id/title under "site" (validated against the API).
+    return (item.get("site") or item)["siteId"]
+
+
+def _site_title(item: dict) -> str:
+    site = item.get("site") or item
+    return site.get("title") or site["siteId"]
+
+
 class PlejdConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Plejd."""
 
@@ -72,7 +82,7 @@ class PlejdConfigFlow(ConfigFlow, domain=DOMAIN):
                 if not self._sites:
                     errors["base"] = "no_sites"
                 elif len(self._sites) == 1:
-                    return await self._create_entry(self._sites[0]["siteId"])
+                    return await self._create_entry(_site_id(self._sites[0]))
                 else:
                     return await self.async_step_site()
         return self.async_show_form(step_id="user", data_schema=STEP_USER_SCHEMA, errors=errors)
@@ -80,7 +90,7 @@ class PlejdConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_site(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         if user_input is not None:
             return await self._create_entry(user_input[CONF_SITE_ID])
-        options = [{"value": s["siteId"], "label": s.get("title") or s["siteId"]} for s in self._sites]
+        options = [{"value": _site_id(s), "label": _site_title(s)} for s in self._sites]
         schema = vol.Schema({vol.Required(CONF_SITE_ID): SelectSelector(SelectSelectorConfig(options=options))})
         return self.async_show_form(step_id="site", data_schema=schema)
 

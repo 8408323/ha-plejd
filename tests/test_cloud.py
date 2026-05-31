@@ -31,9 +31,9 @@ _SITE = {
         {"deviceId": "d3", "hardwareId": "16"},
     ],
     "devices": [
-        {"deviceId": "d1", "title": "Kitchen", "roomId": "r1", "outputType": "Light"},
-        {"deviceId": "d2", "title": "Pump", "roomId": "r1", "outputType": "Relay"},
-        {"deviceId": "d3", "title": "Blind", "roomId": "r2", "outputType": "Coverable"},
+        {"deviceId": "d1", "title": "Kitchen", "roomId": "r1", "outputType": "LIGHT"},
+        {"deviceId": "d2", "title": "Pump", "roomId": "r1", "outputType": "RELAY"},
+        {"deviceId": "d3", "title": "Blind", "roomId": "r2", "outputType": "COVERABLE"},
         {"title": "ghost"},  # no deviceId -> skipped
     ],
 }
@@ -100,7 +100,7 @@ async def test_get_site_parses_devices():
     assert by_id["d1"].category == "light" and by_id["d1"].dimmable is True
     assert by_id["d1"].model == "DIM-01" and by_id["d1"].outputs == [11]
     assert by_id["d2"].category == "switch" and by_id["d2"].dimmable is False
-    assert by_id["d2"].outputs == [21, 22] and by_id["d2"].address == 2
+    assert by_id["d2"].outputs == [21, 22] and by_id["d2"].address == 21
     assert by_id["d3"].category == "cover" and by_id["d3"].model == "JAL-01"
 
 
@@ -139,8 +139,8 @@ def test_dimmable_follows_traits_when_present():
             "plejdMesh": {"cryptoKey": "00" * 16},
             "plejdDevices": [{"deviceId": "a", "hardwareId": "1"}, {"deviceId": "b", "hardwareId": "1"}],
             "devices": [
-                {"deviceId": "a", "outputType": "Light", "traits": 0x01},  # Powerable only -> on/off light
-                {"deviceId": "b", "outputType": "Light", "traits": 0x03},  # Powerable|Dimmable
+                {"deviceId": "a", "outputType": "LIGHT", "traits": 0x01},  # Powerable only -> on/off light
+                {"deviceId": "b", "outputType": "LIGHT", "traits": 0x03},  # Powerable|Dimmable
             ],
         }
     )

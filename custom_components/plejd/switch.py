@@ -34,7 +34,9 @@ class PlejdSwitch(SwitchEntity):
     def __init__(self, coordinator: PlejdCoordinator, device: PlejdCloudDevice) -> None:
         self._coordinator = coordinator
         self._device = device
-        self._attr_unique_id = device.device_id
+        self._attr_unique_id = (
+            device.device_id if device.output_index == 0 else f"{device.device_id}_{device.output_index}"
+        )
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, device.device_id)},
             name=device.name,
@@ -48,10 +50,10 @@ class PlejdSwitch(SwitchEntity):
         return state.on if state is not None else None
 
     async def async_turn_on(self, **kwargs: Any) -> None:
-        await self._coordinator.async_set_output(self._device.address, 0, True, 255)
+        await self._coordinator.async_set_output(self._device.address, self._device.output_index, True, 255)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
-        await self._coordinator.async_set_output(self._device.address, 0, False, 0)
+        await self._coordinator.async_set_output(self._device.address, self._device.output_index, False, 0)
 
     async def async_added_to_hass(self) -> None:
         self.async_on_remove(self._coordinator.async_add_listener(self.async_write_ha_state))

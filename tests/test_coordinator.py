@@ -14,6 +14,7 @@ _DEV = {
     "device_id": "d1",
     "name": "Kitchen",
     "address": 5,
+    "output_index": 0,
     "outputs": [5],
     "hardware_id": 1,
     "model": "DIM-01",
@@ -68,6 +69,15 @@ def _patch_connect(monkeypatch, client):
 def test_devices_loaded_from_entry():
     c = PlejdCoordinator(_hass(), _entry())
     assert [d.device_id for d in c.devices] == ["d1"]
+
+
+def test_devices_migrate_when_output_index_missing():
+    legacy = {k: v for k, v in _DEV.items() if k != "output_index"}  # entry stored before the field
+    entry = types.SimpleNamespace(
+        data={CONF_CRYPTO_KEY: _KEY_HEX, CONF_DEVICES: [legacy], CONF_DISCOVERED_ADDRESS: None}
+    )
+    c = PlejdCoordinator(_hass(), entry)
+    assert c.devices[0].output_index == 0
 
 
 async def test_start_connects_to_a_plejd_device(monkeypatch):

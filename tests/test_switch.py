@@ -12,6 +12,7 @@ from plejd.switch import PlejdSwitch, async_setup_entry
 def _device(category="switch", address=7):
     return PlejdCloudDevice(
         device_id="r1",
+        output_index=0,
         name="Pump",
         address=address,
         outputs=[address],
