@@ -16,6 +16,7 @@ CONF_DISCOVERED_ADDRESS = "discovered_address"
 CONF_SITE_ID = "site_id"
 CONF_CRYPTO_KEY = "crypto_key"  # hex string of the 16-byte site key
 CONF_DEVICES = "devices"  # cached device list (so HA works offline after setup)
+CONF_SCENES = "scenes"  # cached scene list
 
 # ── BLE GATT layout (confirmed from Plejd.Shared PlejdConstants.BleCharacteristics) ──
 # All characteristics live under the service base UUID with the 3rd 16-bit group
