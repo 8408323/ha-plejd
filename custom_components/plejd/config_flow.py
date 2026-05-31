@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from dataclasses import asdict
 from typing import TYPE_CHECKING, Any
+from uuid import uuid4
 
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlow
@@ -23,8 +24,11 @@ from .const import (
     CONF_CRYPTO_KEY,
     CONF_DEVICES,
     CONF_DISCOVERED_ADDRESS,
+    CONF_GATEWAYS,
     CONF_INPUTS,
+    CONF_INSTALLATION_ID,
     CONF_MOTION,
+    CONF_RESOURCE_SET_ID,
     CONF_SCENES,
     CONF_SCHEDULES,
     CONF_SITE_ID,
@@ -140,6 +144,9 @@ class PlejdConfigFlow(ConfigFlow, domain=DOMAIN):
                 CONF_INPUTS: [asdict(i) for i in site.inputs],
                 CONF_MOTION: [asdict(m) for m in site.motion],
                 CONF_SCENES: [asdict(s) for s in site.scenes],
+                CONF_GATEWAYS: site.gateways,
+                CONF_RESOURCE_SET_ID: site.resource_set_id,
+                CONF_INSTALLATION_ID: str(uuid4()),
             },
         )
 

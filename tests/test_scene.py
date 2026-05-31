@@ -12,9 +12,18 @@ class _Coordinator:
     def __init__(self, scenes):
         self.scenes = scenes
         self.executed: list[int] = []
+        self.available = True
 
     async def async_execute_scene(self, index):
         self.executed.append(index)
+
+
+def test_scene_available_follows_coordinator():
+    coord = _Coordinator([])
+    sc = PlejdScene(coord, PlejdCloudScene("s1", "Movie", 3))
+    assert sc.available is True
+    coord.available = False
+    assert sc.available is False
 
 
 async def test_setup_creates_scene_entities():

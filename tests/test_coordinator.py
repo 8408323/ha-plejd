@@ -2,11 +2,25 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import types
 
 import pytest
+from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
 from plejd import connection as conn
-from plejd.const import CONF_CRYPTO_KEY, CONF_DEVICES, CONF_DISCOVERED_ADDRESS, PLEJD_SERVICE_UUID
+from plejd import coordinator as coordinator_mod
+from plejd.const import (
+    CONF_CRYPTO_KEY,
+    CONF_DEVICES,
+    CONF_DISCOVERED_ADDRESS,
+    CONF_GATEWAYS,
+    CONF_INSTALLATION_ID,
+    CONF_RESOURCE_SET_ID,
+    CONF_SITE_ID,
+    PLEJD_CHAR_DATA_UUID,
+    PLEJD_SERVICE_UUID,
+)
 from plejd.coordinator import PlejdCoordinator
 
 _KEY_HEX = "00112233445566778899aabbccddeeff"
@@ -190,6 +204,16 @@ def test_state_for_none_before_connect():
     assert PlejdCoordinator(_hass(), _entry()).state_for(5) is None
 
 
+def test_notify_outputs_calls_listeners():
+    c = PlejdCoordinator(_hass(), _entry())
+    seen = []
+    remove = c.async_add_listener(lambda: seen.append(1))
+    c._notify_outputs()
+    remove()
+    c._notify_outputs()
+    assert seen == [1]
+
+
 def test_output_event_notifies_listeners():
     from plejd.const import CMD_GROUP_STATE_AND_LEVEL
     from plejd.protocol import Command
@@ -227,6 +251,219 @@ async def test_shutdown(monkeypatch):
     await c.async_start()
     await c.async_shutdown()
     assert not client.is_connected
+
+
+async def test_available_reflects_connection(monkeypatch):
+    client = _FakeClient()
+    _patch_connect(monkeypatch, client)
+    ble = types.SimpleNamespace(address="01:02:03:04:05:a0")
+    hass = _hass([_info("01:02:03:04:05:a0")], {"01:02:03:04:05:a0": ble})
+    c = PlejdCoordinator(hass, _entry(discovered=None))
+    assert c.available is False  # not connected yet
+    await c.async_start()
+    assert c.available is True
+
+
+async def test_initial_state_read_one_per_address(monkeypatch):
+    client = _FakeClient()
+    _patch_connect(monkeypatch, client)
+    ble = types.SimpleNamespace(address="01:02:03:04:05:a0")
+    hass = _hass([_info("01:02:03:04:05:a0")], {"01:02:03:04:05:a0": ble})
+    dev_none = {**_DEV, "device_id": "d2", "address": None}
+    dev_dup = {**_DEV, "device_id": "d3", "address": 5}
+    entry = types.SimpleNamespace(
+        entry_id="e1",
+        data={CONF_CRYPTO_KEY: _KEY_HEX, CONF_DEVICES: [_DEV, dev_none, dev_dup], CONF_DISCOVERED_ADDRESS: None},
+    )
+    c = PlejdCoordinator(hass, entry)
+    await c.async_start()
+    # one state-read written per unique non-None address (addr 5); None + duplicate skipped.
+    # (Other DATA writes after connect — e.g. clock sync — are not reads.)
+    from plejd.protocol import TYPE_READ, decode_command
+
+    reads = [
+        w
+        for w in client.writes
+        if w[0] == PLEJD_CHAR_DATA_UUID and decode_command(c._connection.mesh.decrypt(w[1])).command_type == TYPE_READ
+    ]
+    assert len(reads) == 1
+
+
+async def test_read_all_states_noop_without_mesh():
+    c = PlejdCoordinator(_hass(), _entry())
+    await c._async_read_all_states()  # mesh is None — returns without writing
+
+
+async def test_disconnect_marks_unavailable_and_reconnects(monkeypatch):
+    client = _FakeClient()
+    _patch_connect(monkeypatch, client)
+    ble = types.SimpleNamespace(address="01:02:03:04:05:a0")
+    hass = _hass([_info("01:02:03:04:05:a0")], {"01:02:03:04:05:a0": ble})
+    c = PlejdCoordinator(hass, _entry(discovered=None))
+    await c.async_start()
+
+    async def _fake_sleep(_delay):
+        client.is_connected = True  # the device comes back into range
+
+    monkeypatch.setattr(coordinator_mod.asyncio, "sleep", _fake_sleep)
+    client.is_connected = False
+    c._connection._handle_disconnect(client)  # bleak signals the drop
+    assert c.available is False
+    await c._reconnect_task
+    assert c.available is True
+
+
+def test_spawn_prefers_hass_background_task():
+    c = PlejdCoordinator(_hass(), _entry())
+    captured = {}
+    c.hass.async_create_background_task = lambda co, name: captured.update(coro=co, name=name) or "TASK"
+    coro = c._async_reconnect()
+    assert c._spawn(coro) == "TASK"
+    assert captured["name"] == "plejd-reconnect"
+    captured["coro"].close()  # we never scheduled it
+
+
+async def test_reconnect_guard_when_already_running():
+    c = PlejdCoordinator(_hass(), _entry())
+    c._reconnecting = True
+    await c._async_reconnect()  # returns immediately, leaves the flag as-is
+    assert c._reconnecting is True
+
+
+async def test_reconnect_stops_when_closed(monkeypatch):
+    c = PlejdCoordinator(_hass(), _entry())  # no device in range
+
+    async def _fake_sleep(_delay):
+        c._closed = True
+
+    monkeypatch.setattr(coordinator_mod.asyncio, "sleep", _fake_sleep)
+    await c._async_reconnect()
+    assert c._reconnecting is False
+
+
+async def test_reconnect_backs_off_on_failure(monkeypatch):
+    c = PlejdCoordinator(_hass(), _entry())  # no device → each attempt raises ConfigEntryNotReady
+    calls = {"n": 0}
+
+    async def _fake_sleep(_delay):
+        calls["n"] += 1
+        if calls["n"] >= 2:
+            c._closed = True
+
+    monkeypatch.setattr(coordinator_mod.asyncio, "sleep", _fake_sleep)
+    await c._async_reconnect()
+    assert calls["n"] == 2  # retried after the first failure, then gave up on close
+
+
+async def test_shutdown_cancels_reconnect_task(monkeypatch):
+    client = _FakeClient()
+    _patch_connect(monkeypatch, client)
+    ble = types.SimpleNamespace(address="01:02:03:04:05:a0")
+    hass = _hass([_info("01:02:03:04:05:a0")], {"01:02:03:04:05:a0": ble})
+    c = PlejdCoordinator(hass, _entry(discovered=None))
+    await c.async_start()
+
+    async def _sleeper():
+        await asyncio.sleep(100)
+
+    c._reconnect_task = asyncio.ensure_future(_sleeper())
+    task = c._reconnect_task
+    await c.async_shutdown()
+    assert c._reconnect_task is None and not client.is_connected
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+
+
+class _FakeGateway:
+    def __init__(self, *args, **kwargs):
+        self.connected = False
+        self.writes: list[bytes] = []
+        self.state: dict = {}
+        self.fail = False
+        self.disconnected = False
+
+    async def connect(self):
+        if self.fail:
+            raise OSError("gw down")
+        self.connected = True
+
+    async def write(self, vector):
+        self.writes.append(vector)
+
+    def state_for(self, address):
+        return self.state.get(address)
+
+    async def disconnect(self):
+        self.disconnected = True
+        self.connected = False
+
+
+def _gateway_entry():
+    return types.SimpleNamespace(
+        entry_id="e1",
+        data={
+            CONF_CRYPTO_KEY: _KEY_HEX,
+            CONF_DEVICES: [_DEV],
+            CONF_DISCOVERED_ADDRESS: None,
+            CONF_GATEWAYS: ["gw1"],
+            CONF_RESOURCE_SET_ID: "rs1",
+            CONF_INSTALLATION_ID: "inst-1",
+            CONF_SITE_ID: "S1",
+            CONF_EMAIL: "u@x.se",
+            CONF_PASSWORD: "pw",
+        },
+    )
+
+
+async def test_gateway_is_preferred_and_routes_commands(monkeypatch):
+    from plejd.protocol import TYPE_DONT_RESPOND, OutputState, set_output_state_and_level
+
+    monkeypatch.setattr(coordinator_mod, "PlejdGatewayConnection", _FakeGateway)
+    hass = _hass()
+    hass.session = object()
+    c = PlejdCoordinator(hass, _gateway_entry())
+    await c.async_start()
+    assert c._active == "gateway" and c.available is True
+    c._gateway.state = {11: OutputState(output=11, on=True, level=80)}
+    assert c.state_for(11).level == 80
+    await c.async_set_output(11, 0, True, 80)
+    assert c._gateway.writes[-1] == set_output_state_and_level(11, 0, True, 80, command_type=TYPE_DONT_RESPOND)
+
+
+async def test_gateway_failure_falls_back_to_ble(monkeypatch):
+    monkeypatch.setattr(coordinator_mod, "PlejdGatewayConnection", _FakeGateway)
+    client = _FakeClient()
+    _patch_connect(monkeypatch, client)
+    ble = types.SimpleNamespace(address="01:02:03:04:05:a0")
+    hass = _hass([_info("01:02:03:04:05:a0")], {"01:02:03:04:05:a0": ble})
+    hass.session = object()
+    c = PlejdCoordinator(hass, _gateway_entry())
+    c._gateway.fail = True
+    await c.async_start()
+    assert c._active == "ble" and c.available is True
+
+
+async def test_gateway_get_token(monkeypatch):
+    monkeypatch.setattr(coordinator_mod, "PlejdGatewayConnection", _FakeGateway)
+
+    async def _login(session, email, password):
+        return "TOKEN"
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _login)
+    hass = _hass()
+    hass.session = object()
+    c = PlejdCoordinator(hass, _gateway_entry())
+    assert await c._async_get_token() == "TOKEN"
+
+
+async def test_shutdown_disconnects_gateway(monkeypatch):
+    monkeypatch.setattr(coordinator_mod, "PlejdGatewayConnection", _FakeGateway)
+    hass = _hass()
+    hass.session = object()
+    c = PlejdCoordinator(hass, _gateway_entry())
+    await c.async_start()
+    await c.async_shutdown()
+    assert c._gateway.disconnected is True
 
 
 async def test_set_climate_commands(monkeypatch):

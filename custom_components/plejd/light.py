@@ -48,6 +48,10 @@ class PlejdLight(LightEntity):
         self._attr_supported_color_modes = {mode}
 
     @property
+    def available(self) -> bool:
+        return self._coordinator.available
+
+    @property
     def is_on(self) -> bool | None:
         state = self._coordinator.state_for(self._device.address)
         return state.on if state is not None else None

@@ -103,6 +103,16 @@ def test_time_event_round_trip():
     assert rm.command == CMD_TIME_EVENT_TIME and rm.data == bytes([3])
 
 
+def test_cover_commands_round_trip():
+    from plejd.const import CMD_OUTPUT_SET
+
+    mesh = _mesh()
+    pos = decode_command(mesh.decrypt(mesh.set_cover_position(16, 50)))
+    assert pos.command == CMD_OUTPUT_SET
+    stop = decode_command(mesh.decrypt(mesh.cover_stop(16)))
+    assert stop.command == CMD_OUTPUT_SET
+
+
 def test_set_timestamp_round_trip():
     from plejd.const import CMD_SYSTEM_TIME
 

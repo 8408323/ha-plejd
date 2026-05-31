@@ -17,7 +17,14 @@ from plejd.cloud import (
     PlejdCloudSite,
 )
 from plejd.config_flow import PlejdConfigFlow
-from plejd.const import CONF_CRYPTO_KEY, CONF_DEVICES, CONF_SITE_ID
+from plejd.const import (
+    CONF_CRYPTO_KEY,
+    CONF_DEVICES,
+    CONF_GATEWAYS,
+    CONF_INSTALLATION_ID,
+    CONF_RESOURCE_SET_ID,
+    CONF_SITE_ID,
+)
 
 _LOGIN = {CONF_EMAIL: "user@example.com", CONF_PASSWORD: "pw"}
 
@@ -52,6 +59,8 @@ def _site(site_id="S1"):
         inputs=[PlejdCloudInput("d1", "Kitchen", 11)],
         motion=[PlejdCloudMotion("w1", "Motion", 33)],
         scenes=[scene],
+        gateways=["gw1"],
+        resource_set_id="rsABC",
     )
 
 
@@ -107,6 +116,9 @@ async def test_single_site_creates_entry(monkeypatch):
     assert result["data"][CONF_CRYPTO_KEY] == bytes(16).hex()
     assert result["data"][CONF_SITE_ID] == "S1"
     assert result["data"][CONF_DEVICES][0]["model"] == "DIM-01"
+    assert result["data"][CONF_GATEWAYS] == ["gw1"]
+    assert result["data"][CONF_RESOURCE_SET_ID] == "rsABC"
+    assert len(result["data"][CONF_INSTALLATION_ID]) == 36  # a generated uuid4
 
 
 async def test_multiple_sites_shows_picker(monkeypatch):
