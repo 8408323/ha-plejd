@@ -186,6 +186,25 @@ async def test_options_add_schedule_assigns_slot_and_maps_days():
     sched = res["data"]["schedules"]
     assert len(sched) == 1
     assert sched[0]["slot"] == 0 and sched[0]["days"] == [0, 6] and sched[0]["scene"] == 3 and sched[0]["fade"] == 5
+    assert sched[0]["id"] == 0 and sched[0]["time"] == "18:30:00"  # normalized
+    assert res["data"]["next_schedule_id"] == 1
+
+
+async def test_options_add_uses_monotonic_id_not_slot():
+    opts = {"schedules": [], "next_schedule_id": 7}
+    res = await _opt_flow(options=opts).async_step_init({"name": "X", "time": "06:00", "scene": "3"})
+    assert res["data"]["schedules"][0]["id"] == 7 and res["data"]["next_schedule_id"] == 8
+
+
+async def test_options_add_without_scene_errors():
+    res = await _opt_flow().async_step_init({"name": "X", "time": "06:00"})
+    assert res["type"] == "form" and res["errors"] == {"base": "scene_required"}
+
+
+async def test_options_add_with_invalid_time_errors():
+    for bad in ("7", "25:00", "07:xx", ""):
+        res = await _opt_flow().async_step_init({"name": "X", "time": bad, "scene": "3"})
+        assert res["type"] == "form" and res["errors"] == {"time": "invalid_time"}, bad
 
 
 async def test_options_delete_schedule_clears_device_event():
@@ -216,5 +235,5 @@ async def test_options_save_without_adding():
 
 async def test_options_no_free_slots_errors():
     full = [{"slot": i, "name": f"s{i}", "days": [0], "time": "07:00", "scene": 1, "fade": 0} for i in range(20)]
-    res = await _opt_flow(options={"schedules": full}).async_step_init({"name": "More", "scene": "3"})
+    res = await _opt_flow(options={"schedules": full}).async_step_init({"name": "More", "time": "06:00", "scene": "3"})
     assert res["type"] == "form" and res["errors"] == {"base": "no_free_slots"}

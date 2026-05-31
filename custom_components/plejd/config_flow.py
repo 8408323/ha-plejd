@@ -47,6 +47,18 @@ STEP_USER_SCHEMA = vol.Schema(
 )
 
 
+def _parse_time(value: str) -> tuple[int, int, int] | None:
+    """Parse 'HH:MM' or 'HH:MM:SS' into (hour, minute, second), or None if invalid."""
+    parts = value.split(":")
+    if len(parts) not in (2, 3) or not all(p.isdigit() for p in parts):
+        return None
+    hour, minute = int(parts[0]), int(parts[1])
+    second = int(parts[2]) if len(parts) == 3 else 0
+    if hour > 23 or minute > 59 or second > 59:
+        return None
+    return hour, minute, second
+
+
 def _site_id(item: dict) -> str:
     # getSiteList items nest the id/title under "site" (validated against the API).
     return (item.get("site") or item)["siteId"]
@@ -141,30 +153,39 @@ class PlejdOptionsFlow(OptionsFlow):
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         schedules: list[dict] = list(self._entry.options.get(CONF_SCHEDULES, []))
+        next_id: int = self._entry.options.get("next_schedule_id", 0)
         errors: dict[str, str] = {}
         if user_input is not None:
             to_delete = set(user_input.get("delete", []))
             await self._clear_deleted([s for s in schedules if str(s["slot"]) in to_delete])
             schedules = [s for s in schedules if str(s["slot"]) not in to_delete]
             name = (user_input.get("name") or "").strip()
-            if name and user_input.get("scene") is not None:
+            if name:
+                parsed = _parse_time(user_input.get("time", ""))
                 used = {s["slot"] for s in schedules}
                 slot = next((i for i in range(TIME_EVENT_SLOTS) if i not in used), None)
-                if slot is None:
+                if user_input.get("scene") is None:
+                    errors["base"] = "scene_required"
+                elif parsed is None:
+                    errors["time"] = "invalid_time"
+                elif slot is None:
                     errors["base"] = "no_free_slots"
                 else:
+                    hour, minute, second = parsed
                     schedules.append(
                         {
+                            "id": next_id,
                             "slot": slot,
                             "name": name,
                             "days": [WEEKDAYS.index(d) for d in user_input.get("days", [])],
-                            "time": user_input.get("time", "00:00"),
+                            "time": f"{hour:02d}:{minute:02d}:{second:02d}",
                             "scene": int(user_input["scene"]),
                             "fade": int(user_input.get("fade", 0)),
                         }
                     )
+                    next_id += 1
             if not errors:
-                return self.async_create_entry(title="", data={CONF_SCHEDULES: schedules})
+                return self.async_create_entry(title="", data={CONF_SCHEDULES: schedules, "next_schedule_id": next_id})
 
         scene_options = [{"value": str(s["index"]), "label": s["name"]} for s in self._entry.data.get(CONF_SCENES, [])]
         day_options = [{"value": d, "label": d} for d in WEEKDAYS]

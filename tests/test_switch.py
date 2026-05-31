@@ -53,7 +53,7 @@ class _Coordinator:
         self.removed.append(slot)
 
 
-_SCHEDULE = {"slot": 1, "name": "Evening", "days": [0, 6], "time": "18:30:00", "scene": 4, "fade": 0}
+_SCHEDULE = {"id": 0, "slot": 1, "name": "Evening", "days": [0, 6], "time": "18:30:00", "scene": 4, "fade": 0}
 
 
 async def test_setup_creates_switches_and_schedule_switches():
@@ -71,7 +71,7 @@ async def test_schedule_switch_turn_on_programs_event():
     await sw.async_turn_on()
     # days [0,6] -> mask 0x41, 18:30:00, scene 4, fade 0
     assert coord.programmed == [(1, 0x41, 18, 30, 0, 4, 0)]
-    assert sw.is_on is True and sw._attr_unique_id == "site-1_schedule_1"
+    assert sw.is_on is True and sw._attr_unique_id == "site-1_schedule_0"
 
 
 async def test_schedule_switch_turn_off_removes_event():
@@ -107,7 +107,7 @@ async def test_schedule_switch_restores_off_and_removes():
 
 async def test_schedule_switch_defaults_on_without_prior_state():
     coord = _Coordinator([])
-    sw = PlejdScheduleSwitch(coord, {"slot": 2, "name": "Morning", "days": [], "time": "06:00", "scene": 1})
+    sw = PlejdScheduleSwitch(coord, {"id": 5, "slot": 2, "name": "Morning", "days": [], "time": "06:00", "scene": 1})
     await sw.async_added_to_hass()
     # no weekdays -> mask 0, no seconds in "06:00" -> 0, missing fade -> 0
     assert coord.programmed == [(2, 0, 6, 0, 0, 1, 0)]

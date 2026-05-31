@@ -50,7 +50,9 @@ class PlejdScheduleSwitch(SwitchEntity, RestoreEntity):
         self._slot = schedule["slot"]
         self._attr_name = schedule["name"]
         self._attr_is_on = True
-        self._attr_unique_id = f"{coordinator.site_id}_schedule_{self._slot}"
+        # Stable per-schedule id (not the reusable device slot) so RestoreEntity
+        # never applies a deleted schedule's on/off state to a new one on the same slot.
+        self._attr_unique_id = f"{coordinator.site_id}_schedule_{schedule['id']}"
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, coordinator.site_id)},
             name="Plejd",
