@@ -23,6 +23,7 @@ from .const import (
     PLEJD_PARSE_APP_ID,
     PLEJD_PARSE_LOGIN,
     PLEJD_PARSE_URL,
+    TRAIT_DIMMABLE,
 )
 
 _OUTPUT_TYPE_CATEGORY = {
@@ -53,6 +54,7 @@ class PlejdCloudDevice:
     model: str
     category: str
     dimmable: bool
+    traits: int
     room_id: str | None
 
 
@@ -137,6 +139,10 @@ def parse_site(site: dict) -> PlejdCloudSite:
         category = _OUTPUT_TYPE_CATEGORY.get(output_type) or DEFAULT_CATEGORY.get(hardware_id, CATEGORY_NONE)
         outputs = [int(a) for a in (output_address.get(device_id) or {}).values()]
         address = device_address.get(device_id)
+        # Prefer the per-output Dimmable trait; fall back to category when the cloud
+        # omits traits (a light-category output can still be on/off only).
+        traits = int(info.get("traits") or 0)
+        dimmable = bool(traits & TRAIT_DIMMABLE) if "traits" in info else category == CATEGORY_LIGHT
         devices.append(
             PlejdCloudDevice(
                 device_id=device_id,
@@ -146,7 +152,8 @@ def parse_site(site: dict) -> PlejdCloudSite:
                 hardware_id=hardware_id,
                 model=model,
                 category=category,
-                dimmable=category == CATEGORY_LIGHT,
+                dimmable=dimmable,
+                traits=traits,
                 room_id=info.get("roomId"),
             )
         )

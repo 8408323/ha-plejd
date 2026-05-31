@@ -133,6 +133,22 @@ def test_parse_site_requires_crypto_key():
         parse_site({"siteId": "S1", "plejdMesh": {}})
 
 
+def test_dimmable_follows_traits_when_present():
+    site = parse_site(
+        {
+            "plejdMesh": {"cryptoKey": "00" * 16},
+            "plejdDevices": [{"deviceId": "a", "hardwareId": "1"}, {"deviceId": "b", "hardwareId": "1"}],
+            "devices": [
+                {"deviceId": "a", "outputType": "Light", "traits": 0x01},  # Powerable only -> on/off light
+                {"deviceId": "b", "outputType": "Light", "traits": 0x03},  # Powerable|Dimmable
+            ],
+        }
+    )
+    by_id = {d.device_id: d for d in site.devices}
+    assert by_id["a"].category == "light" and by_id["a"].dimmable is False
+    assert by_id["b"].dimmable is True and by_id["b"].traits == 0x03
+
+
 def test_parse_site_handles_missing_address_and_hardware():
     site = parse_site(
         {
