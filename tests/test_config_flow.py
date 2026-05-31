@@ -227,6 +227,17 @@ async def test_options_delete_when_mesh_unavailable_is_best_effort():
     assert res["data"]["schedules"] == []
 
 
+async def test_options_delete_persists_even_if_ble_write_fails():
+    existing = [{"slot": 0, "name": "X", "days": [0], "time": "07:00", "scene": 1, "fade": 0}]
+
+    class _Coord:
+        async def async_remove_time_event(self, slot):
+            raise RuntimeError("BLE link dropped")  # transport error, not HomeAssistantError
+
+    res = await _opt_flow(options={"schedules": existing}, runtime_data=_Coord()).async_step_init({"delete": ["0"]})
+    assert res["data"]["schedules"] == []
+
+
 async def test_options_save_without_adding():
     existing = [{"slot": 2, "name": "Keep", "days": [1], "time": "08:00", "scene": 1, "fade": 0}]
     res = await _opt_flow(options={"schedules": existing}).async_step_init({"name": "", "delete": []})

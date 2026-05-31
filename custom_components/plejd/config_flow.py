@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING, Any
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlow
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
-from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.selector import SelectSelector, SelectSelectorConfig
 
@@ -210,5 +209,5 @@ class PlejdOptionsFlow(OptionsFlow):
         for schedule in removed:
             try:
                 await coordinator.async_remove_time_event(schedule["slot"])
-            except (AttributeError, HomeAssistantError):
+            except Exception:  # noqa: BLE001 - best-effort; persist the deletion whatever the mesh does
                 _LOGGER.warning("Could not clear Plejd schedule slot %s from the mesh", schedule["slot"])
