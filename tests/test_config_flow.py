@@ -166,10 +166,12 @@ async def test_site_label_fallback(monkeypatch, title):
     assert result["step_id"] == "site"
 
 
-def _opt_flow(options=None, scenes=None, runtime_data=None, gateways=None):
+def _opt_flow(options=None, scenes=None, runtime_data=None, gateways=None, resource_set_id="rs1"):
     data = {"scenes": scenes if scenes is not None else [{"index": 3, "name": "Movie"}]}
     if gateways is not None:
         data["gateways"] = gateways
+        if resource_set_id is not None:
+            data["resource_set_id"] = resource_set_id
     entry = types.SimpleNamespace(options=options or {}, data=data, runtime_data=runtime_data)
     return cf.PlejdOptionsFlow(entry)
 
@@ -178,8 +180,10 @@ def _schema_keys(result) -> list[str]:
     return [getattr(k, "schema", None) for k in result["data_schema"].schema]
 
 
-async def test_options_transport_field_only_with_gateway():
-    assert "transport" not in _schema_keys(await _opt_flow().async_step_init())
+async def test_options_transport_field_only_with_usable_gateway():
+    assert "transport" not in _schema_keys(await _opt_flow().async_step_init())  # no gateway
+    # gateway device but no resource set (can't build the transport) -> still hidden
+    assert "transport" not in _schema_keys(await _opt_flow(gateways=["gw1"], resource_set_id=None).async_step_init())
     assert "transport" in _schema_keys(await _opt_flow(gateways=["gw1"]).async_step_init())
 
 

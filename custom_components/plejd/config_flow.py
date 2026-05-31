@@ -165,7 +165,8 @@ class PlejdOptionsFlow(OptionsFlow):
         schedules: list[dict] = list(self._entry.options.get(CONF_SCHEDULES, []))
         next_id: int = self._entry.options.get("next_schedule_id", 0)
         transport: str = self._entry.options.get(CONF_TRANSPORT, TRANSPORT_AUTO)
-        has_gateway = bool(self._entry.data.get(CONF_GATEWAYS))
+        # A usable gateway needs both a device and a resource set (matches the coordinator).
+        has_gateway = bool(self._entry.data.get(CONF_GATEWAYS) and self._entry.data.get(CONF_RESOURCE_SET_ID))
         errors: dict[str, str] = {}
         if user_input is not None:
             to_delete = set(user_input.get("delete", []))
