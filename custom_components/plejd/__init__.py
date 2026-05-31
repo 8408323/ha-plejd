@@ -8,7 +8,15 @@ from homeassistant.core import HomeAssistant
 
 from .coordinator import PlejdCoordinator
 
-PLATFORMS: list[Platform] = [Platform.LIGHT, Platform.SWITCH, Platform.SCENE, Platform.CLIMATE, Platform.EVENT]
+PLATFORMS: list[Platform] = [
+    Platform.LIGHT,
+    Platform.SWITCH,
+    Platform.SCENE,
+    Platform.CLIMATE,
+    Platform.EVENT,
+    Platform.BINARY_SENSOR,
+    Platform.SENSOR,
+]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

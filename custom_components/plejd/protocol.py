@@ -16,10 +16,14 @@ from dataclasses import dataclass
 
 from .const import (
     CMD_GROUP_STATE_AND_LEVEL,
+    CMD_OUTPUT_SET,
     CMD_OUTPUT_STATE_AND_LEVEL,
     CMD_SCENE,
     CMD_TRM_MODE,
     CMD_TRM_SETPOINT,
+    SOURCE_MOTION,
+    SUBPKG_LUX,
+    SUBPKG_SOURCE,
 )
 
 # CommandType byte (from the app's CommandType enum).
@@ -109,6 +113,57 @@ def decode_temperature(data: bytes) -> float | None:
     if len(data) >= 2:
         return ((data[1] << 8) | data[0]) / 10
     return None
+
+
+def parse_mini_package(data: bytes) -> list[tuple[int, bytes]]:
+    """Split an output_set (0x0420) mini-package into (type, payload) sub-packages.
+
+    Header (from the app's MiniPkgHeader): low nibble = type (15 = escape, then the
+    next byte + 15 is the real type); bits 4-6 = payload_size - 1; bit 7 = a flag.
+    Validated against a real WMS-01 motion broadcast.
+    """
+    packages: list[tuple[int, bytes]] = []
+    i = 0
+    n = len(data)
+    while i < n:
+        b0 = data[i]
+        ptype = b0 & 0x0F
+        header = 1
+        if ptype == 15 and i + 1 < n:
+            ptype = data[i + 1] + 15
+            header = 2
+        size = ((b0 >> 4) & 7) + 1
+        start = i + header
+        packages.append((ptype, data[start : start + size]))
+        i = start + size
+    return packages
+
+
+@dataclass(frozen=True)
+class MotionEvent:
+    """A WMS motion broadcast: motion detected + (best-effort) ambient light."""
+
+    address: int
+    motion: bool
+    lux: int | None
+
+
+def decode_motion(cmd: Command) -> MotionEvent | None:
+    """Decode a WMS output_set (0x0420) broadcast into motion + ambient light.
+
+    Returns None for non-0x0420 commands. ``motion`` is true when a Source
+    sub-package reports Motion; ``lux`` is the Lux sub-package value if present.
+    """
+    if cmd.command != CMD_OUTPUT_SET:
+        return None
+    motion = False
+    lux: int | None = None
+    for ptype, payload in parse_mini_package(cmd.data):
+        if ptype == SUBPKG_SOURCE and payload:
+            motion = payload[0] == SOURCE_MOTION
+        elif ptype == SUBPKG_LUX and payload:
+            lux = payload[0]
+    return MotionEvent(address=cmd.address, motion=motion, lux=lux)
 
 
 @dataclass(frozen=True)

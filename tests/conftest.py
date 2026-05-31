@@ -35,6 +35,7 @@ except ImportError:
         CELSIUS = "\u00b0C"
 
     _const.UnitOfTemperature = _UnitOfTemperature  # type: ignore[attr-defined]
+    _const.LIGHT_LUX = "lx"  # type: ignore[attr-defined]
 
     class _Platform(str, enum.Enum):
         LIGHT = "light"
@@ -221,6 +222,50 @@ except ImportError:
 
     _event.EventEntity = _EventEntity  # type: ignore[attr-defined]
     sys.modules.setdefault("homeassistant.components.event", _event)
+
+    _bsensor = types.ModuleType("homeassistant.components.binary_sensor")
+
+    class _BinarySensorDeviceClass(str, enum.Enum):
+        MOTION = "motion"
+
+    class _BinarySensorEntity:
+        def async_on_remove(self, func):
+            self._unsub = func
+
+        def async_write_ha_state(self):
+            return None
+
+    _bsensor.BinarySensorDeviceClass = _BinarySensorDeviceClass  # type: ignore[attr-defined]
+    _bsensor.BinarySensorEntity = _BinarySensorEntity  # type: ignore[attr-defined]
+    sys.modules.setdefault("homeassistant.components.binary_sensor", _bsensor)
+
+    _sensor = types.ModuleType("homeassistant.components.sensor")
+
+    class _SensorDeviceClass(str, enum.Enum):
+        ILLUMINANCE = "illuminance"
+
+    class _SensorStateClass(str, enum.Enum):
+        MEASUREMENT = "measurement"
+
+    class _SensorEntity:
+        def async_on_remove(self, func):
+            self._unsub = func
+
+        def async_write_ha_state(self):
+            return None
+
+    _sensor.SensorDeviceClass = _SensorDeviceClass  # type: ignore[attr-defined]
+    _sensor.SensorStateClass = _SensorStateClass  # type: ignore[attr-defined]
+    _sensor.SensorEntity = _SensorEntity  # type: ignore[attr-defined]
+    sys.modules.setdefault("homeassistant.components.sensor", _sensor)
+
+    _evt_helper = types.ModuleType("homeassistant.helpers.event")
+
+    def _async_call_later(hass, delay, action):
+        return lambda: None
+
+    _evt_helper.async_call_later = _async_call_later  # type: ignore[attr-defined]
+    sys.modules.setdefault("homeassistant.helpers.event", _evt_helper)
 
     _dr = types.ModuleType("homeassistant.helpers.device_registry")
 

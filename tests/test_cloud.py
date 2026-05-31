@@ -23,12 +23,13 @@ _SITE = {
     "siteId": "S1",
     "title": "Home",
     "plejdMesh": {"cryptoKey": "00112233445566778899aabbccddeeff"},
-    "deviceAddress": {"d1": 1, "d2": 2, "d3": 3},
+    "deviceAddress": {"d1": 1, "d2": 2, "d3": 3, "w1": 33},
     "outputAddress": {"d1": {"0": 11}, "d2": {"0": 21, "1": 22}},
     "inputAddress": {"d1": {"0": 11, "1": 11}, "d3": {"0": 31}},
     "plejdDevices": [
         {"deviceId": "d1", "hardwareId": "1"},
         {"deviceId": "d2", "hardwareId": "18"},
+        {"deviceId": "w1", "hardwareId": "70"},
         {"deviceId": "d3", "hardwareId": "16"},
     ],
     "devices": [
@@ -109,6 +110,7 @@ async def test_get_site_parses_devices():
     assert [(s.name, s.index) for s in site.scenes] == [("Movie", 3)]
     # inputs: deduped by address; named from devices[]
     assert sorted((i.address, i.name) for i in site.inputs) == [(11, "Kitchen"), (31, "Blind")]
+    assert [(m.address, m.name) for m in site.motion] == [(33, "Motion sensor")]
 
 
 async def test_get_site_accepts_dict_result():
