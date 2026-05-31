@@ -301,6 +301,9 @@ except ImportError:
         SLIDER = "slider"
 
     class _RestoreNumber:
+        async def async_added_to_hass(self):
+            return None
+
         async def async_get_last_number_data(self):
             return None
 

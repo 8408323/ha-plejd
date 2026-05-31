@@ -67,6 +67,7 @@ class PlejdDimLevelNumber(RestoreNumber):
         self.async_write_ha_state()
 
     async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
         last = await self.async_get_last_number_data()
         if last is not None and last.native_value is not None:
             self._attr_native_value = last.native_value
