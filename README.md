@@ -56,8 +56,10 @@ Or manually:
    Bluetooth range is also auto-discovered).
 2. Search for *Plejd*.
 3. Sign in with your Plejd account; if you have more than one site, pick one. Your
-   site's devices and crypto key are fetched once; control then happens locally
-   over Bluetooth — no internet needed afterwards.
+   site's devices and crypto key are fetched once. On a site **without** a gateway,
+   control then happens locally over Bluetooth with no internet needed; on a site
+   **with** a GWY-01 it defaults to the remote gateway (cloud), falling back to
+   local Bluetooth when the gateway is unreachable.
 
 Devices, scenes, buttons and sensors appear automatically. Per-device tuning and
 schedules are added as entities (see below).
