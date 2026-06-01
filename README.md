@@ -18,12 +18,14 @@ If you find this integration useful, you can buy me a coffee ☕
 
 ## How it works
 
-Plejd devices have no local network (IP) API and aren't controlled through the cloud — they form a local **Bluetooth mesh**. This integration:
+Plejd devices form a local **Bluetooth mesh** (no per-device IP API). This integration:
 
-1. **Logs in to the Plejd cloud once** to fetch your site's *crypto key* and device list (BLE addresses, output addresses, device types).
-2. **Connects locally over Bluetooth** to one mesh device, which relays commands and state to the rest. Payloads are AES-128 encrypted with the site key.
+1. **Logs in to the Plejd cloud** to fetch your site's *crypto key*, device list (BLE addresses, output addresses, device types), and whether the site has a **Plejd Gateway** (GWY-01). The gateway path also obtains short-lived access tokens from the cloud as needed.
+2. **Controls the mesh over whichever transport fits**, validated end-to-end on real hardware:
+   - **Local Bluetooth** — connects to one mesh device, which relays commands and state to the rest; payloads are AES-128 encrypted with the site key. Fully local, no internet. State arrives as LastChanged mesh broadcasts.
+   - **Remote gateway** — if your site has a GWY-01, commands and state are relayed through Plejd's cloud WebSocket, so control keeps working even when Home Assistant is out of Bluetooth range. State arrives as `mesh.out` pushes.
 
-So setup needs your Plejd account; everyday control is entirely local and works without internet. `iot_class` is `local_push`.
+It prefers the gateway when one exists and **falls back to Bluetooth** automatically. Both paths are push-based (no polling). `iot_class` is `local_push`.
 
 ## Requirements
 
@@ -54,8 +56,10 @@ Or manually:
    Bluetooth range is also auto-discovered).
 2. Search for *Plejd*.
 3. Sign in with your Plejd account; if you have more than one site, pick one. Your
-   site's devices and crypto key are fetched once; control then happens locally
-   over Bluetooth — no internet needed afterwards.
+   site's devices and crypto key are fetched once. On a site **without** a gateway,
+   control then happens locally over Bluetooth with no internet needed; on a site
+   **with** a GWY-01 it defaults to the remote gateway (cloud), falling back to
+   local Bluetooth when the gateway is unreachable.
 
 Devices, scenes, buttons and sensors appear automatically. Per-device tuning and
 schedules are added as entities (see below).
