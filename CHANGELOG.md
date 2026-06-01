@@ -6,6 +6,15 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **Remote gateway transport.** When the site has a Plejd Gateway (GWY-01),
+  control runs over Plejd's cloud WebSocket (`wss://ws-ie.api.plejd.cloud`) so it
+  works even when Home Assistant is out of Bluetooth range. The coordinator picks
+  a transport gateway-first with automatic **fallback to Bluetooth**. State is
+  push-based on both paths — the gateway pushes via `mesh.out`, Bluetooth via
+  LastChanged broadcasts. Validated end-to-end on real hardware (command relayed
+  through the cloud, state pushed back).
+
 ## [0.5.0] - 2026-05-31
 
 First feature-complete release: local Bluetooth-mesh control of a Plejd site,
