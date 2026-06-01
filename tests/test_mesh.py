@@ -1,9 +1,15 @@
-"""Tests for the Plejd mesh engine."""
+"""Tests for the Plejd mesh engine (encrypt/decrypt + state from notifications)."""
 
 from __future__ import annotations
 
 from plejd.mesh import PlejdMesh
-from plejd.protocol import CMD_OUTPUT_STATE_AND_LEVEL, TYPE_DONT_RESPOND, TYPE_READ, decode_command
+from plejd.protocol import (
+    CMD_OUTPUT_STATE_AND_LEVEL,
+    TYPE_READ,
+    decode_command,
+    execute_scene,
+    set_output_state_and_level,
+)
 
 _KEY = bytes.fromhex("00112233445566778899aabbccddeeff")
 _MAC = bytes.fromhex("0102030405a0")  # connected device MAC, reversed
@@ -13,35 +19,27 @@ def _mesh():
     return PlejdMesh(_KEY, _MAC)
 
 
-def test_set_output_round_trips_through_encryption():
+def _output_cipher(mesh, address, output, on, level):
+    # Build a plaintext output command (codec lives in protocol) and encrypt it.
+    return mesh.encrypt(set_output_state_and_level(address, output, on, level))
+
+
+def test_encrypt_decrypt_round_trips():
     mesh = _mesh()
-    cipher = mesh.set_output(address=5, output=0, on=True, level=200)
-    plain = mesh.decrypt(cipher)
-    cmd = decode_command(plain)
-    assert cmd.address == 5
-    assert cmd.command == CMD_OUTPUT_STATE_AND_LEVEL
-    assert cmd.command_type == TYPE_DONT_RESPOND  # fire-and-forget control
+    cmd = decode_command(mesh.decrypt(_output_cipher(mesh, 5, 0, True, 200)))
+    assert cmd.address == 5 and cmd.command == CMD_OUTPUT_STATE_AND_LEVEL
     assert cmd.data == bytes([0, 1, 200, 200])
 
 
 def test_request_output_uses_read_type():
     mesh = _mesh()
     cmd = decode_command(mesh.decrypt(mesh.request_output(address=3, output=1)))
-    assert cmd.command_type == TYPE_READ
-    assert cmd.data == bytes([1])
-
-
-def test_scene_command_encrypts():
-    mesh = _mesh()
-    cipher = mesh.scene(address=0, scene=7)
-    assert decode_command(mesh.decrypt(cipher)).data == bytes([7])
+    assert cmd.command_type == TYPE_READ and cmd.data == bytes([1])
 
 
 def test_handle_notification_updates_state():
     mesh = _mesh()
-    # A device reports output 5 as on at level 128: feed its own encrypted vector back.
-    vector = mesh.set_output(address=5, output=0, on=True, level=128)
-    command = mesh.handle_notification(vector)
+    command = mesh.handle_notification(_output_cipher(mesh, 5, 0, True, 128))
     assert command is not None
     assert (mesh.state[5].on, mesh.state[5].level) == (True, 128)
 
@@ -56,77 +54,14 @@ def test_handle_notification_drops_undecodable():
 def test_handle_notification_returns_command_without_touching_output_state():
     mesh = _mesh()
     # A non-output command (scene) still decodes to a Command but updates no state.
-    command = mesh.handle_notification(mesh.scene(address=1, scene=2))
+    command = mesh.handle_notification(mesh.encrypt(execute_scene(1, 2)))
     assert command is not None and command.command == 0x0021
     assert mesh.state == {}
 
 
 def test_state_returns_a_copy():
     mesh = _mesh()
-    mesh.handle_notification(mesh.set_output(address=2, output=0, on=True, level=10))
+    mesh.handle_notification(_output_cipher(mesh, 2, 0, True, 10))
     snapshot = mesh.state
     snapshot.clear()
     assert 2 in mesh.state  # mutating the snapshot doesn't affect the engine
-
-
-def test_climate_commands_round_trip():
-    from plejd.const import CMD_TRM_MODE, CMD_TRM_SETPOINT
-
-    mesh = _mesh()
-    sp = decode_command(mesh.decrypt(mesh.set_climate_setpoint(9, 20.0)))
-    assert sp.command == CMD_TRM_SETPOINT and sp.data == bytes([200 & 0xFF, 0])
-    md = decode_command(mesh.decrypt(mesh.set_climate_mode(9, 7)))
-    assert md.command == CMD_TRM_MODE and md.data == bytes([7])
-
-
-def test_dim_level_settings_round_trip():
-    from plejd.const import CMD_OUTPUT_MAX_LEVEL, CMD_OUTPUT_MIN_LEVEL
-
-    mesh = _mesh()
-    lo = decode_command(mesh.decrypt(mesh.set_output_min_level(9, 1, 0.5)))
-    assert lo.command == CMD_OUTPUT_MIN_LEVEL and lo.data == bytes([1, 0x00, 0x80])
-    hi = decode_command(mesh.decrypt(mesh.set_output_max_level(9, 1, 1.0)))
-    assert hi.command == CMD_OUTPUT_MAX_LEVEL and hi.data == bytes([1, 0xFF, 0xFF])
-
-
-def test_time_event_round_trip():
-    from plejd.const import CMD_TIME_EVENT_SCENE, CMD_TIME_EVENT_TIME, CMD_TIME_EVENT_TYPE
-
-    mesh = _mesh()
-    t = decode_command(mesh.decrypt(mesh.set_time_event_time(3, 0x7F, 7, 30, 0, 0xFFFFFFFF)))
-    assert t.command == CMD_TIME_EVENT_TIME and t.data == bytes([3, 1, 0x7F, 7, 30, 0, 0xFF, 0xFF, 0xFF, 0xFF])
-    ty = decode_command(mesh.decrypt(mesh.set_time_event_type(3, 0)))
-    assert ty.command == CMD_TIME_EVENT_TYPE and ty.data == bytes([3, 0])
-    s = decode_command(mesh.decrypt(mesh.set_time_event_scene(3, 5, 0)))
-    assert s.command == CMD_TIME_EVENT_SCENE and s.data == bytes([3, 1, 5])
-    rm = decode_command(mesh.decrypt(mesh.remove_time_event(3)))
-    assert rm.command == CMD_TIME_EVENT_TIME and rm.data == bytes([3])
-
-
-def test_cover_commands_round_trip():
-    from plejd.const import CMD_OUTPUT_SET
-
-    mesh = _mesh()
-    pos = decode_command(mesh.decrypt(mesh.set_cover_position(16, 50)))
-    assert pos.command == CMD_OUTPUT_SET
-    stop = decode_command(mesh.decrypt(mesh.cover_stop(16)))
-    assert stop.command == CMD_OUTPUT_SET
-
-
-def test_set_timestamp_round_trip():
-    from plejd.const import CMD_SYSTEM_TIME
-
-    mesh = _mesh()
-    cmd = decode_command(mesh.decrypt(mesh.set_timestamp(0x01020304)))
-    assert cmd.address == 0 and cmd.command == CMD_SYSTEM_TIME
-    assert cmd.data == bytes([0x04, 0x03, 0x02, 0x01, 0x00])
-
-
-def test_dimmer_tuning_round_trip():
-    from plejd.const import CMD_OUTPUT_CURVE_TYPE, CMD_OUTPUT_PHASE_DIM_TYPE
-
-    mesh = _mesh()
-    cv = decode_command(mesh.decrypt(mesh.set_output_curve(9, 1, 1)))
-    assert cv.command == CMD_OUTPUT_CURVE_TYPE and cv.data == bytes([1, 1])
-    ph = decode_command(mesh.decrypt(mesh.set_output_phase_dim(9, 0, 0)))
-    assert ph.command == CMD_OUTPUT_PHASE_DIM_TYPE and ph.data == bytes([0, 0])

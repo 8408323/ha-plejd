@@ -32,8 +32,12 @@ from .const import (
     CONF_SCENES,
     CONF_SCHEDULES,
     CONF_SITE_ID,
+    CONF_TRANSPORT,
     DOMAIN,
     TIME_EVENT_SLOTS,
+    TRANSPORT_AUTO,
+    TRANSPORT_BLE,
+    TRANSPORT_GATEWAY,
     WEEKDAYS,
 )
 
@@ -124,6 +128,33 @@ class PlejdConfigFlow(ConfigFlow, domain=DOMAIN):
         schema = vol.Schema({vol.Required(CONF_SITE_ID): SelectSelector(SelectSelectorConfig(options=options))})
         return self.async_show_form(step_id="site", data_schema=schema)
 
+    async def async_step_reauth(self, entry_data: dict[str, Any]) -> ConfigFlowResult:
+        """Re-authentication started (e.g. the gateway rejected stored credentials)."""
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """Ask for the password again and verify it against the Plejd cloud."""
+        entry = self._get_reauth_entry()
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            session = async_get_clientsession(self.hass)
+            try:
+                await async_login(session, entry.data[CONF_EMAIL], user_input[CONF_PASSWORD])
+            except PlejdAuthError:
+                errors["base"] = "invalid_auth"
+            except PlejdCloudError:
+                errors["base"] = "cannot_connect"
+            else:
+                return self.async_update_reload_and_abort(
+                    entry, data_updates={CONF_PASSWORD: user_input[CONF_PASSWORD]}
+                )
+        return self.async_show_form(
+            step_id="reauth_confirm",
+            data_schema=vol.Schema({vol.Required(CONF_PASSWORD): str}),
+            errors=errors,
+            description_placeholders={"email": entry.data[CONF_EMAIL]},
+        )
+
     async def _create_entry(self, site_id: str) -> ConfigFlowResult:
         session = async_get_clientsession(self.hass)
         try:
@@ -160,6 +191,9 @@ class PlejdOptionsFlow(OptionsFlow):
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         schedules: list[dict] = list(self._entry.options.get(CONF_SCHEDULES, []))
         next_id: int = self._entry.options.get("next_schedule_id", 0)
+        transport: str = self._entry.options.get(CONF_TRANSPORT, TRANSPORT_AUTO)
+        # A usable gateway needs both a device and a resource set (matches the coordinator).
+        has_gateway = bool(self._entry.data.get(CONF_GATEWAYS) and self._entry.data.get(CONF_RESOURCE_SET_ID))
         errors: dict[str, str] = {}
         if user_input is not None:
             to_delete = set(user_input.get("delete", []))
@@ -196,7 +230,15 @@ class PlejdOptionsFlow(OptionsFlow):
                 if new_schedule is not None:
                     kept.append(new_schedule)
                     next_id += 1
-                return self.async_create_entry(title="", data={CONF_SCHEDULES: kept, "next_schedule_id": next_id})
+                return self.async_create_entry(
+                    title="",
+                    data={
+                        CONF_SCHEDULES: kept,
+                        "next_schedule_id": next_id,
+                        # Reset a stale gateway-only preference to auto when there's no usable gateway.
+                        CONF_TRANSPORT: user_input.get("transport", transport) if has_gateway else TRANSPORT_AUTO,
+                    },
+                )
 
         scene_options = [{"value": str(s["index"]), "label": s["name"]} for s in self._entry.data.get(CONF_SCENES, [])]
         day_options = [{"value": d, "label": d} for d in WEEKDAYS]
@@ -213,6 +255,16 @@ class PlejdOptionsFlow(OptionsFlow):
         fields[vol.Optional("time", default="07:00")] = str
         fields[vol.Optional("scene")] = SelectSelector(SelectSelectorConfig(options=scene_options))
         fields[vol.Optional("fade", default=0)] = int
+        if has_gateway:
+            # Force a comms interface (only meaningful when the site has a gateway).
+            transport_options = [
+                {"value": TRANSPORT_AUTO, "label": "Automatic (gateway first, Bluetooth fallback)"},
+                {"value": TRANSPORT_GATEWAY, "label": "Gateway only (remote/cloud)"},
+                {"value": TRANSPORT_BLE, "label": "Bluetooth only (local)"},
+            ]
+            fields[vol.Optional("transport", default=transport)] = SelectSelector(
+                SelectSelectorConfig(options=transport_options)
+            )
         return self.async_show_form(step_id="init", data_schema=vol.Schema(fields), errors=errors)
 
     async def _clear_deleted(self, removed: list[dict]) -> None:

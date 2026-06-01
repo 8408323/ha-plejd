@@ -166,13 +166,71 @@ async def test_site_label_fallback(monkeypatch, title):
     assert result["step_id"] == "site"
 
 
-def _opt_flow(options=None, scenes=None, runtime_data=None):
-    entry = types.SimpleNamespace(
-        options=options or {},
-        data={"scenes": scenes if scenes is not None else [{"index": 3, "name": "Movie"}]},
-        runtime_data=runtime_data,
-    )
+def _reauth_flow(reauth_entry):
+    flow = _flow()
+    flow._reauth_entry = reauth_entry
+    return flow
+
+
+async def test_reauth_routes_to_confirm():
+    flow = _reauth_flow(types.SimpleNamespace(data={CONF_EMAIL: "u@x.se"}))
+    res = await flow.async_step_reauth({CONF_EMAIL: "u@x.se"})
+    assert res["type"] == "form" and res["step_id"] == "reauth_confirm"
+
+
+async def test_reauth_confirm_success_updates_password(monkeypatch):
+    _patch_cloud(monkeypatch, login="tok")
+    flow = _reauth_flow(types.SimpleNamespace(data={CONF_EMAIL: "u@x.se", CONF_PASSWORD: "old"}))
+    res = await flow.async_step_reauth_confirm({CONF_PASSWORD: "newpw"})
+    assert res["type"] == "abort" and res["reason"] == "reauth_successful"
+    assert res["data_updates"] == {CONF_PASSWORD: "newpw"}
+
+
+async def test_reauth_confirm_invalid_auth(monkeypatch):
+    _patch_cloud(monkeypatch, login=PlejdAuthError("bad"))
+    flow = _reauth_flow(types.SimpleNamespace(data={CONF_EMAIL: "u@x.se"}))
+    res = await flow.async_step_reauth_confirm({CONF_PASSWORD: "x"})
+    assert res["errors"] == {"base": "invalid_auth"}
+
+
+async def test_reauth_confirm_cannot_connect(monkeypatch):
+    _patch_cloud(monkeypatch, login=PlejdCloudError("down"))
+    flow = _reauth_flow(types.SimpleNamespace(data={CONF_EMAIL: "u@x.se"}))
+    res = await flow.async_step_reauth_confirm({CONF_PASSWORD: "x"})
+    assert res["errors"] == {"base": "cannot_connect"}
+
+
+def _opt_flow(options=None, scenes=None, runtime_data=None, gateways=None, resource_set_id="rs1"):
+    data = {"scenes": scenes if scenes is not None else [{"index": 3, "name": "Movie"}]}
+    if gateways is not None:
+        data["gateways"] = gateways
+        if resource_set_id is not None:
+            data["resource_set_id"] = resource_set_id
+    entry = types.SimpleNamespace(options=options or {}, data=data, runtime_data=runtime_data)
     return cf.PlejdOptionsFlow(entry)
+
+
+def _schema_keys(result) -> list[str]:
+    return [getattr(k, "schema", None) for k in result["data_schema"].schema]
+
+
+async def test_options_transport_field_only_with_usable_gateway():
+    assert "transport" not in _schema_keys(await _opt_flow().async_step_init())  # no gateway
+    # gateway device but no resource set (can't build the transport) -> still hidden
+    assert "transport" not in _schema_keys(await _opt_flow(gateways=["gw1"], resource_set_id=None).async_step_init())
+    assert "transport" in _schema_keys(await _opt_flow(gateways=["gw1"]).async_step_init())
+
+
+async def test_options_saves_transport_choice():
+    res = await _opt_flow(gateways=["gw1"]).async_step_init({"name": "", "delete": [], "transport": "ble"})
+    assert res["type"] == "create_entry" and res["data"]["transport"] == "ble"
+
+
+async def test_options_resets_stale_gateway_pref_without_usable_gateway():
+    # A stored gateway-only pref must reset to auto when there's no usable gateway,
+    # else the next reload keeps failing in the gateway-only branch.
+    res = await _opt_flow(options={"schedules": [], "transport": "gateway"}).async_step_init({"name": "", "delete": []})
+    assert res["data"]["transport"] == "auto"
 
 
 def test_get_options_flow_returns_options_flow():

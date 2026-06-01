@@ -141,6 +141,92 @@ def test_handle_push_ignores_undecodable_packet():
     assert conn.state == {}
 
 
+def test_handle_frame_pong_sets_flag():
+    conn = _conn(_FakeWS())
+    frame = {"data": base64.b64encode(json.dumps({"controlType": "Pong"}).encode()).decode()}
+    conn._handle_frame(json.dumps(frame))
+    assert conn._pong is True
+
+
+def _ping_sent(ws) -> bool:
+    for s in ws.sent:
+        msg = json.loads(s)
+        data = msg.get("data")
+        if isinstance(data, str) and json.loads(base64.b64decode(data)).get("controlType") == "Ping":
+            return True
+    return False
+
+
+async def test_ping_loop_survives_on_pong(monkeypatch):
+    from plejd import gateway_transport as gt
+
+    ws = _FakeWS()
+    conn = _conn(ws)
+    conn._ws = ws
+
+    async def fake_sleep(delay):
+        if delay == gt.GATEWAY_PONG_TIMEOUT:
+            conn._pong = True  # gateway answered in time
+            conn._closing = True  # stop the loop after this cycle
+
+    monkeypatch.setattr(gt.asyncio, "sleep", fake_sleep)
+    await conn._ping_loop()
+    assert _ping_sent(ws) and not ws.closed
+
+
+async def test_ping_loop_closes_on_missed_pong(monkeypatch):
+    from plejd import gateway_transport as gt
+
+    ws = _FakeWS()
+    conn = _conn(ws)
+    conn._ws = ws
+
+    async def fake_sleep(_delay):
+        pass  # never set _pong → missed pong
+
+    monkeypatch.setattr(gt.asyncio, "sleep", fake_sleep)
+    await conn._ping_loop()
+    assert _ping_sent(ws) and ws.closed  # missed pong → closed so the owner reconnects
+
+
+async def test_ping_loop_does_not_close_reconnected_socket(monkeypatch):
+    from plejd import gateway_transport as gt
+
+    old, new = _FakeWS(), _FakeWS()
+    conn = _conn(old)
+    conn._ws = old
+    calls = {"n": 0}
+
+    async def fake_sleep(_delay):
+        calls["n"] += 1
+        if calls["n"] == 2:  # pong wait of round one: socket drops + owner reconnects
+            old.closed = True
+            conn._ws = new  # fresh socket, not yet ponged
+            conn._pong = False
+        elif calls["n"] >= 3:  # next round's ping interval: stop the loop
+            conn._closing = True
+
+    monkeypatch.setattr(gt.asyncio, "sleep", fake_sleep)
+    await conn._ping_loop()
+    assert not new.closed  # the stale loop must NOT close the freshly reconnected socket
+
+
+async def test_ping_loop_stops_when_disconnected(monkeypatch):
+    from plejd import gateway_transport as gt
+
+    ws = _FakeWS()
+    ws.closed = True  # socket already gone
+    conn = _conn(ws)
+    conn._ws = ws
+
+    async def fake_sleep(_delay):
+        pass
+
+    monkeypatch.setattr(gt.asyncio, "sleep", fake_sleep)
+    await conn._ping_loop()
+    assert ws.sent == []  # bailed before sending a ping
+
+
 async def test_receive_updates_state_and_signals_disconnect_on_close():
     fired = []
     dropped = []
@@ -203,3 +289,19 @@ async def test_disconnect_is_idempotent():
     await conn.disconnect()
     assert ws.closed and not conn.connected
     await conn.disconnect()  # no error second time
+
+
+async def test_connect_cancels_leftover_tasks():
+    import asyncio
+
+    conn = _conn(_FakeWS())
+
+    async def _sleeper():
+        await asyncio.sleep(100)
+
+    leftover = asyncio.ensure_future(_sleeper())
+    conn._ping_task = leftover  # a stale loop from a prior session
+    await conn.connect()
+    await asyncio.sleep(0)
+    assert leftover.cancelled()  # reconnect cancelled it, so it can't close the fresh socket
+    await conn.disconnect()

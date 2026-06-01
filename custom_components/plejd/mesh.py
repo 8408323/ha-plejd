@@ -10,7 +10,7 @@ fully unit-testable.
 from __future__ import annotations
 
 from . import crypto, protocol
-from .protocol import TYPE_DONT_RESPOND, OutputState
+from .protocol import OutputState
 
 
 class PlejdMesh:
@@ -35,74 +35,9 @@ class PlejdMesh:
         """Decrypt an incoming Datavector/LastChangedDatavector payload (symmetric)."""
         return crypto.encrypt_decrypt(self._address, ciphertext, self._key)
 
-    def set_output(self, address: int, output: int, on: bool, level: int) -> bytes:
-        """Encrypted command to set an output on/off + dim level (0x00C8).
-
-        Sent fire-and-forget (DontRespond); the resulting state arrives on the
-        LastChangedDatavector broadcast.
-        """
-        plaintext = protocol.set_output_state_and_level(address, output, on, level, command_type=TYPE_DONT_RESPOND)
-        return self.encrypt(plaintext)
-
     def request_output(self, address: int, output: int) -> bytes:
         """Encrypted command to read an output's current state (0x00C8, Read)."""
         return self.encrypt(protocol.request_output_state_and_level(address, output))
-
-    def set_output_min_level(self, address: int, output: int, fraction: float) -> bytes:
-        """Encrypted minimum-dim-level setting (0x00C9)."""
-        return self.encrypt(protocol.set_output_min_level(address, output, fraction))
-
-    def set_output_max_level(self, address: int, output: int, fraction: float) -> bytes:
-        """Encrypted maximum-dim-level setting (0x00CA)."""
-        return self.encrypt(protocol.set_output_max_level(address, output, fraction))
-
-    def set_timestamp(self, epoch: int) -> bytes:
-        """Encrypted clock-sync broadcast (0x001B)."""
-        return self.encrypt(protocol.set_timestamp(epoch))
-
-    def set_time_event_time(self, slot: int, mask: int, hour: int, minute: int, second: int, rep: int) -> bytes:
-        """Encrypted time-event schedule (0x0258)."""
-        return self.encrypt(protocol.set_time_event_time(slot, mask, hour, minute, second, rep))
-
-    def set_time_event_type(self, slot: int, result: int) -> bytes:
-        """Encrypted time-event action type (0x0259)."""
-        return self.encrypt(protocol.set_time_event_type(slot, result))
-
-    def set_time_event_scene(self, slot: int, scene: int, fade: int) -> bytes:
-        """Encrypted time-event scene (0x025A)."""
-        return self.encrypt(protocol.set_time_event_scene(slot, scene, fade))
-
-    def remove_time_event(self, slot: int) -> bytes:
-        """Encrypted time-event delete (0x0258)."""
-        return self.encrypt(protocol.remove_time_event(slot))
-
-    def set_output_curve(self, address: int, output: int, curve: int) -> bytes:
-        """Encrypted dimming-curve setting (0x00CC)."""
-        return self.encrypt(protocol.set_output_curve(address, output, curve))
-
-    def set_output_phase_dim(self, address: int, output: int, phase: int) -> bytes:
-        """Encrypted phase-dim-edge setting (0x00CE)."""
-        return self.encrypt(protocol.set_output_phase_dim(address, output, phase))
-
-    def scene(self, address: int, scene: int) -> bytes:
-        """Encrypted command to execute a scene (0x0021)."""
-        return self.encrypt(protocol.execute_scene(address, scene))
-
-    def set_climate_setpoint(self, address: int, celsius: float) -> bytes:
-        """Encrypted thermostat target-temperature command (0x045C)."""
-        return self.encrypt(protocol.set_climate_setpoint(address, celsius))
-
-    def set_climate_mode(self, address: int, mode: int) -> bytes:
-        """Encrypted thermostat operating-mode command (0x045F)."""
-        return self.encrypt(protocol.set_climate_mode(address, mode))
-
-    def set_cover_position(self, address: int, position: int) -> bytes:
-        """Encrypted cover position command (0x0420 WindowControl)."""
-        return self.encrypt(protocol.set_cover_position(address, position))
-
-    def cover_stop(self, address: int) -> bytes:
-        """Encrypted cover stop command (0x0420 WindowControl)."""
-        return self.encrypt(protocol.cover_stop(address))
 
     def handle_notification(self, ciphertext: bytes) -> protocol.Command | None:
         """Decrypt + decode an incoming vector, updating output state as a side effect.
