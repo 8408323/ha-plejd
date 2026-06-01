@@ -6,7 +6,7 @@ import types
 
 from homeassistant.const import EntityCategory
 from plejd.cloud import PlejdCloudDevice
-from plejd.number import PlejdDimLevelNumber, async_setup_entry
+from plejd.number import PlejdDimLevelNumber, PlejdTransitionTimeNumber, async_setup_entry
 
 
 def _device(category="light", address=5, dimmable=True, output_index=0):
@@ -30,6 +30,7 @@ class _Coordinator:
         self.devices = devices
         self.min_calls = []
         self.max_calls = []
+        self.speed_calls = []
 
     async def async_set_output_min_level(self, address, output, fraction):
         self.min_calls.append((address, output, fraction))
@@ -37,8 +38,11 @@ class _Coordinator:
     async def async_set_output_max_level(self, address, output, fraction):
         self.max_calls.append((address, output, fraction))
 
+    async def async_set_output_speed(self, address, output, seconds):
+        self.speed_calls.append((address, output, seconds))
 
-async def test_setup_creates_min_and_max_only_for_dimmable_lights():
+
+async def test_setup_creates_settings_only_for_dimmable_lights():
     coord = _Coordinator(
         [
             _device(),
@@ -50,9 +54,9 @@ async def test_setup_creates_min_and_max_only_for_dimmable_lights():
     entry = types.SimpleNamespace(runtime_data=coord)
     added = []
     await async_setup_entry(None, entry, lambda entities: added.extend(entities))
-    # One dimmable light -> exactly a min + a max entity.
-    assert len(added) == 2
-    assert {e._attr_translation_key for e in added} == {"min_dim_level", "max_dim_level"}
+    # One dimmable light -> a min + a max + a transition-time entity.
+    assert len(added) == 3
+    assert {e._attr_translation_key for e in added} == {"min_dim_level", "max_dim_level", "transition_time"}
 
 
 def test_attributes_and_unique_id():
@@ -90,3 +94,25 @@ async def test_no_restore_when_no_prior_state():
     entity = PlejdDimLevelNumber(_Coordinator([]), _device(), "max")
     await entity.async_added_to_hass()
     assert getattr(entity, "_attr_native_value", None) is None
+
+
+def test_transition_time_attributes():
+    t = PlejdTransitionTimeNumber(_Coordinator([]), _device(output_index=2))
+    assert t._attr_entity_category == EntityCategory.CONFIG
+    assert t._attr_translation_key == "transition_time"
+    assert t._attr_unique_id == "d1_2_transition_time"
+    assert (t._attr_native_min_value, t._attr_native_max_value) == (0, 10)
+
+
+async def test_transition_time_sets_seconds_and_restores():
+    coord = _Coordinator([])
+    t = PlejdTransitionTimeNumber(coord, _device())
+    await t.async_set_native_value(2.5)
+    assert coord.speed_calls == [(5, 0, 2.5)] and t._attr_native_value == 2.5
+
+    async def _last():
+        return types.SimpleNamespace(native_value=1.0)
+
+    t.async_get_last_number_data = _last
+    await t.async_added_to_hass()
+    assert t._attr_native_value == 1.0

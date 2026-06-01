@@ -353,6 +353,10 @@ class PlejdCoordinator:
         """Set an output's maximum dim level (0-1 fraction)."""
         await self._write_vector(protocol.set_output_max_level(address, output, fraction))
 
+    async def async_set_output_speed(self, address: int, output: int, seconds: float) -> None:
+        """Set an output's dim transition time (seconds; 0 = instant)."""
+        await self._write_vector(protocol.set_output_speed(address, output, seconds))
+
     async def async_set_output_curve(self, address: int, output: int, curve: int) -> None:
         """Set an output's dimming curve (LoadCurve byte)."""
         await self._write_vector(protocol.set_output_curve(address, output, curve))
