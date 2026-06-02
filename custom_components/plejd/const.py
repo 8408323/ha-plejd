@@ -70,6 +70,7 @@ CMD_OUTPUT_MAX_LEVEL = 0x00CA
 CMD_OUTPUT_SPEED = 0x00CB  # set/report dim transition time (output, u16le steps + >0.5s flag)
 CMD_OUTPUT_CURVE_TYPE = 0x00CC  # set/report dimming curve (output, LoadCurve byte)
 CMD_OUTPUT_PHASE_DIM_TYPE = 0x00CE  # set/report phase-dim edge (output, PhaseOutputType byte)
+CMD_OUTPUT_START_LEVEL = 0x00CF  # set/report dim start level (output, u16le of fraction*65535)
 
 # Dimming-curve options (LoadCurve enum subset that applies to dimmable outputs).
 CURVE_OPTIONS: dict[str, int] = {"linear": 0, "logarithmic": 1, "antilogarithmic": 3}

@@ -40,6 +40,9 @@
       "max_dim_level": {
         "name": "Maximum brightness"
       },
+      "start_level": {
+        "name": "Start brightness"
+      },
       "transition_time": {
         "name": "Transition time"
       }
