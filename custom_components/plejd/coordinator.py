@@ -279,17 +279,25 @@ class PlejdCoordinator:
         self.firmware = status
         self._notify_outputs()
 
+    @staticmethod
+    def _output_parse_id(devices: list[PlejdCloudDevice], device_id: str) -> str | None:
+        # The title lives on the output; rename targets the primary output's Parse id.
+        return next((d.object_id for d in devices if d.device_id == device_id and d.object_id), None)
+
     async def async_rename_device(self, device_id: str, title: str) -> None:
         """Mirror an HA device rename to the Plejd cloud (so the Plejd app shows it too)."""
         if not self._email or not self._password:
             return
-        # The title lives on the output; rename targets the primary output's Parse id.
-        parse_id = next((d.object_id for d in self.devices if d.device_id == device_id and d.object_id), None)
+        session = async_get_clientsession(self.hass)
+        token = await async_login(session, self._email, self._password)
+        parse_id = self._output_parse_id(self.devices, device_id)
+        if parse_id is None:
+            # Entries cached before object_id existed lack it — resolve from a fresh site fetch.
+            site = await async_get_site(session, token, self.site_id)
+            parse_id = self._output_parse_id(site.devices, device_id)
         if parse_id is None:
             _LOGGER.debug("Plejd rename skipped: no Parse id for device %s", device_id)
             return
-        session = async_get_clientsession(self.hass)
-        token = await async_login(session, self._email, self._password)
         if not await async_set_device_title(session, token, self.site_id, device_id, parse_id, title):
             raise HomeAssistantError(f"Plejd rejected the rename of device {device_id}")
 

@@ -913,14 +913,60 @@ async def test_rename_device_calls_cloud(monkeypatch):
     assert captured == {"site_id": "S1", "device_id": "d1", "parse_id": "p1", "title": "New Name"}
 
 
-async def test_rename_device_skips_without_object_id(monkeypatch):
+async def test_rename_device_falls_back_to_cloud_lookup(monkeypatch):
+    # entries cached before object_id existed (e.g. _DEV) resolve it from a fresh site fetch
+    from plejd.cloud import PlejdCloudDevice
+
+    c = PlejdCoordinator(_hass(), _cloud_entry())  # _DEV has no object_id
+    fresh = PlejdCloudDevice(
+        device_id="d1",
+        name="Kitchen",
+        address=5,
+        output_index=0,
+        outputs=[5],
+        hardware_id=1,
+        model="DIM-01",
+        category="light",
+        dimmable=True,
+        traits=3,
+        room_id="r1",
+        object_id="p2",
+    )
+    captured = {}
+
+    async def _login(*a):
+        return "tok"
+
+    async def _get_site(*a):
+        return types.SimpleNamespace(devices=[fresh])
+
+    async def _set(session, token, site_id, device_id, parse_id, title):
+        captured.update(parse_id=parse_id, title=title)
+        return True
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _login)
+    monkeypatch.setattr(coordinator_mod, "async_get_site", _get_site)
+    monkeypatch.setattr(coordinator_mod, "async_set_device_title", _set)
+    await c.async_rename_device("d1", "X")
+    assert captured == {"parse_id": "p2", "title": "X"}
+
+
+async def test_rename_device_skips_when_not_resolvable(monkeypatch):
     c = PlejdCoordinator(_hass(), _cloud_entry())  # _DEV has no object_id
 
-    async def _boom(*a):
-        raise AssertionError("must not log in when there is no Parse id")
+    async def _login(*a):
+        return "tok"
 
-    monkeypatch.setattr(coordinator_mod, "async_login", _boom)
-    await c.async_rename_device("d1", "X")  # no object_id -> skip
+    async def _get_site(*a):
+        return types.SimpleNamespace(devices=[])  # device not found in the cloud either
+
+    async def _fail(*a):
+        raise AssertionError("must not call updateDevice when no Parse id is resolvable")
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _login)
+    monkeypatch.setattr(coordinator_mod, "async_get_site", _get_site)
+    monkeypatch.setattr(coordinator_mod, "async_set_device_title", _fail)
+    await c.async_rename_device("d1", "X")  # resolves to nothing -> skip, no write
 
 
 async def test_rename_device_skips_without_credentials(monkeypatch):
