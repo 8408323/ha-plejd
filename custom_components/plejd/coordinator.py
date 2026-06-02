@@ -22,6 +22,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady, HomeAssistantError
+from homeassistant.helpers import device_registry
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import async_call_later, async_track_time_interval
 from homeassistant.util import dt as dt_util
@@ -36,6 +37,7 @@ from .cloud import (
     async_get_available_firmware,
     async_get_site,
     async_login,
+    async_set_device_title,
 )
 from .connection import PlejdConnection
 from .const import (
@@ -54,6 +56,7 @@ from .const import (
     CONF_SCENES,
     CONF_SITE_ID,
     CONF_TRANSPORT,
+    DOMAIN,
     PLEJD_SERVICE_UUID,
     TIME_EVENT_REP_FOREVER,
     TIME_EVENT_RESULT_SCENE,
@@ -275,6 +278,37 @@ class PlejdCoordinator:
             )
         self.firmware = status
         self._notify_outputs()
+
+    async def async_rename_device(self, device_id: str, title: str) -> None:
+        """Mirror an HA device rename to the Plejd cloud (so the Plejd app shows it too)."""
+        if not self._email or not self._password:
+            return
+        # The title lives on the output; rename targets the primary output's Parse id.
+        parse_id = next((d.object_id for d in self.devices if d.device_id == device_id and d.object_id), None)
+        if parse_id is None:
+            _LOGGER.debug("Plejd rename skipped: no Parse id for device %s", device_id)
+            return
+        session = async_get_clientsession(self.hass)
+        token = await async_login(session, self._email, self._password)
+        if not await async_set_device_title(session, token, self.site_id, device_id, parse_id, title):
+            raise HomeAssistantError(f"Plejd rejected the rename of device {device_id}")
+
+    async def async_handle_device_registry_update(self, event: object) -> None:
+        """When the user renames one of our devices in HA, push the new name to Plejd."""
+        data = getattr(event, "data", {}) or {}
+        if data.get("action") != "update" or "name_by_user" not in (data.get("changes") or {}):
+            return
+        device = device_registry.async_get(self.hass).async_get(data["device_id"])
+        if device is None:
+            return
+        plejd_id = next((ident for (domain, ident) in device.identifiers if domain == DOMAIN), None)
+        name = device.name_by_user
+        if plejd_id is None or not name:
+            return
+        try:
+            await self.async_rename_device(plejd_id, name)
+        except Exception:  # noqa: BLE001 - mirroring a rename is auxiliary and must never disrupt HA
+            _LOGGER.warning("Plejd: could not mirror the device rename to the Plejd app", exc_info=True)
 
     async def _async_select_and_connect(self) -> None:
         """Connect over the chosen transport.

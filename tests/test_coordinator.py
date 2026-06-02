@@ -873,3 +873,138 @@ async def test_shutdown_cancels_both_firmware_timers():
     await c.async_shutdown()
     assert sorted(cancelled) == ["daily", "one_shot"]
     assert c._firmware_unsub is None and c._firmware_now_unsub is None
+
+
+class _FakeDevice:
+    def __init__(self, identifiers, name_by_user):
+        self.identifiers = identifiers
+        self.name_by_user = name_by_user
+
+
+class _FakeRegistry:
+    def __init__(self, device):
+        self._device = device
+
+    def async_get(self, device_id):
+        return self._device
+
+
+def _reg_event(action="update", changes=None, device_id="ha1"):
+    return types.SimpleNamespace(
+        data={"action": action, "changes": changes if changes is not None else {}, "device_id": device_id}
+    )
+
+
+async def test_rename_device_calls_cloud(monkeypatch):
+    c = PlejdCoordinator(_hass(), _cloud_entry())
+    c.devices[0].object_id = "p1"  # device_id "d1"
+    captured = {}
+
+    async def _login(*a):
+        return "tok"
+
+    async def _set(session, token, site_id, device_id, parse_id, title):
+        captured.update(site_id=site_id, device_id=device_id, parse_id=parse_id, title=title)
+        return True
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _login)
+    monkeypatch.setattr(coordinator_mod, "async_set_device_title", _set)
+    await c.async_rename_device("d1", "New Name")
+    assert captured == {"site_id": "S1", "device_id": "d1", "parse_id": "p1", "title": "New Name"}
+
+
+async def test_rename_device_skips_without_object_id(monkeypatch):
+    c = PlejdCoordinator(_hass(), _cloud_entry())  # _DEV has no object_id
+
+    async def _boom(*a):
+        raise AssertionError("must not log in when there is no Parse id")
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _boom)
+    await c.async_rename_device("d1", "X")  # no object_id -> skip
+
+
+async def test_rename_device_skips_without_credentials(monkeypatch):
+    c = PlejdCoordinator(_hass(), _entry())  # no CONF_EMAIL / CONF_PASSWORD
+
+    async def _boom(*a):
+        raise AssertionError("must not log in without credentials")
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _boom)
+    await c.async_rename_device("d1", "X")
+
+
+async def test_rename_device_raises_when_cloud_rejects(monkeypatch):
+    from homeassistant.exceptions import HomeAssistantError
+
+    c = PlejdCoordinator(_hass(), _cloud_entry())
+    c.devices[0].object_id = "p1"
+
+    async def _login(*a):
+        return "tok"
+
+    async def _set(*a):
+        return False
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _login)
+    monkeypatch.setattr(coordinator_mod, "async_set_device_title", _set)
+    with pytest.raises(HomeAssistantError):
+        await c.async_rename_device("d1", "X")
+
+
+async def test_registry_update_mirrors_rename(monkeypatch):
+    from plejd.const import DOMAIN
+
+    hass = _hass()
+    c = PlejdCoordinator(hass, _cloud_entry())
+    hass.device_registry = _FakeRegistry(_FakeDevice({(DOMAIN, "F1AF")}, "New Name"))
+    called = {}
+
+    async def _rename(device_id, title):
+        called.update(device_id=device_id, title=title)
+
+    monkeypatch.setattr(c, "async_rename_device", _rename)
+    await c.async_handle_device_registry_update(_reg_event(changes={"name_by_user": "Old"}))
+    assert called == {"device_id": "F1AF", "title": "New Name"}
+
+
+async def test_registry_update_ignores_non_rename_events(monkeypatch):
+    c = PlejdCoordinator(_hass(), _cloud_entry())
+
+    async def _fail(*a):
+        raise AssertionError("rename must not be triggered")
+
+    monkeypatch.setattr(c, "async_rename_device", _fail)
+    await c.async_handle_device_registry_update(_reg_event(action="create", changes={"name_by_user": "x"}))
+    await c.async_handle_device_registry_update(_reg_event(action="update", changes={"area_id": None}))
+
+
+async def test_registry_update_ignores_missing_device_and_non_plejd(monkeypatch):
+    from plejd.const import DOMAIN
+
+    hass = _hass()
+    c = PlejdCoordinator(hass, _cloud_entry())
+
+    async def _fail(*a):
+        raise AssertionError("rename must not be triggered")
+
+    monkeypatch.setattr(c, "async_rename_device", _fail)
+    hass.device_registry = _FakeRegistry(None)  # device gone
+    await c.async_handle_device_registry_update(_reg_event(changes={"name_by_user": "x"}))
+    hass.device_registry = _FakeRegistry(_FakeDevice({("other", "z")}, "Name"))  # not a Plejd device
+    await c.async_handle_device_registry_update(_reg_event(changes={"name_by_user": "x"}))
+    hass.device_registry = _FakeRegistry(_FakeDevice({(DOMAIN, "d1")}, None))  # name cleared
+    await c.async_handle_device_registry_update(_reg_event(changes={"name_by_user": "x"}))
+
+
+async def test_registry_update_swallows_rename_errors(monkeypatch):
+    from plejd.const import DOMAIN
+
+    hass = _hass()
+    c = PlejdCoordinator(hass, _cloud_entry())
+    hass.device_registry = _FakeRegistry(_FakeDevice({(DOMAIN, "d1")}, "Name"))
+
+    async def _boom(*a):
+        raise RuntimeError("cloud down")
+
+    monkeypatch.setattr(c, "async_rename_device", _boom)
+    await c.async_handle_device_registry_update(_reg_event(changes={"name_by_user": "x"}))  # no exception

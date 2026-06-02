@@ -22,6 +22,7 @@ from .const import (
     PLEJD_FN_FIRMWARE_BY_HW,
     PLEJD_FN_SITE_BY_ID,
     PLEJD_FN_SITE_LIST,
+    PLEJD_FN_UPDATE_DEVICE,
     PLEJD_PARSE_APP_ID,
     PLEJD_PARSE_LOGIN,
     PLEJD_PARSE_URL,
@@ -60,6 +61,7 @@ class PlejdCloudDevice:
     dimmable: bool
     traits: int
     room_id: str | None
+    object_id: str | None = None  # the output's Parse objectId (deviceParseId), needed to rename it
 
 
 @dataclass
@@ -182,6 +184,15 @@ async def async_get_available_firmware(
     return best
 
 
+async def async_set_device_title(
+    session: ClientSession, token: str, site_id: str, device_id: str, device_parse_id: str, title: str
+) -> bool:
+    """Rename a device in the Plejd cloud (mirrors to the Plejd app). Returns the cloud's ok flag."""
+    body = {"siteId": site_id, "deviceId": device_id, "deviceParseId": device_parse_id, "title": title}
+    result = await _call_function(session, token, PLEJD_FN_UPDATE_DEVICE, body)
+    return result is True
+
+
 async def async_get_site(session: ClientSession, token: str, site_id: str) -> PlejdCloudSite:
     """Fetch one site (crypto key + devices) by id."""
     result = await _call_function(session, token, PLEJD_FN_SITE_BY_ID, {"siteId": site_id})
@@ -241,6 +252,7 @@ def parse_site(site: dict) -> PlejdCloudSite:
                 dimmable=dimmable,
                 traits=traits,
                 room_id=info.get("roomId"),
+                object_id=info.get("objectId"),
             )
         )
 

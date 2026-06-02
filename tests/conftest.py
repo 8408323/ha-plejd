@@ -448,6 +448,12 @@ except ImportError:
             super().__init__(**kwargs)
 
     _dr.DeviceInfo = _DeviceInfo  # type: ignore[attr-defined]
+    _dr.EVENT_DEVICE_REGISTRY_UPDATED = "device_registry_updated"  # type: ignore[attr-defined]
+
+    def _dr_async_get(hass):
+        return getattr(hass, "device_registry", None)
+
+    _dr.async_get = _dr_async_get  # type: ignore[attr-defined]
     sys.modules.setdefault("homeassistant.helpers.device_registry", _dr)
 
     _ep = types.ModuleType("homeassistant.helpers.entity_platform")
