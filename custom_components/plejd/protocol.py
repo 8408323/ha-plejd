@@ -21,6 +21,7 @@ from .const import (
     CMD_OUTPUT_MIN_LEVEL,
     CMD_OUTPUT_PHASE_DIM_TYPE,
     CMD_OUTPUT_SET,
+    CMD_OUTPUT_SPEED,
     CMD_OUTPUT_STATE_AND_LEVEL,
     CMD_SCENE,
     CMD_SYSTEM_TIME,
@@ -114,6 +115,22 @@ def set_output_max_level(address: int, output: int, fraction: float) -> bytes:
     """Set an output's maximum dim level (0x00CA): [output, u16le of fraction*65535]."""
     payload = bytes([output & 0xFF]) + _level_fraction_to_u16le(fraction)
     return encode_command(address, CMD_OUTPUT_MAX_LEVEL, payload, command_type=TYPE_DONT_RESPOND)
+
+
+def set_output_speed(address: int, output: int, seconds: float) -> bytes:
+    """Set an output's dim transition time (0x00CB): [output, u16le steps] (app's ConvertSpeedToPayload).
+
+    steps = round(65535/seconds/100); 0s is the instant sentinel 0xFFFF; bit 7 of the
+    high byte flags times over 0.5s. Byte-exact from the app.
+    """
+    if seconds <= 0:
+        lo, hi = 0xFF, 0xFF
+    else:
+        steps = max(0, min(0xFFFF, round(0xFFFF / seconds / 100)))
+        lo, hi = steps & 0xFF, (steps >> 8) & 0xFF
+        if seconds > 0.5:
+            hi = (hi & 0x7F) | 0x80  # bit 7 is the >0.5s flag, not part of the step count
+    return encode_command(address, CMD_OUTPUT_SPEED, bytes([output & 0xFF, lo, hi]), command_type=TYPE_DONT_RESPOND)
 
 
 def weekday_mask(days: list[int]) -> int:

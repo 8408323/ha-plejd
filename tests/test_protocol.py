@@ -186,6 +186,19 @@ def test_dim_level_setting_bytes():
     assert zero[5:] == bytes([0x00, 0x00, 0x00])
 
 
+def test_set_output_speed_bytes():
+    from plejd.const import CMD_OUTPUT_SPEED
+    from plejd.protocol import set_output_speed
+
+    one_s = set_output_speed(9, 1, 1.0)  # steps round(65535/1/100)=655=0x028F; >0.5s sets bit7 of hi
+    assert (one_s[3] << 8) | one_s[4] == CMD_OUTPUT_SPEED
+    assert one_s[5:] == bytes([0x01, 0x8F, 0x82])
+    half = set_output_speed(9, 0, 0.5)  # steps round(65535/0.5/100)=1311=0x051F; not >0.5 → no flag
+    assert half[5:] == bytes([0x00, 0x1F, 0x05])
+    instant = set_output_speed(9, 0, 0)  # 0s sentinel
+    assert instant[5:] == bytes([0x00, 0xFF, 0xFF])
+
+
 def test_weekday_mask():
     from plejd.protocol import weekday_mask
 
