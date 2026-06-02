@@ -22,6 +22,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady, HomeAssistantError
+from homeassistant.helpers import device_registry
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import async_call_later, async_track_time_interval
 from homeassistant.util import dt as dt_util
@@ -36,6 +37,7 @@ from .cloud import (
     async_get_available_firmware,
     async_get_site,
     async_login,
+    async_set_device_title,
 )
 from .connection import PlejdConnection
 from .const import (
@@ -54,6 +56,7 @@ from .const import (
     CONF_SCENES,
     CONF_SITE_ID,
     CONF_TRANSPORT,
+    DOMAIN,
     PLEJD_SERVICE_UUID,
     TIME_EVENT_REP_FOREVER,
     TIME_EVENT_RESULT_SCENE,
@@ -94,6 +97,7 @@ class PlejdCoordinator:
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         self.hass = hass
+        self._entry = entry  # for runtime reauth (e.g. a rename hitting expired credentials)
         # Tolerate entries stored before a field existed (e.g. output_index).
         self.devices = [PlejdCloudDevice(**{"output_index": 0, **device}) for device in entry.data[CONF_DEVICES]]
         self.scenes = [PlejdCloudScene(**scene) for scene in entry.data.get(CONF_SCENES, [])]
@@ -275,6 +279,59 @@ class PlejdCoordinator:
             )
         self.firmware = status
         self._notify_outputs()
+
+    @staticmethod
+    def _output_parse_id(devices: list[PlejdCloudDevice], device_id: str) -> str | None:
+        # The title lives on the output; rename targets the primary output's Parse id.
+        # Primary = lowest output_index (consistent with the unique_id base convention).
+        matching = sorted(
+            (d for d in devices if d.device_id == device_id and d.object_id),
+            key=lambda d: d.output_index,
+        )
+        return matching[0].object_id if matching else None
+
+    async def async_rename_device(self, device_id: str, title: str) -> None:
+        """Mirror an HA device rename to the Plejd cloud (so the Plejd app shows it too)."""
+        if not self._email or not self._password:
+            return
+        session = async_get_clientsession(self.hass)
+        token = await async_login(session, self._email, self._password)
+        parse_id = self._output_parse_id(self.devices, device_id)
+        if parse_id is None:
+            # Entries cached before object_id existed lack it — resolve from a fresh site fetch.
+            site = await async_get_site(session, token, self.site_id)
+            parse_id = self._output_parse_id(site.devices, device_id)
+        if parse_id is None:
+            _LOGGER.debug("Plejd rename skipped: no Parse id for device %s", device_id)
+            return
+        if not await async_set_device_title(session, token, self.site_id, device_id, parse_id, title):
+            raise HomeAssistantError(f"Plejd rejected the rename of device {device_id}")
+
+    async def async_handle_device_registry_update(self, event: object) -> None:
+        """When the user renames one of our devices in HA, push the new name to Plejd."""
+        data = getattr(event, "data", {}) or {}
+        if data.get("action") != "update" or "name_by_user" not in (data.get("changes") or {}):
+            return
+        device_id = data.get("device_id")
+        if not device_id:
+            return
+        registry = device_registry.async_get(self.hass)
+        if registry is None:
+            return
+        device = registry.async_get(device_id)
+        if device is None:
+            return
+        plejd_id = next((ident for (domain, ident) in device.identifiers if domain == DOMAIN), None)
+        name = device.name_by_user
+        if plejd_id is None or not name:
+            return
+        try:
+            await self.async_rename_device(plejd_id, name)
+        except PlejdAuthError:
+            # No gateway connect path exists in BLE-only setups, so prompt reauth here.
+            self._entry.async_start_reauth(self.hass)
+        except Exception:  # noqa: BLE001 - mirroring a rename is auxiliary and must never disrupt HA
+            _LOGGER.warning("Plejd: could not mirror the device rename to the Plejd app", exc_info=True)
 
     async def _async_select_and_connect(self) -> None:
         """Connect over the chosen transport.

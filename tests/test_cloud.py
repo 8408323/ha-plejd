@@ -12,6 +12,7 @@ from plejd.cloud import (
     async_get_site,
     async_get_sites,
     async_login,
+    async_set_device_title,
     parse_site,
 )
 from plejd.const import PLEJD_PARSE_URL
@@ -300,3 +301,32 @@ async def test_available_firmware_skips_malformed_entries():
         )
         async with aiohttp.ClientSession() as s:
             assert await async_get_available_firmware(s, "tok", 9, None) == ("6.1.0", 42)
+
+
+_UPDATE_DEVICE = PLEJD_PARSE_URL + "functions/updateDevice_V2"
+
+
+def test_parse_site_extracts_output_object_id():
+    site = parse_site(
+        {
+            "plejdMesh": {"cryptoKey": "00" * 16},
+            "plejdDevices": [{"deviceId": "F161F68198AF", "hardwareId": "1"}],
+            "devices": [{"deviceId": "F161F68198AF", "outputType": "LIGHT", "objectId": "7MK7dlrcfz"}],
+        }
+    )
+    assert site.devices[0].object_id == "7MK7dlrcfz"
+
+
+async def test_set_device_title_success():
+    with aioresponses() as m:
+        m.post(_UPDATE_DEVICE, payload={"result": True})
+        async with aiohttp.ClientSession() as s:
+            ok = await async_set_device_title(s, "tok", "site-1", "F161F68198AF", "7MK7dlrcfz", "Vardagsrum")
+    assert ok is True
+
+
+async def test_set_device_title_false_when_cloud_rejects():
+    with aioresponses() as m:
+        m.post(_UPDATE_DEVICE, payload={"result": False})
+        async with aiohttp.ClientSession() as s:
+            assert await async_set_device_title(s, "tok", "site-1", "d1", "p1", "X") is False

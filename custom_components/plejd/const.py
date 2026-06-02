@@ -136,6 +136,7 @@ PLEJD_PARSE_LOGIN = "login"  # POST {username, password} -> {sessionToken}
 PLEJD_FN_SITE_LIST = "functions/getSiteList"  # -> [{siteId, ...}]
 PLEJD_FN_SITE_BY_ID = "functions/getSiteById"  # {siteId} -> site w/ cryptoKey + devices
 PLEJD_FN_FIRMWARE_BY_HW = "functions/getFirmwaresByHardwareId"  # {hardwareId, faceplateId} -> [] when up to date
+PLEJD_FN_UPDATE_DEVICE = "functions/updateDevice_V2"  # {siteId, deviceId, deviceParseId, title} -> rename in the app
 
 # ── Device types (Plejd.Shared HardwareType enum: id -> product name) ──
 HARDWARE_TYPES: dict[int, str] = {
