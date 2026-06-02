@@ -20,6 +20,7 @@ CONF_SCENES = "scenes"  # cached scene list
 CONF_INPUTS = "inputs"  # cached button-input list
 CONF_MOTION = "motion"  # cached motion-sensor list
 HARDWARE_WMS_01 = 70  # motion sensor
+HARDWARE_GWY_01 = 4  # gateway
 CONF_GATEWAYS = "gateways"  # gateway (GWY-01) device ids; remote control is available when non-empty
 CONF_RESOURCE_SET_ID = "resource_set_id"  # Resource-Set-ID for the remote-control WebSocket
 CONF_INSTALLATION_ID = "installation_id"  # stable client GUID (Client-ID header)

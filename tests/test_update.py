@@ -26,9 +26,10 @@ def _device(device_id="d1", output_index=0):
 
 
 class _Coordinator:
-    def __init__(self, devices, motion=None, firmware=None):
+    def __init__(self, devices, motion=None, gateways=None, firmware=None):
         self.devices = devices
         self.motion = motion or []
+        self.gateways = gateways or []
         self.firmware = firmware or {}
         self.listeners = []
 
@@ -41,16 +42,17 @@ def _entity(coord, device_id="d1"):
     return PlejdFirmwareUpdate(coord, device_id, "Kitchen", "DIM-01")
 
 
-async def test_setup_covers_output_devices_and_motion_sensors():
+async def test_setup_covers_outputs_sensors_and_gateways():
     coord = _Coordinator(
         [_device("d1", 0), _device("d1", 1), _device("d2", 0)],
         motion=[PlejdCloudMotion(device_id="w1", name="Motion sensor", address=33)],
+        gateways=["gw1"],
     )
     entry = types.SimpleNamespace(runtime_data=coord)
     added = []
     await async_setup_entry(None, entry, lambda entities: added.extend(entities))
-    # d1's two outputs collapse to one entity; d2 + the WMS-01 sensor each get one
-    assert {e._attr_unique_id for e in added} == {"firmware_d1", "firmware_d2", "firmware_w1"}
+    # d1's two outputs collapse to one entity; d2, the WMS-01 sensor, and the gateway each get one
+    assert {e._attr_unique_id for e in added} == {"firmware_d1", "firmware_d2", "firmware_w1", "firmware_gw1"}
 
 
 def test_installed_version_unknown_before_refresh():

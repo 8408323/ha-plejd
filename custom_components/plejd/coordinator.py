@@ -111,7 +111,8 @@ class PlejdCoordinator:
         )
         # Gateway (remote/cloud) transport, when the site has one - preferred over BLE.
         self._gateway: PlejdGatewayConnection | None = None
-        gateways = entry.data.get(CONF_GATEWAYS) or []
+        self.gateways = entry.data.get(CONF_GATEWAYS) or []  # GWY-01 device ids (no controllable output)
+        gateways = self.gateways
         resource_set_id = entry.data.get(CONF_RESOURCE_SET_ID)
         if gateways and resource_set_id:
             self._gateway = PlejdGatewayConnection(

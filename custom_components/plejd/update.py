@@ -15,7 +15,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN, HARDWARE_TYPES, HARDWARE_WMS_01
+from .const import DOMAIN, HARDWARE_GWY_01, HARDWARE_TYPES, HARDWARE_WMS_01
 from .coordinator import PlejdCoordinator
 
 UPDATE_WARNING = (
@@ -40,6 +40,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
             entities.append(
                 PlejdFirmwareUpdate(coordinator, sensor.device_id, sensor.name, HARDWARE_TYPES[HARDWARE_WMS_01])
             )
+    for gateway_id in coordinator.gateways:
+        if gateway_id not in seen:
+            seen.add(gateway_id)
+            entities.append(PlejdFirmwareUpdate(coordinator, gateway_id, "Gateway", HARDWARE_TYPES[HARDWARE_GWY_01]))
     async_add_entities(entities)
 
 
