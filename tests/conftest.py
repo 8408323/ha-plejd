@@ -53,6 +53,11 @@ except ImportError:
     _const.Platform = _Platform  # type: ignore[attr-defined]
     _const.PERCENTAGE = "%"  # type: ignore[attr-defined]
 
+    class _UnitOfTime:
+        SECONDS = "s"
+
+    _const.UnitOfTime = _UnitOfTime  # type: ignore[attr-defined]
+
     class _EntityCategory(str, enum.Enum):
         CONFIG = "config"
         DIAGNOSTIC = "diagnostic"
@@ -352,6 +357,7 @@ except ImportError:
 
     class _NumberMode(str, enum.Enum):
         SLIDER = "slider"
+        BOX = "box"
 
     class _RestoreNumber:
         async def async_added_to_hass(self):

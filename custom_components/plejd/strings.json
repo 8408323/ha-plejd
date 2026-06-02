@@ -39,6 +39,9 @@
       },
       "max_dim_level": {
         "name": "Maximum brightness"
+      },
+      "transition_time": {
+        "name": "Transition time"
       }
     },
     "select": {
