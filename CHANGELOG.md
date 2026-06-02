@@ -8,6 +8,7 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 - **Dimmer start level.** A per-output *Start brightness* number — the level a dimmer jumps to when first switched on (`SetOutputStartLevel`, opcode `0x00CF`; same level encoding as min/max).
+- **Device health sensors.** A per-device *Fault* binary_sensor (diagnostic, `problem` class) surfaces the device's `NotifyEvents` flags (overcurrent, overtemperature, overload, …); polled every 10 min, replies on LastChanged. Validated against healthy hardware (clean bitfield → no fault).
 - **Dimmer transition time.** A per-output *Transition time* config number (seconds)
   controls how fast a dimmer fades (`SetOutputSpeed`, opcode `0x00CB`). Validated on
   real hardware (an 8-second fade-in was observed). Joins the existing min/max

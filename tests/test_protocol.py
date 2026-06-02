@@ -259,3 +259,18 @@ def test_dimmer_tuning_setting_bytes():
     phase = set_output_phase_dim(9, 0, 1)  # leading edge
     assert (phase[3] << 8) | phase[4] == CMD_OUTPUT_PHASE_DIM_TYPE
     assert phase[5:] == bytes([0x00, 0x01])
+
+
+def test_notify_events_request_and_decode():
+    from plejd.const import CMD_NOTIFY_EVENTS, CMD_SCENE
+    from plejd.protocol import TYPE_READ, Command, decode_notify_events, request_notify_events
+
+    req = request_notify_events(11)
+    assert req[2] == TYPE_READ and (req[3] << 8) | req[4] == CMD_NOTIFY_EVENTS and req[5:] == b""
+    # healthy device: all-zero bitfield -> no faults
+    assert decode_notify_events(Command(11, 0x03, CMD_NOTIFY_EVENTS, bytes(8))) == frozenset()
+    # 0x8 = overtemperature, 0x1 = hard_fault (little-endian uint64)
+    faults = decode_notify_events(Command(11, 0x03, CMD_NOTIFY_EVENTS, (0x9).to_bytes(8, "little")))
+    assert faults == frozenset({"hard_fault", "overtemperature"})
+    # non-NotifyEvents command -> None
+    assert decode_notify_events(Command(0, 0, CMD_SCENE, b"")) is None

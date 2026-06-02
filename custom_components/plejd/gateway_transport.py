@@ -21,7 +21,7 @@ from collections.abc import Awaitable, Callable
 import aiohttp
 
 from . import gateway, protocol
-from .protocol import OutputState
+from .protocol import Command, OutputState
 
 # App-level keep-alive: ping the gateway and reconnect if it doesn't pong. This
 # catches a hung gateway behind a still-open WebSocket (the WS heartbeat only
@@ -42,6 +42,7 @@ class PlejdGatewayConnection:
         get_token: Callable[[], Awaitable[str]],
         on_state: Callable[[], None],
         on_disconnect: Callable[[], None] | None = None,
+        on_event: Callable[[Command], None] | None = None,
         ws_url: str = gateway.GATEWAY_WS_URL,
     ) -> None:
         self._session = session
@@ -51,6 +52,7 @@ class PlejdGatewayConnection:
         self._get_token = get_token
         self._on_state = on_state
         self._on_disconnect = on_disconnect
+        self._on_event = on_event
         self._ws_url = ws_url
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._state: dict[int, OutputState] = {}
@@ -139,6 +141,8 @@ class PlejdGatewayConnection:
 
     def _handle_push(self, raw_pkt: str, index: object) -> None:
         # A mesh.out update/push: a LastChanged Datavector relayed as {raw, index}.
+        # Carries every command type (state, button, motion, NotifyEvents, ...), same
+        # as BLE's LastChanged notifications - not just output state.
         try:
             vector = gateway.repackage_ws_to_command(base64.b64decode(raw_pkt), int(index))
             command = protocol.decode_command(vector)
@@ -147,6 +151,9 @@ class PlejdGatewayConnection:
         state = protocol.decode_output_state(command)
         if state is not None:
             self._state[command.address] = state
+        if self._on_event is not None:
+            self._on_event(command)
+        elif state is not None:
             self._on_state()
 
     async def _ping_loop(self) -> None:

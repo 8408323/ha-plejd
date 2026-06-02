@@ -43,6 +43,7 @@ from .connection import PlejdConnection
 from .const import (
     CMD_GROUP_STATE_AND_LEVEL,
     CMD_INPUT_BUTTON,
+    CMD_NOTIFY_EVENTS,
     CMD_OUTPUT_SET,
     CMD_OUTPUT_STATE_AND_LEVEL,
     CONF_CRYPTO_KEY,
@@ -65,13 +66,14 @@ from .const import (
     TRANSPORT_GATEWAY,
 )
 from .gateway_transport import PlejdGatewayConnection
-from .protocol import Command, MotionEvent, OutputState, decode_motion
+from .protocol import Command, MotionEvent, OutputState, decode_motion, decode_notify_events
 
 _LOGGER = logging.getLogger(__name__)
 
 RECONNECT_INITIAL_DELAY = 1.0
 RECONNECT_MAX_DELAY = 60.0
 FIRMWARE_REFRESH_INTERVAL = timedelta(days=1)
+NOTIFY_POLL_INTERVAL = timedelta(minutes=10)  # device-health (NotifyEvents) poll cadence
 
 
 @dataclass
@@ -127,14 +129,18 @@ class PlejdCoordinator:
                 self._async_get_token,
                 self._notify_outputs,
                 self._handle_disconnect,
+                on_event=self._on_event,
             )
         self._listeners: list[Callable[[], None]] = []
         self._button_listeners: list[Callable[[int, bool], None]] = []
         self._motion_listeners: list[Callable[[MotionEvent], None]] = []
         self.firmware: dict[str, PlejdFirmwareStatus] = {}  # device_id -> firmware status
+        self._fault_listeners: list[Callable[[int, frozenset[str]], None]] = []
+        self._faults: dict[int, frozenset[str]] = {}
         self._clock_unsub: Callable[[], None] | None = None
         self._firmware_unsub: Callable[[], None] | None = None
         self._firmware_now_unsub: Callable[[], None] | None = None
+        self._faults_unsub: Callable[[], None] | None = None
         self._available = False
         self._active: str | None = None  # "gateway" | "ble"
         self._closed = False
@@ -195,6 +201,20 @@ class PlejdCoordinator:
         return _remove
 
     @callback
+    def async_add_fault_listener(self, cb: Callable[[int, frozenset[str]], None]) -> Callable[[], None]:
+        """Register a device-health callback cb(address, fault_names); returns an unsubscribe."""
+        self._fault_listeners.append(cb)
+
+        def _remove() -> None:
+            self._fault_listeners.remove(cb)
+
+        return _remove
+
+    def faults_for(self, address: int) -> frozenset[str]:
+        """Active fault-flag names last reported by a device (empty if none/unknown)."""
+        return self._faults.get(address, frozenset())
+
+    @callback
     def _on_event(self, command: Command) -> None:
         if command.command in (CMD_GROUP_STATE_AND_LEVEL, CMD_OUTPUT_STATE_AND_LEVEL):
             for update in list(self._listeners):
@@ -208,6 +228,12 @@ class PlejdCoordinator:
             if event is not None:
                 for motion_cb in list(self._motion_listeners):
                     motion_cb(event)
+        elif command.command == CMD_NOTIFY_EVENTS:
+            faults = decode_notify_events(command)
+            if faults is not None:
+                self._faults[command.address] = faults
+                for fault_cb in list(self._fault_listeners):
+                    fault_cb(command.address, faults)
 
     def state_for(self, address: int) -> OutputState | None:
         """Last-known output state for a mesh address, if seen."""
@@ -366,6 +392,7 @@ class PlejdCoordinator:
         self._active = "gateway"
         self._available = True
         self._notify_outputs()
+        await self._start_fault_polling()
 
     async def _async_connect_ble(self) -> None:
         info = self._pick_device()
@@ -383,6 +410,7 @@ class PlejdCoordinator:
         self._active = "ble"
         self._available = True
         self._notify_outputs()
+        await self._start_fault_polling()
         try:
             await self.async_sync_clock()
         except Exception:  # noqa: BLE001 - clock sync is auxiliary, never fail setup over it
@@ -397,6 +425,25 @@ class PlejdCoordinator:
             await self.async_sync_clock()
         except Exception:  # noqa: BLE001 - best-effort; a missed daily sync is not fatal
             _LOGGER.warning("Plejd periodic clock sync failed", exc_info=True)
+
+    async def _start_fault_polling(self) -> None:
+        """Poll device health (NotifyEvents) periodically; replies arrive push-side."""
+        if self._faults_unsub is not None:
+            self._faults_unsub()
+        self._faults_unsub = async_track_time_interval(self.hass, self._async_poll_faults, NOTIFY_POLL_INTERVAL)
+        await self._async_poll_faults(None)
+
+    async def _async_poll_faults(self, _now: object) -> None:
+        seen: set[int] = set()
+        for device in self.devices:
+            if device.address is None or device.address in seen:
+                continue
+            seen.add(device.address)
+            try:
+                await self._write_vector(protocol.request_notify_events(device.address))
+            except Exception:  # noqa: BLE001 - best-effort per device; one failure shouldn't skip the rest
+                _LOGGER.debug("Plejd fault poll failed for device %s", device.address, exc_info=True)
+                continue
 
     async def _async_get_token(self) -> str:
         """Fetch a fresh Parse session token for the gateway WebSocket (login each time)."""
@@ -558,6 +605,9 @@ class PlejdCoordinator:
         if self._firmware_now_unsub is not None:
             self._firmware_now_unsub()
             self._firmware_now_unsub = None
+        if self._faults_unsub is not None:
+            self._faults_unsub()
+            self._faults_unsub = None
         if self._reconnect_task is not None:
             self._reconnect_task.cancel()
             self._reconnect_task = None
