@@ -164,11 +164,7 @@ def _as_build_time(value: object) -> int | None:
 async def async_get_available_firmware(
     session: ClientSession, token: str, hardware_id: int, faceplate_id: str | None
 ) -> tuple[str, int] | None:
-    """Latest published firmware (version, buildTime) for a hardware/faceplate, or None.
-
-    None means the cloud offers nothing for this hardware (i.e. it is on the latest
-    build) — the function returns an empty list in that case.
-    """
+    """Latest published firmware (version, buildTime) for a hardware/faceplate, or None when up to date."""
     body: dict[str, str] = {"hardwareId": str(hardware_id)}
     if faceplate_id is not None:
         body["faceplateId"] = faceplate_id
@@ -272,12 +268,14 @@ def parse_site(site: dict) -> PlejdCloudSite:
 
     # Installed firmware for every physical device (outputs, sensors, gateway alike),
     # so the update platform can cover them all — not just controllable outputs.
+    # Gateways live in gateways[], not plejdDevices, and carry the firmware dict under
+    # `firmwareObject` (their `firmware` is a bare buildTime int), so prefer that.
     firmware_by_device: dict[str, PlejdDeviceFirmware] = {}
-    for phys in site.get("plejdDevices") or []:
+    for phys in (site.get("plejdDevices") or []) + (site.get("gateways") or []):
         device_id = phys.get("deviceId")
         if device_id is None:
             continue
-        firmware = phys.get("firmware") if isinstance(phys.get("firmware"), dict) else {}
+        firmware = next((v for v in (phys.get("firmwareObject"), phys.get("firmware")) if isinstance(v, dict)), {})
         faceplate = phys.get("faceplateId")
         firmware_by_device[device_id] = PlejdDeviceFirmware(
             version=firmware.get("version") if isinstance(firmware.get("version"), str) else None,

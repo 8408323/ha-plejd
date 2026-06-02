@@ -75,9 +75,17 @@ def test_versions_when_update_available():
     assert entity.latest_version == "6.43.3"
 
 
-def test_latest_ignores_older_or_equal_build_even_with_version_string():
-    # latest_version string would sort oddly, but buildTime is not newer -> stay on installed
+def test_latest_ignores_older_build_even_with_higher_version_string():
+    # latest_version string would sort higher, but buildTime is older -> stay on installed
     status = PlejdFirmwareStatus("6.43.3", 20260324155701, "6.99.0", 20200101000000)
+    entity = _entity(_Coordinator([_device()], firmware={"d1": status}))
+    assert entity.latest_version == "6.43.3"
+
+
+def test_equal_build_time_is_up_to_date():
+    # boundary: latest IS present and exactly equals installed -> no update (strict >, not >=)
+    status = PlejdFirmwareStatus("6.43.3", 20260324155701, "6.43.3", 20260324155701)
+    assert status.update_available is False
     entity = _entity(_Coordinator([_device()], firmware={"d1": status}))
     assert entity.latest_version == "6.43.3"
 

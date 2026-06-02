@@ -227,16 +227,27 @@ def test_parse_site_firmware_by_device_covers_all_physical_devices():
                     "firmware": {"version": "6.43.3", "buildTime": 20260324155701},
                 },
                 {"deviceId": "w1", "hardwareId": "70", "firmware": {"version": "4.41.3", "buildTime": 20240910153670}},
-                {"deviceId": "gw1", "hardwareId": "4"},  # gateway: present even with no output
+            ],
+            # A GWY-01 lives in gateways[], not plejdDevices, and carries its firmware
+            # dict under `firmwareObject` (its `firmware` is a bare buildTime int).
+            "gateways": [
+                {
+                    "deviceId": "gw1",
+                    "hardwareId": "4",
+                    "firmware": 20230207104904,
+                    "firmwareObject": {"version": "2.3.1", "buildTime": 20230207104904},
+                }
             ],
             "devices": [{"deviceId": "d1", "outputType": "LIGHT"}],  # only d1 is a controllable output
         }
     )
     fw = site.firmware_by_device
-    assert set(fw) == {"d1", "w1", "gw1"}  # sensors + gateway covered, not just outputs
+    assert set(fw) == {"d1", "w1", "gw1"}  # outputs + sensors + gateway, not just controllable outputs
     assert fw["d1"].version == "6.43.3" and fw["d1"].build_time == 20260324155701
     assert fw["d1"].hardware_id == 1 and fw["d1"].faceplate_id == "7"
     assert fw["w1"].version == "4.41.3"
+    # gateway firmware comes from firmwareObject, not the bare int `firmware`
+    assert fw["gw1"].version == "2.3.1" and fw["gw1"].build_time == 20230207104904 and fw["gw1"].hardware_id == 4
 
 
 def test_parse_site_firmware_tolerates_missing_or_garbage():

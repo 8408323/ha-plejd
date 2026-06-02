@@ -791,6 +791,37 @@ async def test_refresh_firmware_caches_lookups_per_hardware(monkeypatch):
     assert c.firmware["w1"].update_available is False and c.firmware["w1"].latest_version is None
 
 
+async def test_refresh_firmware_tolerates_one_failed_lookup(monkeypatch):
+    c = PlejdCoordinator(_hass(), _cloud_entry())
+    site = _fw_site(
+        {
+            "d1": ("6.40.0", 20251201000000, 1, "0"),  # this hardware's lookup will raise
+            "w1": ("4.41.3", 20240910153670, 70, None),  # this one succeeds
+        }
+    )
+
+    async def _login(*a):
+        return "tok"
+
+    async def _get_site(*a):
+        return site
+
+    async def _latest(session, token, hw, face):
+        if hw == 1:
+            raise coordinator_mod.PlejdAuthError("boom")  # one flaky combo
+        return ("4.42.0", 20260101000000)
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _login)
+    monkeypatch.setattr(coordinator_mod, "async_get_site", _get_site)
+    monkeypatch.setattr(coordinator_mod, "async_get_available_firmware", _latest)
+
+    await c.async_refresh_firmware()
+    # the whole refresh survives: every device still gets a status
+    assert set(c.firmware) == {"d1", "w1"}
+    assert c.firmware["d1"].latest_version is None  # failed lookup -> treated as up to date
+    assert c.firmware["w1"].update_available is True  # the successful one still resolves
+
+
 async def test_refresh_firmware_no_credentials_is_noop(monkeypatch):
     c = PlejdCoordinator(_hass(), _entry())  # no CONF_EMAIL / CONF_PASSWORD
 

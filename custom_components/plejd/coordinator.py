@@ -244,8 +244,8 @@ class PlejdCoordinator:
         self._firmware_now_unsub = None  # the one-shot has fired
         try:
             await self.async_refresh_firmware()
-        except Exception:  # noqa: BLE001 - firmware detection is auxiliary and cloud-dependent
-            _LOGGER.debug("Plejd firmware check failed", exc_info=True)
+        except Exception:  # noqa: BLE001 - auxiliary + cloud-dependent; warn (e.g. lapsed credentials) but never disrupt
+            _LOGGER.warning("Plejd firmware check failed", exc_info=True)
 
     async def async_refresh_firmware(self) -> None:
         """Refresh installed vs. latest firmware for every physical device from the cloud."""
@@ -259,9 +259,13 @@ class PlejdCoordinator:
         for device_id, firmware in site.firmware_by_device.items():
             key = (firmware.hardware_id, firmware.faceplate_id)
             if key not in latest_by_hw:
-                latest_by_hw[key] = await async_get_available_firmware(
-                    session, token, firmware.hardware_id, firmware.faceplate_id
-                )
+                try:
+                    latest_by_hw[key] = await async_get_available_firmware(
+                        session, token, firmware.hardware_id, firmware.faceplate_id
+                    )
+                except Exception:  # noqa: BLE001 - one flaky lookup must not discard the whole refresh
+                    _LOGGER.debug("Plejd firmware lookup failed for hardware %s", firmware.hardware_id, exc_info=True)
+                    latest_by_hw[key] = None
             latest = latest_by_hw[key]
             status[device_id] = PlejdFirmwareStatus(
                 installed_version=firmware.version,
