@@ -65,6 +65,16 @@
       "sync_clock": {
         "name": "Sync clock"
       }
+    },
+    "sensor": {
+      "connection": {
+        "name": "Connection",
+        "state": {
+          "gateway": "Gateway",
+          "ble": "Bluetooth",
+          "disconnected": "Disconnected"
+        }
+      }
     }
   },
   "options": {

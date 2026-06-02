@@ -6,29 +6,56 @@ import types
 
 from plejd.cloud import PlejdCloudMotion
 from plejd.protocol import MotionEvent
-from plejd.sensor import PlejdIlluminanceSensor, async_setup_entry
+from plejd.sensor import PlejdConnectivitySensor, PlejdIlluminanceSensor, async_setup_entry
 
 
 class _Coordinator:
-    def __init__(self, motion):
+    def __init__(self, motion, active_transport="ble"):
         self.motion = motion
         self.motion_listeners = []
+        self.listeners = []
+        self.site_id = "site-1"
+        self.active_transport = active_transport
 
     def async_add_motion_listener(self, cb):
         self.motion_listeners.append(cb)
         return lambda: self.motion_listeners.remove(cb)
+
+    def async_add_listener(self, cb):
+        self.listeners.append(cb)
+        return lambda: self.listeners.remove(cb)
 
 
 def _sensor():
     return PlejdIlluminanceSensor(_Coordinator([]), PlejdCloudMotion("w1", "Motion", 33))
 
 
-async def test_setup_creates_illuminance_sensor():
+async def test_setup_creates_connection_and_illuminance_sensors():
     coord = _Coordinator([PlejdCloudMotion("w1", "Motion", 33)])
     entry = types.SimpleNamespace(runtime_data=coord)
     added = []
     await async_setup_entry(None, entry, lambda entities: added.extend(entities))
-    assert len(added) == 1
+    assert len(added) == 2  # one connection sensor + one illuminance sensor
+    assert any(isinstance(s, PlejdConnectivitySensor) for s in added)
+    assert any(isinstance(s, PlejdIlluminanceSensor) for s in added)
+
+
+def test_connectivity_reports_active_transport():
+    assert PlejdConnectivitySensor(_Coordinator([], active_transport="gateway")).native_value == "gateway"
+
+
+def test_connectivity_reports_disconnected_when_none():
+    assert PlejdConnectivitySensor(_Coordinator([], active_transport=None)).native_value == "disconnected"
+
+
+def test_connectivity_unique_id():
+    assert PlejdConnectivitySensor(_Coordinator([]))._attr_unique_id == "connection_site-1"
+
+
+async def test_connectivity_subscribes_to_updates():
+    coord = _Coordinator([])
+    await PlejdConnectivitySensor(coord).async_added_to_hass()
+    assert len(coord.listeners) == 1
 
 
 def test_lux_updates_on_matching_address():
