@@ -45,7 +45,9 @@ def _entry():
             "installation_id": "inst-1",
             "discovered_address": "AA:BB:CC:DD:EE:FF",
             "gateways": ["E6C9AABBCCDD"],
-            "devices": [{"device_id": "d1", "address": 11, "name": "Vardagsrum", "model": "DIM-01"}],
+            "devices": [
+                {"device_id": "d1", "object_id": "7MK7dlrcfz", "address": 11, "name": "Vardagsrum", "model": "DIM-01"}
+            ],
         },
         options={
             "transport": "gateway",
@@ -72,6 +74,7 @@ async def test_diagnostics_redacts_secrets_and_pii():
         assert data[key] == "**REDACTED**"
     dev = data["devices"][0]
     assert dev["device_id"] == "**REDACTED**" and dev["address"] == "**REDACTED**" and dev["name"] == "**REDACTED**"
+    assert dev["object_id"] == "**REDACTED**"  # cloud Parse id must not leak in diagnostics
     # model is not sensitive and is kept
     assert dev["model"] == "DIM-01"
     # schedules (occupancy/routine) are redacted wholesale, transport pref kept

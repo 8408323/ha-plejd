@@ -5,6 +5,7 @@ from __future__ import annotations
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import device_registry
 
 from .coordinator import PlejdCoordinator
 
@@ -36,6 +37,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await coordinator.async_shutdown()
         raise
     entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
+    # Mirror HA device renames back to the Plejd app (cloud title update).
+    entry.async_on_unload(
+        hass.bus.async_listen(
+            device_registry.EVENT_DEVICE_REGISTRY_UPDATED, coordinator.async_handle_device_registry_update
+        )
+    )
     return True
 
 

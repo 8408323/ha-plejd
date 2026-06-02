@@ -23,6 +23,9 @@ class _FakeCoordinator:
     async def async_shutdown(self):
         self.shutdown = True
 
+    async def async_handle_device_registry_update(self, event):
+        return None
+
 
 class _FakeConfigEntries:
     unload_result = True
@@ -37,8 +40,17 @@ class _FakeConfigEntries:
         self.reloaded = entry_id
 
 
+class _FakeBus:
+    def __init__(self):
+        self.listeners = []
+
+    def async_listen(self, event, handler):
+        self.listeners.append((event, handler))
+        return lambda: None
+
+
 def _hass():
-    return types.SimpleNamespace(config_entries=_FakeConfigEntries())
+    return types.SimpleNamespace(config_entries=_FakeConfigEntries(), bus=_FakeBus())
 
 
 def _entry():
@@ -60,6 +72,17 @@ async def test_setup_starts_coordinator_and_forwards(monkeypatch):
     coord = entry.runtime_data
     assert coord.started is True
     assert hass.config_entries.forwarded == PLATFORMS
+
+
+async def test_setup_registers_device_rename_listener(monkeypatch):
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    _FakeCoordinator.instances.clear()
+    hass, entry = _hass(), _entry()
+    await async_setup_entry(hass, entry)
+    events = [e for e, _ in hass.bus.listeners]
+    assert "device_registry_updated" in events
+    handler = next(h for e, h in hass.bus.listeners if e == "device_registry_updated")
+    assert handler == entry.runtime_data.async_handle_device_registry_update
 
 
 async def test_setup_shuts_down_when_forward_fails(monkeypatch):
