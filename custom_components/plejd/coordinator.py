@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable, Coroutine
+from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
 
@@ -22,11 +23,20 @@ from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady, HomeAssistantError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers.event import async_call_later, async_track_time_interval
 from homeassistant.util import dt as dt_util
 
 from . import protocol
-from .cloud import PlejdAuthError, PlejdCloudDevice, PlejdCloudInput, PlejdCloudMotion, PlejdCloudScene, async_login
+from .cloud import (
+    PlejdAuthError,
+    PlejdCloudDevice,
+    PlejdCloudInput,
+    PlejdCloudMotion,
+    PlejdCloudScene,
+    async_get_available_firmware,
+    async_get_site,
+    async_login,
+)
 from .connection import PlejdConnection
 from .const import (
     CMD_GROUP_STATE_AND_LEVEL,
@@ -58,6 +68,25 @@ _LOGGER = logging.getLogger(__name__)
 
 RECONNECT_INITIAL_DELAY = 1.0
 RECONNECT_MAX_DELAY = 60.0
+FIRMWARE_REFRESH_INTERVAL = timedelta(days=1)
+
+
+@dataclass
+class PlejdFirmwareStatus:
+    """A device's installed firmware vs. the latest the Plejd cloud offers for it."""
+
+    installed_version: str | None
+    installed_build_time: int | None
+    latest_version: str | None
+    latest_build_time: int | None
+
+    @property
+    def update_available(self) -> bool:
+        return (
+            self.latest_build_time is not None
+            and self.installed_build_time is not None
+            and self.latest_build_time > self.installed_build_time
+        )
 
 
 class PlejdCoordinator:
@@ -74,6 +103,9 @@ class PlejdCoordinator:
         self.site_id = entry.data.get(CONF_SITE_ID, entry.entry_id)
         self._preferred = entry.data.get(CONF_DISCOVERED_ADDRESS)
         self._transport_pref = (getattr(entry, "options", None) or {}).get(CONF_TRANSPORT, TRANSPORT_AUTO)
+        # Cloud credentials are used for the gateway token and the firmware-update check.
+        self._email = entry.data.get(CONF_EMAIL)
+        self._password = entry.data.get(CONF_PASSWORD)
         self._connection = PlejdConnection(
             bytes.fromhex(entry.data[CONF_CRYPTO_KEY]), self._on_event, self._handle_disconnect
         )
@@ -82,8 +114,6 @@ class PlejdCoordinator:
         gateways = entry.data.get(CONF_GATEWAYS) or []
         resource_set_id = entry.data.get(CONF_RESOURCE_SET_ID)
         if gateways and resource_set_id:
-            self._email = entry.data[CONF_EMAIL]
-            self._password = entry.data[CONF_PASSWORD]
             self._gateway = PlejdGatewayConnection(
                 async_get_clientsession(hass),
                 entry.data[CONF_SITE_ID],
@@ -96,7 +126,9 @@ class PlejdCoordinator:
         self._listeners: list[Callable[[], None]] = []
         self._button_listeners: list[Callable[[int, bool], None]] = []
         self._motion_listeners: list[Callable[[MotionEvent], None]] = []
+        self.firmware: dict[str, PlejdFirmwareStatus] = {}  # device_id -> firmware status
         self._clock_unsub: Callable[[], None] | None = None
+        self._firmware_unsub: Callable[[], None] | None = None
         self._available = False
         self._active: str | None = None  # "gateway" | "ble"
         self._closed = False
@@ -195,6 +227,48 @@ class PlejdCoordinator:
     async def async_start(self) -> None:
         """Connect to the mesh — gateway-first when one exists, else BLE."""
         await self._async_select_and_connect()
+        self._schedule_firmware_checks()
+
+    def _schedule_firmware_checks(self) -> None:
+        """Check firmware shortly after start, then daily; both are best-effort."""
+        async_call_later(self.hass, 0, self._async_firmware_check)
+        if self._firmware_unsub is None:
+            self._firmware_unsub = async_track_time_interval(
+                self.hass, self._async_firmware_check, FIRMWARE_REFRESH_INTERVAL
+            )
+
+    async def _async_firmware_check(self, _now: object) -> None:
+        try:
+            await self.async_refresh_firmware()
+        except Exception:  # noqa: BLE001 - firmware detection is auxiliary and cloud-dependent
+            _LOGGER.debug("Plejd firmware check failed", exc_info=True)
+
+    async def async_refresh_firmware(self) -> None:
+        """Refresh installed vs. latest firmware per device from the Plejd cloud."""
+        if not self._email or not self._password:
+            return
+        session = async_get_clientsession(self.hass)
+        token = await async_login(session, self._email, self._password)
+        site = await async_get_site(session, token, self.site_id)
+        latest_by_hw: dict[tuple[int, str | None], tuple[str, int] | None] = {}
+        status: dict[str, PlejdFirmwareStatus] = {}
+        for device in site.devices:
+            if device.device_id in status:
+                continue
+            key = (device.hardware_id, device.faceplate_id)
+            if key not in latest_by_hw:
+                latest_by_hw[key] = await async_get_available_firmware(
+                    session, token, device.hardware_id, device.faceplate_id
+                )
+            latest = latest_by_hw[key]
+            status[device.device_id] = PlejdFirmwareStatus(
+                installed_version=device.firmware_version,
+                installed_build_time=device.firmware_build_time,
+                latest_version=latest[0] if latest else None,
+                latest_build_time=latest[1] if latest else None,
+            )
+        self.firmware = status
+        self._notify_outputs()
 
     async def _async_select_and_connect(self) -> None:
         """Connect over the chosen transport.
@@ -399,6 +473,9 @@ class PlejdCoordinator:
         if self._clock_unsub is not None:
             self._clock_unsub()
             self._clock_unsub = None
+        if self._firmware_unsub is not None:
+            self._firmware_unsub()
+            self._firmware_unsub = None
         if self._reconnect_task is not None:
             self._reconnect_task.cancel()
             self._reconnect_task = None

@@ -710,3 +710,123 @@ async def test_dimmer_tuning_settings(monkeypatch):
     await c.async_set_output_phase_dim(9, 1, 1)
     ph = decode_command(c._connection.mesh.decrypt(client.writes[-1][1]))
     assert ph.command == CMD_OUTPUT_PHASE_DIM_TYPE and ph.data == bytes([1, 1])
+
+
+def _cloud_device(device_id, hw=1, face="0", version="6.40.0", build_time=20251201000000):
+    from plejd.cloud import PlejdCloudDevice
+
+    return PlejdCloudDevice(
+        device_id=device_id,
+        name=device_id,
+        address=5,
+        output_index=0,
+        outputs=[5],
+        hardware_id=hw,
+        model="DIM-01",
+        category="light",
+        dimmable=True,
+        traits=3,
+        room_id="r1",
+        faceplate_id=face,
+        firmware_version=version,
+        firmware_build_time=build_time,
+    )
+
+
+def _cloud_entry():
+    return types.SimpleNamespace(
+        entry_id="e1",
+        data={
+            CONF_CRYPTO_KEY: _KEY_HEX,
+            CONF_DEVICES: [_DEV],
+            CONF_DISCOVERED_ADDRESS: None,
+            CONF_SITE_ID: "S1",
+            CONF_EMAIL: "u@x.se",
+            CONF_PASSWORD: "pw",
+        },
+    )
+
+
+async def test_refresh_firmware_populates_status(monkeypatch):
+    c = PlejdCoordinator(_hass(), _cloud_entry())
+    site = types.SimpleNamespace(devices=[_cloud_device("d1")])
+
+    async def _login(*a):
+        return "tok"
+
+    async def _get_site(*a):
+        return site
+
+    async def _latest(session, token, hw, face):
+        return ("6.43.3", 20260324155701)
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _login)
+    monkeypatch.setattr(coordinator_mod, "async_get_site", _get_site)
+    monkeypatch.setattr(coordinator_mod, "async_get_available_firmware", _latest)
+
+    await c.async_refresh_firmware()
+    status = c.firmware["d1"]
+    assert status.installed_version == "6.40.0" and status.installed_build_time == 20251201000000
+    assert status.latest_version == "6.43.3" and status.update_available is True
+
+
+async def test_refresh_firmware_caches_per_hardware_and_dedups_devices(monkeypatch):
+    c = PlejdCoordinator(_hass(), _cloud_entry())
+    # two outputs of the same physical device d1 (dedup) + a second device d2 same hardware (cache)
+    site = types.SimpleNamespace(devices=[_cloud_device("d1"), _cloud_device("d1"), _cloud_device("d2")])
+    calls = []
+
+    async def _login(*a):
+        return "tok"
+
+    async def _get_site(*a):
+        return site
+
+    async def _latest(session, token, hw, face):
+        calls.append((hw, face))
+        return None  # up to date
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _login)
+    monkeypatch.setattr(coordinator_mod, "async_get_site", _get_site)
+    monkeypatch.setattr(coordinator_mod, "async_get_available_firmware", _latest)
+
+    await c.async_refresh_firmware()
+    assert calls == [(1, "0")]  # one lookup for the shared (hardware, faceplate)
+    assert set(c.firmware) == {"d1", "d2"}
+    assert c.firmware["d1"].update_available is False and c.firmware["d1"].latest_version is None
+
+
+async def test_refresh_firmware_no_credentials_is_noop(monkeypatch):
+    c = PlejdCoordinator(_hass(), _entry())  # no CONF_EMAIL / CONF_PASSWORD
+
+    async def _boom(*a):
+        raise AssertionError("must not log in without credentials")
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _boom)
+    await c.async_refresh_firmware()
+    assert c.firmware == {}
+
+
+async def test_firmware_check_swallows_errors(monkeypatch):
+    c = PlejdCoordinator(_hass(), _cloud_entry())
+
+    async def _boom(*a):
+        raise RuntimeError("cloud down")
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _boom)
+    await c._async_firmware_check(None)  # best-effort: no exception
+    assert c.firmware == {}
+
+
+def test_schedule_firmware_checks_registers_daily_timer():
+    c = PlejdCoordinator(_hass(), _cloud_entry())
+    c._schedule_firmware_checks()
+    assert c._firmware_unsub is not None
+
+
+async def test_shutdown_cancels_firmware_timer():
+    c = PlejdCoordinator(_hass(), _cloud_entry())
+    cancelled = []
+    c._firmware_unsub = lambda: cancelled.append(True)
+    await c.async_shutdown()
+    assert cancelled == [True] and c._firmware_unsub is None

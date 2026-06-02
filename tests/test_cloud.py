@@ -8,6 +8,7 @@ from aioresponses import aioresponses
 from plejd.cloud import (
     PlejdAuthError,
     PlejdCloudError,
+    async_get_available_firmware,
     async_get_site,
     async_get_sites,
     async_login,
@@ -18,6 +19,7 @@ from plejd.const import PLEJD_PARSE_URL
 _LOGIN = PLEJD_PARSE_URL + "login"
 _SITE_LIST = PLEJD_PARSE_URL + "functions/getSiteList"
 _SITE_BY_ID = PLEJD_PARSE_URL + "functions/getSiteById"
+_FIRMWARE = PLEJD_PARSE_URL + "functions/getFirmwaresByHardwareId"
 
 _SITE = {
     "siteId": "S1",
@@ -211,3 +213,75 @@ def test_parse_site_handles_missing_address_and_hardware():
     assert dev.address is None and dev.outputs == []
     assert dev.hardware_id == 0 and dev.category == "none"
     assert site.title == "Plejd"  # default
+
+
+def test_parse_site_extracts_firmware_and_faceplate():
+    site = parse_site(
+        {
+            "plejdMesh": {"cryptoKey": "00" * 16},
+            "plejdDevices": [
+                {
+                    "deviceId": "d1",
+                    "hardwareId": "1",
+                    "faceplateId": 7,
+                    "firmware": {"version": "6.43.3", "buildTime": 20260324155701},
+                },
+            ],
+            "devices": [{"deviceId": "d1", "outputType": "LIGHT"}],
+        }
+    )
+    dev = site.devices[0]
+    assert dev.firmware_version == "6.43.3"
+    assert dev.firmware_build_time == 20260324155701
+    assert dev.faceplate_id == "7"
+
+
+def test_parse_site_tolerates_missing_or_garbage_firmware():
+    site = parse_site(
+        {
+            "plejdMesh": {"cryptoKey": "00" * 16},
+            "plejdDevices": [
+                {"deviceId": "a", "hardwareId": "1"},  # no firmware/faceplate at all
+                {"deviceId": "b", "hardwareId": "1", "firmware": {"version": 5, "buildTime": "nope"}},
+            ],
+            "devices": [{"deviceId": "a", "outputType": "LIGHT"}, {"deviceId": "b", "outputType": "LIGHT"}],
+        }
+    )
+    by_id = {d.device_id: d for d in site.devices}
+    assert by_id["a"].firmware_version is None and by_id["a"].firmware_build_time is None
+    assert by_id["a"].faceplate_id is None
+    assert by_id["b"].firmware_version is None  # non-str version dropped
+    assert by_id["b"].firmware_build_time is None  # non-numeric buildTime dropped
+
+
+async def test_available_firmware_returns_newest_offered():
+    with aioresponses() as m:
+        m.post(
+            _FIRMWARE,
+            payload={
+                "result": [
+                    {"version": "6.40.0", "buildTime": 20251201000000},
+                    {"version": "6.43.3", "buildTime": 20260324155701},
+                ]
+            },
+        )
+        async with aiohttp.ClientSession() as s:
+            latest = await async_get_available_firmware(s, "tok", 1, "0")
+    assert latest == ("6.43.3", 20260324155701)
+
+
+async def test_available_firmware_empty_list_means_up_to_date():
+    with aioresponses() as m:
+        m.post(_FIRMWARE, payload={"result": []})
+        async with aiohttp.ClientSession() as s:
+            assert await async_get_available_firmware(s, "tok", 1, None) is None
+
+
+async def test_available_firmware_skips_malformed_entries():
+    with aioresponses() as m:
+        m.post(
+            _FIRMWARE,
+            payload={"result": ["junk", {"version": "x"}, {"buildTime": 1}, {"version": "6.1.0", "buildTime": 42}]},
+        )
+        async with aiohttp.ClientSession() as s:
+            assert await async_get_available_firmware(s, "tok", 9, None) == ("6.1.0", 42)

@@ -19,6 +19,7 @@ from .const import (
     DEFAULT_CATEGORY,
     HARDWARE_TYPES,
     HARDWARE_WMS_01,
+    PLEJD_FN_FIRMWARE_BY_HW,
     PLEJD_FN_SITE_BY_ID,
     PLEJD_FN_SITE_LIST,
     PLEJD_PARSE_APP_ID,
@@ -59,6 +60,9 @@ class PlejdCloudDevice:
     dimmable: bool
     traits: int
     room_id: str | None
+    faceplate_id: str | None = None
+    firmware_version: str | None = None  # e.g. "6.43.3"
+    firmware_build_time: int | None = None  # e.g. 20260324155701; monotonic, used to compare builds
 
 
 @dataclass
@@ -138,6 +142,41 @@ async def async_get_sites(session: ClientSession, token: str) -> list[dict]:
     return result if isinstance(result, list) else []
 
 
+def _as_build_time(value: object) -> int | None:
+    """A firmware buildTime (e.g. 20260324155701) as int, or None if absent/garbage."""
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+async def async_get_available_firmware(
+    session: ClientSession, token: str, hardware_id: int, faceplate_id: str | None
+) -> tuple[str, int] | None:
+    """Latest published firmware (version, buildTime) for a hardware/faceplate, or None.
+
+    None means the cloud offers nothing for this hardware (i.e. it is on the latest
+    build) — the function returns an empty list in that case.
+    """
+    body: dict[str, str] = {"hardwareId": str(hardware_id)}
+    if faceplate_id is not None:
+        body["faceplateId"] = faceplate_id
+    result = await _call_function(session, token, PLEJD_FN_FIRMWARE_BY_HW, body)
+    best: tuple[str, int] | None = None
+    for item in result if isinstance(result, list) else []:
+        if not isinstance(item, dict):
+            continue
+        version = item.get("version")
+        build_time = _as_build_time(item.get("buildTime"))
+        if not isinstance(version, str) or build_time is None:
+            continue
+        if best is None or build_time > best[1]:
+            best = (version, build_time)
+    return best
+
+
 async def async_get_site(session: ClientSession, token: str, site_id: str) -> PlejdCloudSite:
     """Fetch one site (crypto key + devices) by id."""
     result = await _call_function(session, token, PLEJD_FN_SITE_BY_ID, {"siteId": site_id})
@@ -173,6 +212,10 @@ def parse_site(site: dict) -> PlejdCloudSite:
         seen_outputs[device_id] = output_index + 1
         hardware = hardware_by_id.get(device_id, {})
         hardware_id = int(hardware.get("hardwareId") or 0)
+        faceplate = hardware.get("faceplateId")
+        firmware = hardware.get("firmware") if isinstance(hardware.get("firmware"), dict) else {}
+        firmware_version = firmware.get("version") if isinstance(firmware.get("version"), str) else None
+        firmware_build_time = _as_build_time(firmware.get("buildTime"))
         model = HARDWARE_TYPES.get(hardware_id, "Unknown")
         output_type = (info.get("outputType") or "UNKNOWN").upper()
         category = _OUTPUT_TYPE_CATEGORY.get(output_type) or DEFAULT_CATEGORY.get(hardware_id, CATEGORY_NONE)
@@ -197,6 +240,9 @@ def parse_site(site: dict) -> PlejdCloudSite:
                 dimmable=dimmable,
                 traits=traits,
                 room_id=info.get("roomId"),
+                faceplate_id=str(faceplate) if faceplate is not None else None,
+                firmware_version=firmware_version,
+                firmware_build_time=firmware_build_time,
             )
         )
 

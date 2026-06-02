@@ -49,6 +49,7 @@ except ImportError:
         NUMBER = "number"
         SELECT = "select"
         BUTTON = "button"
+        UPDATE = "update"
 
     _const.Platform = _Platform  # type: ignore[attr-defined]
     _const.PERCENTAGE = "%"  # type: ignore[attr-defined]
@@ -347,6 +348,28 @@ except ImportError:
 
     _button.ButtonEntity = _ButtonEntity  # type: ignore[attr-defined]
     sys.modules.setdefault("homeassistant.components.button", _button)
+
+    _update = types.ModuleType("homeassistant.components.update")
+
+    class _UpdateDeviceClass(str, enum.Enum):
+        FIRMWARE = "firmware"
+
+    class _UpdateEntity:
+        _attr_release_summary = None
+
+        @property
+        def release_summary(self):
+            return self._attr_release_summary
+
+        def async_on_remove(self, func):
+            self._unsub = func
+
+        def async_write_ha_state(self):
+            return None
+
+    _update.UpdateDeviceClass = _UpdateDeviceClass  # type: ignore[attr-defined]
+    _update.UpdateEntity = _UpdateEntity  # type: ignore[attr-defined]
+    sys.modules.setdefault("homeassistant.components.update", _update)
 
     _cover = types.ModuleType("homeassistant.components.cover")
     _cover.ATTR_POSITION = "position"  # type: ignore[attr-defined]
