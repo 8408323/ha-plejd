@@ -22,6 +22,7 @@ from .const import (
     CMD_OUTPUT_PHASE_DIM_TYPE,
     CMD_OUTPUT_SET,
     CMD_OUTPUT_SPEED,
+    CMD_OUTPUT_START_LEVEL,
     CMD_OUTPUT_STATE_AND_LEVEL,
     CMD_SCENE,
     CMD_SYSTEM_TIME,
@@ -115,6 +116,12 @@ def set_output_max_level(address: int, output: int, fraction: float) -> bytes:
     """Set an output's maximum dim level (0x00CA): [output, u16le of fraction*65535]."""
     payload = bytes([output & 0xFF]) + _level_fraction_to_u16le(fraction)
     return encode_command(address, CMD_OUTPUT_MAX_LEVEL, payload, command_type=TYPE_DONT_RESPOND)
+
+
+def set_output_start_level(address: int, output: int, fraction: float) -> bytes:
+    """Set an output's start level (0x00CF): [output, u16le of fraction*65535]."""
+    payload = bytes([output & 0xFF]) + _level_fraction_to_u16le(fraction)
+    return encode_command(address, CMD_OUTPUT_START_LEVEL, payload, command_type=TYPE_DONT_RESPOND)
 
 
 def set_output_speed(address: int, output: int, seconds: float) -> bytes:
