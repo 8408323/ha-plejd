@@ -895,6 +895,31 @@ def _reg_event(action="update", changes=None, device_id="ha1"):
     )
 
 
+def test_output_parse_id_picks_lowest_output_index():
+    from plejd.cloud import PlejdCloudDevice
+    from plejd.coordinator import PlejdCoordinator
+
+    def _dev(output_index, object_id):
+        return PlejdCloudDevice(
+            device_id="d1",
+            name="Dev",
+            address=1,
+            output_index=output_index,
+            outputs=[1],
+            hardware_id=1,
+            model="DIM-02",
+            category="light",
+            dimmable=True,
+            traits=0,
+            room_id=None,
+            object_id=object_id,
+        )
+
+    # output_index=1 comes first in the list but output_index=0 is the primary
+    devices = [_dev(1, "parse-id-1"), _dev(0, "parse-id-0")]
+    assert PlejdCoordinator._output_parse_id(devices, "d1") == "parse-id-0"
+
+
 async def test_rename_device_calls_cloud(monkeypatch):
     c = PlejdCoordinator(_hass(), _cloud_entry())
     c.devices[0].object_id = "p1"  # device_id "d1"
@@ -1040,6 +1065,14 @@ async def test_registry_update_ignores_missing_device_and_non_plejd(monkeypatch)
     await c.async_handle_device_registry_update(_reg_event(changes={"name_by_user": "x"}))
     hass.device_registry = _FakeRegistry(_FakeDevice({(DOMAIN, "d1")}, None))  # name cleared
     await c.async_handle_device_registry_update(_reg_event(changes={"name_by_user": "x"}))
+    # no registry set yet (early startup)
+    del hass.device_registry
+    await c.async_handle_device_registry_update(_reg_event(changes={"name_by_user": "x"}))
+    # device_id missing from event data
+    hass.device_registry = _FakeRegistry(None)
+    await c.async_handle_device_registry_update(
+        types.SimpleNamespace(data={"action": "update", "changes": {"name_by_user": "x"}})
+    )
 
 
 async def test_registry_update_swallows_rename_errors(monkeypatch):

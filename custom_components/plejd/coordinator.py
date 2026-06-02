@@ -282,7 +282,12 @@ class PlejdCoordinator:
     @staticmethod
     def _output_parse_id(devices: list[PlejdCloudDevice], device_id: str) -> str | None:
         # The title lives on the output; rename targets the primary output's Parse id.
-        return next((d.object_id for d in devices if d.device_id == device_id and d.object_id), None)
+        # Primary = lowest output_index (consistent with the unique_id base convention).
+        matching = sorted(
+            (d for d in devices if d.device_id == device_id and d.object_id),
+            key=lambda d: d.output_index,
+        )
+        return matching[0].object_id if matching else None
 
     async def async_rename_device(self, device_id: str, title: str) -> None:
         """Mirror an HA device rename to the Plejd cloud (so the Plejd app shows it too)."""
@@ -306,7 +311,13 @@ class PlejdCoordinator:
         data = getattr(event, "data", {}) or {}
         if data.get("action") != "update" or "name_by_user" not in (data.get("changes") or {}):
             return
-        device = device_registry.async_get(self.hass).async_get(data["device_id"])
+        device_id = data.get("device_id")
+        if not device_id:
+            return
+        registry = device_registry.async_get(self.hass)
+        if registry is None:
+            return
+        device = registry.async_get(device_id)
         if device is None:
             return
         plejd_id = next((ident for (domain, ident) in device.identifiers if domain == DOMAIN), None)
