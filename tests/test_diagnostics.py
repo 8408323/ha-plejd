@@ -47,7 +47,10 @@ def _entry():
             "gateways": ["E6C9AABBCCDD"],
             "devices": [{"device_id": "d1", "address": 11, "name": "Vardagsrum", "model": "DIM-01"}],
         },
-        options={"transport": "gateway"},
+        options={
+            "transport": "gateway",
+            "schedules": [{"slot": 0, "name": "Wake", "days": [0, 1], "time": "07:00", "scene": 1, "fade": 0}],
+        },
         runtime_data=_Coordinator(),
     )
 
@@ -71,12 +74,14 @@ async def test_diagnostics_redacts_secrets_and_pii():
     assert dev["device_id"] == "**REDACTED**" and dev["address"] == "**REDACTED**" and dev["name"] == "**REDACTED**"
     # model is not sensitive and is kept
     assert dev["model"] == "DIM-01"
+    # schedules (occupancy/routine) are redacted wholesale, transport pref kept
+    assert diag["options"]["schedules"] == "**REDACTED**" and diag["options"]["transport"] == "gateway"
 
 
 async def test_diagnostics_reports_transport_and_counts():
     diag = await async_get_config_entry_diagnostics(None, _entry())
     assert diag["active_transport"] == "gateway" and diag["available"] is True
-    assert diag["counts"] == {"devices": 2, "scenes": 1, "inputs": 0, "motion": 0, "gateways": 1}
+    assert diag["counts"] == {"devices": 2, "scenes": 1, "inputs": 0, "motion": 0, "gateways": 1, "schedules": 1}
     assert diag["models"] == ["CTR-01", "DIM-01"]
 
 

@@ -20,6 +20,7 @@ from .const import (
     CONF_GATEWAYS,
     CONF_INSTALLATION_ID,
     CONF_RESOURCE_SET_ID,
+    CONF_SCHEDULES,
     CONF_SITE_ID,
 )
 from .coordinator import PlejdCoordinator
@@ -41,6 +42,8 @@ TO_REDACT = {
     "name",
     "room_id",
     "scene_id",
+    # Schedule timings reveal occupancy/routine — redact wholesale (count reported below).
+    CONF_SCHEDULES,
 }
 
 
@@ -58,6 +61,7 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: ConfigE
             "inputs": len(coordinator.inputs),
             "motion": len(coordinator.motion),
             "gateways": len(entry.data.get(CONF_GATEWAYS) or []),
+            "schedules": len(entry.options.get(CONF_SCHEDULES) or []),
         },
         "models": sorted({device.model for device in coordinator.devices}),
     }
