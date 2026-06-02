@@ -78,6 +78,11 @@
           "disconnected": "Disconnected"
         }
       }
+    },
+    "update": {
+      "firmware": {
+        "name": "Firmware"
+      }
     }
   },
   "options": {

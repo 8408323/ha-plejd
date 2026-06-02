@@ -710,3 +710,166 @@ async def test_dimmer_tuning_settings(monkeypatch):
     await c.async_set_output_phase_dim(9, 1, 1)
     ph = decode_command(c._connection.mesh.decrypt(client.writes[-1][1]))
     assert ph.command == CMD_OUTPUT_PHASE_DIM_TYPE and ph.data == bytes([1, 1])
+
+
+def _fw_site(firmware_by_device):
+    from plejd.cloud import PlejdDeviceFirmware
+
+    fw = {
+        device_id: PlejdDeviceFirmware(version=v, build_time=bt, hardware_id=hw, faceplate_id=face)
+        for device_id, (v, bt, hw, face) in firmware_by_device.items()
+    }
+    return types.SimpleNamespace(firmware_by_device=fw)
+
+
+def _cloud_entry():
+    return types.SimpleNamespace(
+        entry_id="e1",
+        data={
+            CONF_CRYPTO_KEY: _KEY_HEX,
+            CONF_DEVICES: [_DEV],
+            CONF_DISCOVERED_ADDRESS: None,
+            CONF_SITE_ID: "S1",
+            CONF_EMAIL: "u@x.se",
+            CONF_PASSWORD: "pw",
+        },
+    )
+
+
+async def test_refresh_firmware_populates_status(monkeypatch):
+    c = PlejdCoordinator(_hass(), _cloud_entry())
+    site = _fw_site({"d1": ("6.40.0", 20251201000000, 1, "0")})
+
+    async def _login(*a):
+        return "tok"
+
+    async def _get_site(*a):
+        return site
+
+    async def _latest(session, token, hw, face):
+        return ("6.43.3", 20260324155701)
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _login)
+    monkeypatch.setattr(coordinator_mod, "async_get_site", _get_site)
+    monkeypatch.setattr(coordinator_mod, "async_get_available_firmware", _latest)
+
+    await c.async_refresh_firmware()
+    status = c.firmware["d1"]
+    assert status.installed_version == "6.40.0" and status.installed_build_time == 20251201000000
+    assert status.latest_version == "6.43.3" and status.update_available is True
+
+
+async def test_refresh_firmware_caches_lookups_per_hardware(monkeypatch):
+    c = PlejdCoordinator(_hass(), _cloud_entry())
+    # two devices sharing one (hardware, faceplate) + a motion sensor on different hardware
+    site = _fw_site(
+        {
+            "d1": ("6.40.0", 20251201000000, 1, "0"),
+            "d2": ("6.40.0", 20251201000000, 1, "0"),
+            "w1": ("4.41.3", 20240910153670, 70, None),
+        }
+    )
+    calls = []
+
+    async def _login(*a):
+        return "tok"
+
+    async def _get_site(*a):
+        return site
+
+    async def _latest(session, token, hw, face):
+        calls.append((hw, face))
+        return None  # up to date
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _login)
+    monkeypatch.setattr(coordinator_mod, "async_get_site", _get_site)
+    monkeypatch.setattr(coordinator_mod, "async_get_available_firmware", _latest)
+
+    await c.async_refresh_firmware()
+    assert sorted(calls) == [(1, "0"), (70, None)]  # one lookup per distinct (hardware, faceplate)
+    assert set(c.firmware) == {"d1", "d2", "w1"}  # sensors covered, not just outputs
+    assert c.firmware["w1"].update_available is False and c.firmware["w1"].latest_version is None
+
+
+async def test_refresh_firmware_tolerates_one_failed_lookup(monkeypatch):
+    c = PlejdCoordinator(_hass(), _cloud_entry())
+    site = _fw_site(
+        {
+            "d1": ("6.40.0", 20251201000000, 1, "0"),  # this hardware's lookup will raise
+            "w1": ("4.41.3", 20240910153670, 70, None),  # this one succeeds
+        }
+    )
+
+    async def _login(*a):
+        return "tok"
+
+    async def _get_site(*a):
+        return site
+
+    async def _latest(session, token, hw, face):
+        if hw == 1:
+            raise coordinator_mod.PlejdAuthError("boom")  # one flaky combo
+        return ("4.42.0", 20260101000000)
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _login)
+    monkeypatch.setattr(coordinator_mod, "async_get_site", _get_site)
+    monkeypatch.setattr(coordinator_mod, "async_get_available_firmware", _latest)
+
+    await c.async_refresh_firmware()
+    # the whole refresh survives: every device still gets a status
+    assert set(c.firmware) == {"d1", "w1"}
+    assert c.firmware["d1"].latest_version is None  # failed lookup -> treated as up to date
+    assert c.firmware["w1"].update_available is True  # the successful one still resolves
+
+
+async def test_refresh_firmware_no_credentials_is_noop(monkeypatch):
+    c = PlejdCoordinator(_hass(), _entry())  # no CONF_EMAIL / CONF_PASSWORD
+
+    async def _boom(*a):
+        raise AssertionError("must not log in without credentials")
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _boom)
+    await c.async_refresh_firmware()
+    assert c.firmware == {}
+
+
+async def test_firmware_check_swallows_errors(monkeypatch):
+    c = PlejdCoordinator(_hass(), _cloud_entry())
+
+    async def _boom(*a):
+        raise RuntimeError("cloud down")
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _boom)
+    await c._async_firmware_check(None)  # best-effort: no exception
+    assert c.firmware == {}
+
+
+def test_schedule_firmware_checks_registers_timers_once():
+    c = PlejdCoordinator(_hass(), _cloud_entry())
+    c._schedule_firmware_checks()
+    daily, one_shot = c._firmware_unsub, c._firmware_now_unsub
+    assert daily is not None and one_shot is not None
+    c._schedule_firmware_checks()  # a second start must not re-register
+    assert c._firmware_unsub is daily and c._firmware_now_unsub is one_shot
+
+
+async def test_one_shot_handle_cleared_after_firing(monkeypatch):
+    c = PlejdCoordinator(_hass(), _cloud_entry())
+    c._firmware_now_unsub = lambda: None
+
+    async def _noop(*a):
+        return None
+
+    monkeypatch.setattr(c, "async_refresh_firmware", _noop)
+    await c._async_firmware_check(None)
+    assert c._firmware_now_unsub is None  # cleared once the one-shot fires
+
+
+async def test_shutdown_cancels_both_firmware_timers():
+    c = PlejdCoordinator(_hass(), _cloud_entry())
+    cancelled = []
+    c._firmware_unsub = lambda: cancelled.append("daily")
+    c._firmware_now_unsub = lambda: cancelled.append("one_shot")
+    await c.async_shutdown()
+    assert sorted(cancelled) == ["daily", "one_shot"]
+    assert c._firmware_unsub is None and c._firmware_now_unsub is None
