@@ -25,8 +25,9 @@ PLATFORMS: list[Platform] = [
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     coordinator = PlejdCoordinator(hass, entry)
-    await coordinator.async_start()
+    # Assign before connecting so diagnostics work even while setup is still failing.
     entry.runtime_data = coordinator
+    await coordinator.async_start()
     try:
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     except Exception:
