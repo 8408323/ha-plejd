@@ -129,7 +129,7 @@ def set_output_speed(address: int, output: int, seconds: float) -> bytes:
         steps = max(0, min(0xFFFF, round(0xFFFF / seconds / 100)))
         lo, hi = steps & 0xFF, (steps >> 8) & 0xFF
         if seconds > 0.5:
-            hi |= 0x80
+            hi = (hi & 0x7F) | 0x80  # bit 7 is the >0.5s flag, not part of the step count
     return encode_command(address, CMD_OUTPUT_SPEED, bytes([output & 0xFF, lo, hi]), command_type=TYPE_DONT_RESPOND)
 
 

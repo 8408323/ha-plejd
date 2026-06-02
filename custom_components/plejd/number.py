@@ -24,7 +24,7 @@ from .coordinator import PlejdCoordinator
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> None:
-    """Set up Plejd dim-level settings (one min + one max per dimmable output)."""
+    """Set up Plejd dimmer settings (min + max brightness + transition time per dimmable output)."""
     coordinator: PlejdCoordinator = entry.runtime_data
     entities: list[RestoreNumber] = []
     for device in coordinator.devices:
