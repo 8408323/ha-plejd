@@ -30,6 +30,7 @@ class _Coordinator:
         self.devices = devices
         self.min_calls = []
         self.max_calls = []
+        self.start_calls = []
         self.speed_calls = []
 
     async def async_set_output_min_level(self, address, output, fraction):
@@ -37,6 +38,9 @@ class _Coordinator:
 
     async def async_set_output_max_level(self, address, output, fraction):
         self.max_calls.append((address, output, fraction))
+
+    async def async_set_output_start_level(self, address, output, fraction):
+        self.start_calls.append((address, output, fraction))
 
     async def async_set_output_speed(self, address, output, seconds):
         self.speed_calls.append((address, output, seconds))
@@ -54,9 +58,14 @@ async def test_setup_creates_settings_only_for_dimmable_lights():
     entry = types.SimpleNamespace(runtime_data=coord)
     added = []
     await async_setup_entry(None, entry, lambda entities: added.extend(entities))
-    # One dimmable light -> a min + a max + a transition-time entity.
-    assert len(added) == 3
-    assert {e._attr_translation_key for e in added} == {"min_dim_level", "max_dim_level", "transition_time"}
+    # One dimmable light -> min + max + start brightness + a transition-time entity.
+    assert len(added) == 4
+    assert {e._attr_translation_key for e in added} == {
+        "min_dim_level",
+        "max_dim_level",
+        "start_level",
+        "transition_time",
+    }
 
 
 def test_attributes_and_unique_id():
@@ -68,15 +77,18 @@ def test_attributes_and_unique_id():
     assert (minimum._attr_native_min_value, minimum._attr_native_max_value) == (0, 100)
 
 
-async def test_set_value_routes_to_min_or_max_setter_as_fraction():
+async def test_set_value_routes_to_kind_setter_as_fraction():
     coord = _Coordinator([])
     minimum = PlejdDimLevelNumber(coord, _device(), "min")
     maximum = PlejdDimLevelNumber(coord, _device(), "max")
+    start = PlejdDimLevelNumber(coord, _device(), "start")
     await minimum.async_set_native_value(20)
     await maximum.async_set_native_value(80)
+    await start.async_set_native_value(40)
     assert coord.min_calls == [(5, 0, 0.2)]
     assert coord.max_calls == [(5, 0, 0.8)]
-    assert minimum._attr_native_value == 20
+    assert coord.start_calls == [(5, 0, 0.4)]
+    assert start._attr_translation_key == "start_level" and start._attr_unique_id == "d1_start_level"
 
 
 async def test_restores_last_value_on_add():

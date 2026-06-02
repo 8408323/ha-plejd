@@ -591,7 +591,12 @@ async def test_cover_commands(monkeypatch):
 
 
 async def test_dim_level_settings(monkeypatch):
-    from plejd.const import CMD_OUTPUT_MAX_LEVEL, CMD_OUTPUT_MIN_LEVEL, CMD_OUTPUT_SPEED
+    from plejd.const import (
+        CMD_OUTPUT_MAX_LEVEL,
+        CMD_OUTPUT_MIN_LEVEL,
+        CMD_OUTPUT_SPEED,
+        CMD_OUTPUT_START_LEVEL,
+    )
     from plejd.protocol import decode_command
 
     client = _FakeClient()
@@ -609,6 +614,9 @@ async def test_dim_level_settings(monkeypatch):
     await c.async_set_output_speed(9, 1, 1.0)
     speed = decode_command(c._connection.mesh.decrypt(client.writes[-1][1]))
     assert speed.command == CMD_OUTPUT_SPEED and speed.data == bytes([1, 0x8F, 0x82])
+    await c.async_set_output_start_level(9, 1, 0.5)
+    start = decode_command(c._connection.mesh.decrypt(client.writes[-1][1]))
+    assert start.command == CMD_OUTPUT_START_LEVEL and start.data == bytes([1, 0x00, 0x80])
 
 
 def _expected_clock_bytes():
