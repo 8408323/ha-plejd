@@ -7,6 +7,10 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Dimmer transition time.** A per-output *Transition time* config number (seconds)
+  controls how fast a dimmer fades (`SetOutputSpeed`, opcode `0x00CB`). Validated on
+  real hardware (an 8-second fade-in was observed). Joins the existing min/max
+  brightness, dimming-curve, and phase-edge dimmer settings.
 - **Remote gateway transport.** When the site has a Plejd Gateway (GWY-01),
   control runs over Plejd's cloud WebSocket (`wss://ws-ie.api.plejd.cloud`) so it
   works even when Home Assistant is out of Bluetooth range. The coordinator picks
