@@ -1,10 +1,11 @@
 # Plejd firmware update (DFU) — protocol notes
 
 How the Plejd app updates device firmware ("Update firmware" in the app). This is
-**reverse-engineered from our own decompile of the Android app and our GATT
-capture** — no third-party source. Nothing here has been exercised against a
-device; it documents the wire protocol so an HA `update` entity could be designed.
-We do **not** flash devices today (see *Why we don't ship this* below).
+**reverse-engineered from our own analysis of the Android app and our GATT
+capture** — no third-party source, and described here in our own words (no app
+identifiers). Nothing here has been exercised against a device; it documents the
+wire protocol so an HA `update` entity could be designed. We do **not** flash
+devices today (see *Why we don't ship this* below).
 
 ## Shape
 
@@ -23,10 +24,10 @@ the *bootloader*, which then exposes a separate DFU GATT service.
 In application mode the app writes a 4-byte **EnterDFU** mesh command to the
 DeviceFirmwareUpdate characteristic and the device reboots into its bootloader:
 
-- char `0007` → `PLEJD_CHAR_DFU_UUID` (`DeviceFirmwareUpdate`), the same one in
-  `const.py`.
-- payload: `BleCommands.EnterDFUCommand` (a 4-byte mesh command; exact bytes to be
-  confirmed from a live capture — it is a precomputed constant in the app).
+- char `0007` → `PLEJD_CHAR_DFU_UUID` (the firmware-update characteristic), the
+  same one in `const.py`.
+- payload: a fixed 4-byte enter-DFU mesh command (exact bytes to be confirmed from
+  a live capture).
 
 After reboot the device advertises the DFU service and the app reconnects to it.
 
@@ -91,25 +92,24 @@ characteristic (`2BF01532`).
 
 ## Compression
 
-Images are **heatshrink**-compressed before transfer (`HeatshrinkEncoder` in the
-app; LZSS-family, window/lookahead configured by the app). The init packet's CRC
-is over the **raw** (decompressed) image; `GetFirmwareLengthPayload` carries both
-the compressed length (what's actually sent) and the raw length (what the device
-decompresses to and CRC-checks).
+Images are **heatshrink**-compressed before transfer (an LZSS-family scheme; the
+window/lookahead are fixed by the app). The init packet's CRC is over the **raw**
+(decompressed) image; the image-size payload carries both the compressed length
+(what's actually sent) and the raw length (what the device decompresses to and
+CRC-checks).
 
 ## Cloud side — getting the image
 
 The firmware binaries are not in the app; they're downloaded from Plejd's cloud
 keyed on the device **hardware id**:
 
-- `FirmwareAssetController.DownloadAndTransferFirmwareAsset` downloads the asset
-  blob for a device, then runs the BLE transfer above.
-- `FirmwareController.IsCompatible(buildTime, hardwareId, meshCommand)` gates
-  whether a given firmware build supports a given mesh command — the same check
-  the app uses to decide if a feature (or an update) is available.
-- The asset metadata trailer carries the CRC-16 used in the init packet
-  (`new PlejdFirmwareImage(rawImage, metaData)` reads the CRC from the last 2
-  bytes of `metaData`).
+- The app fetches the firmware asset (image + metadata) for a device, then runs
+  the BLE transfer above.
+- A firmware-compatibility check (keyed on build time + hardware id) decides
+  whether a build supports a given mesh command — the same gate the app uses to
+  decide if a feature, or an update, is available.
+- The asset's metadata trailer carries the CRC-16 used in the init packet (its
+  last 2 bytes).
 
 Fetching an asset uses the authenticated cloud session (the same login that
 returns the crypto key + device list). The exact cloud-function name still needs
