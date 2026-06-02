@@ -277,14 +277,17 @@ async def test_initial_state_read_one_per_address(monkeypatch):
     )
     c = PlejdCoordinator(hass, entry)
     await c.async_start()
-    # one state-read written per unique non-None address (addr 5); None + duplicate skipped.
-    # (Other DATA writes after connect — e.g. clock sync — are not reads.)
+    # one output-state read written per unique non-None address (addr 5); None + duplicate skipped.
+    # (Other DATA reads after connect — e.g. the NotifyEvents health poll — use a different opcode.)
+    from plejd.const import CMD_OUTPUT_STATE_AND_LEVEL
     from plejd.protocol import TYPE_READ, decode_command
 
     reads = [
-        w
+        cmd
         for w in client.writes
-        if w[0] == PLEJD_CHAR_DATA_UUID and decode_command(c._connection.mesh.decrypt(w[1])).command_type == TYPE_READ
+        if w[0] == PLEJD_CHAR_DATA_UUID
+        for cmd in [decode_command(c._connection.mesh.decrypt(w[1]))]
+        if cmd.command_type == TYPE_READ and cmd.command == CMD_OUTPUT_STATE_AND_LEVEL
     ]
     assert len(reads) == 1
 
@@ -702,3 +705,38 @@ async def test_dimmer_tuning_settings(monkeypatch):
     await c.async_set_output_phase_dim(9, 1, 1)
     ph = decode_command(c._connection.mesh.decrypt(client.writes[-1][1]))
     assert ph.command == CMD_OUTPUT_PHASE_DIM_TYPE and ph.data == bytes([1, 1])
+
+
+def test_fault_event_routes_to_listeners():
+    from plejd.const import CMD_NOTIFY_EVENTS
+    from plejd.protocol import Command
+
+    c = PlejdCoordinator(_hass(), _entry())
+    seen = []
+    remove = c.async_add_fault_listener(lambda addr, faults: seen.append((addr, faults)))
+    c._on_event(Command(address=5, command_type=0x03, command=CMD_NOTIFY_EVENTS, data=(0x8).to_bytes(8, "little")))
+    assert c.faults_for(5) == frozenset({"overtemperature"})
+    assert seen == [(5, frozenset({"overtemperature"}))]
+    remove()
+    assert c.faults_for(99) == frozenset()  # unknown address -> empty
+
+
+async def test_poll_faults_reads_each_device(monkeypatch):
+    from plejd.const import CMD_NOTIFY_EVENTS
+    from plejd.protocol import TYPE_READ, decode_command
+
+    client = _FakeClient()
+    _patch_connect(monkeypatch, client)
+    ble = types.SimpleNamespace(address="01:02:03:04:05:a0")
+    hass = _hass([_info("01:02:03:04:05:a0")], {"01:02:03:04:05:a0": ble})
+    c = PlejdCoordinator(hass, _entry(discovered=None))
+    await c.async_start()  # sets up the poll and does an initial fault read
+    reads = [decode_command(c._connection.mesh.decrypt(w[1])) for w in client.writes if w[0] == PLEJD_CHAR_DATA_UUID]
+    notify = [r for r in reads if r.command == CMD_NOTIFY_EVENTS]
+    assert notify and notify[0].command_type == TYPE_READ and notify[0].address == 5
+
+
+async def test_poll_faults_best_effort_when_not_connected():
+    c = PlejdCoordinator(_hass(), _entry())  # never connected -> _write_vector raises
+    await c._async_poll_faults(None)  # swallowed, no exception propagates
+    assert c.faults_for(5) == frozenset()
