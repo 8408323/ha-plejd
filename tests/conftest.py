@@ -294,6 +294,7 @@ except ImportError:
 
     class _SensorDeviceClass(str, enum.Enum):
         ILLUMINANCE = "illuminance"
+        ENUM = "enum"
 
     class _SensorStateClass(str, enum.Enum):
         MEASUREMENT = "measurement"
