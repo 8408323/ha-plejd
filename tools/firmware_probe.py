@@ -1,8 +1,8 @@
 """Read-only probe of the Plejd firmware wire shapes (for the update entity).
 
 Logs in (Parse), then inspects two things WITHOUT changing anything on a device:
-  1. getSiteById  -> the per-device `firmware` sub-object (installed version)
-  2. checkForFirmwareUpdate {devices:[...]} -> latest available firmware per device
+  1. getSiteById -> the per-device `firmware` sub-object (installed version)
+  2. getFirmwaresByHardwareId {hardwareId, faceplateId} -> available firmware
 
 Prints only structure + version/buildTime/hardwareId; device ids are masked, names
 and asset URLs are redacted. Confirms the keys before we bake them into cloud.py.
@@ -68,19 +68,13 @@ async def main() -> int:
 
         print("\n[2/3] getSiteById -> per-device `firmware` (installed)")
         phys = raw_site.get("plejdDevices") or []
-        device_ids: list[str] = []
         for d in phys:
-            device_id = d.get("deviceId")
-            if device_id is not None:
-                device_ids.append(device_id)
             fw = d.get("firmware")
-            fw_desc = _shape(fw)
-            ver = bt = None
-            if isinstance(fw, dict):
-                ver = fw.get("version")
-                bt = fw.get("buildTime") or fw.get("notificationId")
+            ver = fw.get("version") if isinstance(fw, dict) else None
+            bt = fw.get("buildTime") if isinstance(fw, dict) else None
             print(
-                f"      dev {_mask(device_id)} hw={d.get('hardwareId')} firmware={fw_desc} version={ver} buildTime={bt}"
+                f"      dev {_mask(d.get('deviceId'))} hw={d.get('hardwareId')} "
+                f"firmware={_shape(fw)} version={ver} buildTime={bt}"
             )
 
         hw_face: dict[tuple, int] = {}
@@ -93,7 +87,7 @@ async def main() -> int:
         for (hw, face), count in hw_face.items():
             try:
                 val = await cloud._call_function(
-                    session, token, "functions/getFirmwaresByHardwareId", {"hardwareId": hw, "faceplateId": face}
+                    session, token, const.PLEJD_FN_FIRMWARE_BY_HW, {"hardwareId": hw, "faceplateId": face}
                 )
             except cloud.PlejdCloudError as err:
                 print(f"      hw={hw} face={_mask(face)} n={count} -> ERROR {err}")

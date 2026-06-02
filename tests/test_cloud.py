@@ -215,7 +215,7 @@ def test_parse_site_handles_missing_address_and_hardware():
     assert site.title == "Plejd"  # default
 
 
-def test_parse_site_extracts_firmware_and_faceplate():
+def test_parse_site_firmware_by_device_covers_all_physical_devices():
     site = parse_site(
         {
             "plejdMesh": {"cryptoKey": "00" * 16},
@@ -226,32 +226,36 @@ def test_parse_site_extracts_firmware_and_faceplate():
                     "faceplateId": 7,
                     "firmware": {"version": "6.43.3", "buildTime": 20260324155701},
                 },
+                {"deviceId": "w1", "hardwareId": "70", "firmware": {"version": "4.41.3", "buildTime": 20240910153670}},
+                {"deviceId": "gw1", "hardwareId": "4"},  # gateway: present even with no output
             ],
-            "devices": [{"deviceId": "d1", "outputType": "LIGHT"}],
+            "devices": [{"deviceId": "d1", "outputType": "LIGHT"}],  # only d1 is a controllable output
         }
     )
-    dev = site.devices[0]
-    assert dev.firmware_version == "6.43.3"
-    assert dev.firmware_build_time == 20260324155701
-    assert dev.faceplate_id == "7"
+    fw = site.firmware_by_device
+    assert set(fw) == {"d1", "w1", "gw1"}  # sensors + gateway covered, not just outputs
+    assert fw["d1"].version == "6.43.3" and fw["d1"].build_time == 20260324155701
+    assert fw["d1"].hardware_id == 1 and fw["d1"].faceplate_id == "7"
+    assert fw["w1"].version == "4.41.3"
 
 
-def test_parse_site_tolerates_missing_or_garbage_firmware():
+def test_parse_site_firmware_tolerates_missing_or_garbage():
     site = parse_site(
         {
             "plejdMesh": {"cryptoKey": "00" * 16},
             "plejdDevices": [
                 {"deviceId": "a", "hardwareId": "1"},  # no firmware/faceplate at all
                 {"deviceId": "b", "hardwareId": "1", "firmware": {"version": 5, "buildTime": "nope"}},
+                {"hardwareId": "1"},  # no deviceId -> skipped
             ],
-            "devices": [{"deviceId": "a", "outputType": "LIGHT"}, {"deviceId": "b", "outputType": "LIGHT"}],
+            "devices": [],
         }
     )
-    by_id = {d.device_id: d for d in site.devices}
-    assert by_id["a"].firmware_version is None and by_id["a"].firmware_build_time is None
-    assert by_id["a"].faceplate_id is None
-    assert by_id["b"].firmware_version is None  # non-str version dropped
-    assert by_id["b"].firmware_build_time is None  # non-numeric buildTime dropped
+    fw = site.firmware_by_device
+    assert set(fw) == {"a", "b"}
+    assert fw["a"].version is None and fw["a"].build_time is None and fw["a"].faceplate_id is None
+    assert fw["b"].version is None  # non-str version dropped
+    assert fw["b"].build_time is None  # non-numeric buildTime dropped
 
 
 async def test_available_firmware_returns_newest_offered():

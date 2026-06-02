@@ -15,8 +15,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .cloud import PlejdCloudDevice
-from .const import DOMAIN
+from .const import DOMAIN, HARDWARE_TYPES, HARDWARE_WMS_01
 from .coordinator import PlejdCoordinator
 
 UPDATE_WARNING = (
@@ -27,15 +26,20 @@ UPDATE_WARNING = (
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> None:
-    """Set up one firmware-status entity per physical Plejd device."""
+    """Set up one firmware-status entity per physical Plejd device (outputs + sensors)."""
     coordinator: PlejdCoordinator = entry.runtime_data
     seen: set[str] = set()
     entities: list[PlejdFirmwareUpdate] = []
     for device in coordinator.devices:
-        if device.device_id in seen:
-            continue
-        seen.add(device.device_id)
-        entities.append(PlejdFirmwareUpdate(coordinator, device))
+        if device.device_id not in seen:
+            seen.add(device.device_id)
+            entities.append(PlejdFirmwareUpdate(coordinator, device.device_id, device.name, device.model))
+    for sensor in coordinator.motion:
+        if sensor.device_id not in seen:
+            seen.add(sensor.device_id)
+            entities.append(
+                PlejdFirmwareUpdate(coordinator, sensor.device_id, sensor.name, HARDWARE_TYPES[HARDWARE_WMS_01])
+            )
     async_add_entities(entities)
 
 
@@ -48,15 +52,15 @@ class PlejdFirmwareUpdate(UpdateEntity):
     _attr_device_class = UpdateDeviceClass.FIRMWARE
     _attr_release_summary = UPDATE_WARNING
 
-    def __init__(self, coordinator: PlejdCoordinator, device: PlejdCloudDevice) -> None:
+    def __init__(self, coordinator: PlejdCoordinator, device_id: str, name: str, model: str) -> None:
         self._coordinator = coordinator
-        self._device_id = device.device_id
-        self._attr_unique_id = f"firmware_{device.device_id}"
+        self._device_id = device_id
+        self._attr_unique_id = f"firmware_{device_id}"
         self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, device.device_id)},
-            name=device.name,
+            identifiers={(DOMAIN, device_id)},
+            name=name,
             manufacturer="Plejd",
-            model=device.model,
+            model=model,
         )
 
     @property

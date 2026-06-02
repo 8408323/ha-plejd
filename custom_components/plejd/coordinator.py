@@ -129,6 +129,7 @@ class PlejdCoordinator:
         self.firmware: dict[str, PlejdFirmwareStatus] = {}  # device_id -> firmware status
         self._clock_unsub: Callable[[], None] | None = None
         self._firmware_unsub: Callable[[], None] | None = None
+        self._firmware_now_unsub: Callable[[], None] | None = None
         self._available = False
         self._active: str | None = None  # "gateway" | "ble"
         self._closed = False
@@ -231,20 +232,22 @@ class PlejdCoordinator:
 
     def _schedule_firmware_checks(self) -> None:
         """Check firmware shortly after start, then daily; both are best-effort."""
-        async_call_later(self.hass, 0, self._async_firmware_check)
-        if self._firmware_unsub is None:
-            self._firmware_unsub = async_track_time_interval(
-                self.hass, self._async_firmware_check, FIRMWARE_REFRESH_INTERVAL
-            )
+        if self._firmware_unsub is not None:
+            return  # already scheduled (e.g. a second async_start)
+        self._firmware_now_unsub = async_call_later(self.hass, 0, self._async_firmware_check)
+        self._firmware_unsub = async_track_time_interval(
+            self.hass, self._async_firmware_check, FIRMWARE_REFRESH_INTERVAL
+        )
 
     async def _async_firmware_check(self, _now: object) -> None:
+        self._firmware_now_unsub = None  # the one-shot has fired
         try:
             await self.async_refresh_firmware()
         except Exception:  # noqa: BLE001 - firmware detection is auxiliary and cloud-dependent
             _LOGGER.debug("Plejd firmware check failed", exc_info=True)
 
     async def async_refresh_firmware(self) -> None:
-        """Refresh installed vs. latest firmware per device from the Plejd cloud."""
+        """Refresh installed vs. latest firmware for every physical device from the cloud."""
         if not self._email or not self._password:
             return
         session = async_get_clientsession(self.hass)
@@ -252,18 +255,16 @@ class PlejdCoordinator:
         site = await async_get_site(session, token, self.site_id)
         latest_by_hw: dict[tuple[int, str | None], tuple[str, int] | None] = {}
         status: dict[str, PlejdFirmwareStatus] = {}
-        for device in site.devices:
-            if device.device_id in status:
-                continue
-            key = (device.hardware_id, device.faceplate_id)
+        for device_id, firmware in site.firmware_by_device.items():
+            key = (firmware.hardware_id, firmware.faceplate_id)
             if key not in latest_by_hw:
                 latest_by_hw[key] = await async_get_available_firmware(
-                    session, token, device.hardware_id, device.faceplate_id
+                    session, token, firmware.hardware_id, firmware.faceplate_id
                 )
             latest = latest_by_hw[key]
-            status[device.device_id] = PlejdFirmwareStatus(
-                installed_version=device.firmware_version,
-                installed_build_time=device.firmware_build_time,
+            status[device_id] = PlejdFirmwareStatus(
+                installed_version=firmware.version,
+                installed_build_time=firmware.build_time,
                 latest_version=latest[0] if latest else None,
                 latest_build_time=latest[1] if latest else None,
             )
@@ -476,6 +477,9 @@ class PlejdCoordinator:
         if self._firmware_unsub is not None:
             self._firmware_unsub()
             self._firmware_unsub = None
+        if self._firmware_now_unsub is not None:
+            self._firmware_now_unsub()
+            self._firmware_now_unsub = None
         if self._reconnect_task is not None:
             self._reconnect_task.cancel()
             self._reconnect_task = None

@@ -712,25 +712,14 @@ async def test_dimmer_tuning_settings(monkeypatch):
     assert ph.command == CMD_OUTPUT_PHASE_DIM_TYPE and ph.data == bytes([1, 1])
 
 
-def _cloud_device(device_id, hw=1, face="0", version="6.40.0", build_time=20251201000000):
-    from plejd.cloud import PlejdCloudDevice
+def _fw_site(firmware_by_device):
+    from plejd.cloud import PlejdDeviceFirmware
 
-    return PlejdCloudDevice(
-        device_id=device_id,
-        name=device_id,
-        address=5,
-        output_index=0,
-        outputs=[5],
-        hardware_id=hw,
-        model="DIM-01",
-        category="light",
-        dimmable=True,
-        traits=3,
-        room_id="r1",
-        faceplate_id=face,
-        firmware_version=version,
-        firmware_build_time=build_time,
-    )
+    fw = {
+        device_id: PlejdDeviceFirmware(version=v, build_time=bt, hardware_id=hw, faceplate_id=face)
+        for device_id, (v, bt, hw, face) in firmware_by_device.items()
+    }
+    return types.SimpleNamespace(firmware_by_device=fw)
 
 
 def _cloud_entry():
@@ -749,7 +738,7 @@ def _cloud_entry():
 
 async def test_refresh_firmware_populates_status(monkeypatch):
     c = PlejdCoordinator(_hass(), _cloud_entry())
-    site = types.SimpleNamespace(devices=[_cloud_device("d1")])
+    site = _fw_site({"d1": ("6.40.0", 20251201000000, 1, "0")})
 
     async def _login(*a):
         return "tok"
@@ -770,10 +759,16 @@ async def test_refresh_firmware_populates_status(monkeypatch):
     assert status.latest_version == "6.43.3" and status.update_available is True
 
 
-async def test_refresh_firmware_caches_per_hardware_and_dedups_devices(monkeypatch):
+async def test_refresh_firmware_caches_lookups_per_hardware(monkeypatch):
     c = PlejdCoordinator(_hass(), _cloud_entry())
-    # two outputs of the same physical device d1 (dedup) + a second device d2 same hardware (cache)
-    site = types.SimpleNamespace(devices=[_cloud_device("d1"), _cloud_device("d1"), _cloud_device("d2")])
+    # two devices sharing one (hardware, faceplate) + a motion sensor on different hardware
+    site = _fw_site(
+        {
+            "d1": ("6.40.0", 20251201000000, 1, "0"),
+            "d2": ("6.40.0", 20251201000000, 1, "0"),
+            "w1": ("4.41.3", 20240910153670, 70, None),
+        }
+    )
     calls = []
 
     async def _login(*a):
@@ -791,9 +786,9 @@ async def test_refresh_firmware_caches_per_hardware_and_dedups_devices(monkeypat
     monkeypatch.setattr(coordinator_mod, "async_get_available_firmware", _latest)
 
     await c.async_refresh_firmware()
-    assert calls == [(1, "0")]  # one lookup for the shared (hardware, faceplate)
-    assert set(c.firmware) == {"d1", "d2"}
-    assert c.firmware["d1"].update_available is False and c.firmware["d1"].latest_version is None
+    assert sorted(calls) == [(1, "0"), (70, None)]  # one lookup per distinct (hardware, faceplate)
+    assert set(c.firmware) == {"d1", "d2", "w1"}  # sensors covered, not just outputs
+    assert c.firmware["w1"].update_available is False and c.firmware["w1"].latest_version is None
 
 
 async def test_refresh_firmware_no_credentials_is_noop(monkeypatch):
@@ -818,15 +813,32 @@ async def test_firmware_check_swallows_errors(monkeypatch):
     assert c.firmware == {}
 
 
-def test_schedule_firmware_checks_registers_daily_timer():
+def test_schedule_firmware_checks_registers_timers_once():
     c = PlejdCoordinator(_hass(), _cloud_entry())
     c._schedule_firmware_checks()
-    assert c._firmware_unsub is not None
+    daily, one_shot = c._firmware_unsub, c._firmware_now_unsub
+    assert daily is not None and one_shot is not None
+    c._schedule_firmware_checks()  # a second start must not re-register
+    assert c._firmware_unsub is daily and c._firmware_now_unsub is one_shot
 
 
-async def test_shutdown_cancels_firmware_timer():
+async def test_one_shot_handle_cleared_after_firing(monkeypatch):
+    c = PlejdCoordinator(_hass(), _cloud_entry())
+    c._firmware_now_unsub = lambda: None
+
+    async def _noop(*a):
+        return None
+
+    monkeypatch.setattr(c, "async_refresh_firmware", _noop)
+    await c._async_firmware_check(None)
+    assert c._firmware_now_unsub is None  # cleared once the one-shot fires
+
+
+async def test_shutdown_cancels_both_firmware_timers():
     c = PlejdCoordinator(_hass(), _cloud_entry())
     cancelled = []
-    c._firmware_unsub = lambda: cancelled.append(True)
+    c._firmware_unsub = lambda: cancelled.append("daily")
+    c._firmware_now_unsub = lambda: cancelled.append("one_shot")
     await c.async_shutdown()
-    assert cancelled == [True] and c._firmware_unsub is None
+    assert sorted(cancelled) == ["daily", "one_shot"]
+    assert c._firmware_unsub is None and c._firmware_now_unsub is None
