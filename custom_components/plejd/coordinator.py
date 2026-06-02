@@ -97,6 +97,7 @@ class PlejdCoordinator:
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         self.hass = hass
+        self._entry = entry  # for runtime reauth (e.g. a rename hitting expired credentials)
         # Tolerate entries stored before a field existed (e.g. output_index).
         self.devices = [PlejdCloudDevice(**{"output_index": 0, **device}) for device in entry.data[CONF_DEVICES]]
         self.scenes = [PlejdCloudScene(**scene) for scene in entry.data.get(CONF_SCENES, [])]
@@ -326,6 +327,9 @@ class PlejdCoordinator:
             return
         try:
             await self.async_rename_device(plejd_id, name)
+        except PlejdAuthError:
+            # No gateway connect path exists in BLE-only setups, so prompt reauth here.
+            self._entry.async_start_reauth(self.hass)
         except Exception:  # noqa: BLE001 - mirroring a rename is auxiliary and must never disrupt HA
             _LOGGER.warning("Plejd: could not mirror the device rename to the Plejd app", exc_info=True)
 

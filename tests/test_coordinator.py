@@ -1087,3 +1087,20 @@ async def test_registry_update_swallows_rename_errors(monkeypatch):
 
     monkeypatch.setattr(c, "async_rename_device", _boom)
     await c.async_handle_device_registry_update(_reg_event(changes={"name_by_user": "x"}))  # no exception
+
+
+async def test_registry_update_triggers_reauth_on_auth_error(monkeypatch):
+    from plejd.const import DOMAIN
+
+    hass = _hass()
+    c = PlejdCoordinator(hass, _cloud_entry())
+    started = []
+    c._entry = types.SimpleNamespace(async_start_reauth=lambda h: started.append(h))
+    hass.device_registry = _FakeRegistry(_FakeDevice({(DOMAIN, "d1")}, "New"))
+
+    async def _auth_fail(*a):
+        raise coordinator_mod.PlejdAuthError("bad creds")
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _auth_fail)
+    await c.async_handle_device_registry_update(_reg_event(changes={"name_by_user": "x"}))
+    assert started == [hass]  # reauth flow prompted instead of silently swallowed
