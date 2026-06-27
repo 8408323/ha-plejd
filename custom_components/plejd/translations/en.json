@@ -20,6 +20,10 @@
         "data": {
           "password": "Password"
         }
+      },
+      "reconfigure": {
+        "title": "Update Plejd device list",
+        "description": "Re-fetch all devices and scenes for this site from the Plejd cloud. Use this after adding new Plejd devices in the Plejd app."
       }
     },
     "error": {
@@ -29,7 +33,8 @@
     },
     "abort": {
       "already_configured": "This Plejd site is already configured.",
-      "reauth_successful": "Re-authentication was successful."
+      "reauth_successful": "Re-authentication was successful.",
+      "reconfigure_successful": "Device list updated — new devices are now available in Home Assistant."
     }
   },
   "entity": {
