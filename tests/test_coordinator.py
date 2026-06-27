@@ -14,8 +14,11 @@ from plejd.const import (
     CONF_DEVICES,
     CONF_DISCOVERED_ADDRESS,
     CONF_GATEWAYS,
+    CONF_INPUTS,
     CONF_INSTALLATION_ID,
+    CONF_MOTION,
     CONF_RESOURCE_SET_ID,
+    CONF_SCENES,
     CONF_SITE_ID,
     CONF_TRANSPORT,
     PLEJD_CHAR_DATA_UUID,
@@ -740,3 +743,163 @@ async def test_poll_faults_best_effort_when_not_connected():
     c = PlejdCoordinator(_hass(), _entry())  # never connected -> _write_vector raises
     await c._async_poll_faults(None)  # swallowed, no exception propagates
     assert c.faults_for(5) == frozenset()
+
+
+# --- cloud poll tests ---
+
+
+def _cloud_poll_entry():
+    """Entry with all site-derived fields populated, used for cloud-poll tests."""
+    return types.SimpleNamespace(
+        entry_id="e1",
+        data={
+            CONF_CRYPTO_KEY: _KEY_HEX,
+            CONF_DEVICES: [_DEV],
+            CONF_DISCOVERED_ADDRESS: None,
+            CONF_EMAIL: "user@example.com",
+            CONF_PASSWORD: "secret",
+            CONF_SITE_ID: "S1",
+            CONF_INPUTS: [],
+            CONF_MOTION: [],
+            CONF_SCENES: [],
+            CONF_GATEWAYS: [],
+            CONF_RESOURCE_SET_ID: None,
+        },
+    )
+
+
+def _fake_site(devices=None):
+    """A PlejdCloudSite-like object matching _DEV by default (no change)."""
+    from plejd.cloud import PlejdCloudSite
+
+    return PlejdCloudSite(
+        site_id="S1",
+        title="Villa",
+        crypto_key=bytes.fromhex(_KEY_HEX),
+        devices=devices
+        if devices is not None
+        else [__import__("plejd.cloud", fromlist=["PlejdCloudDevice"]).PlejdCloudDevice(**_DEV)],
+        inputs=[],
+        motion=[],
+        scenes=[],
+        gateways=[],
+        resource_set_id=None,
+    )
+
+
+async def test_cloud_poll_no_change_does_nothing(monkeypatch):
+    async def _login(session, email, password):
+        return "TOKEN"
+
+    async def _get_site(session, token, site_id):
+        return _fake_site()
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _login)
+    monkeypatch.setattr(coordinator_mod, "async_get_site", _get_site)
+
+    entry = _cloud_poll_entry()
+    updated = {}
+    reloaded = []
+    config_entries = types.SimpleNamespace(
+        async_get_entry=lambda eid: entry,
+        async_update_entry=lambda e, data: updated.update(data),
+        async_reload=lambda eid: reloaded.append(eid),
+    )
+    hass = _hass()
+    hass.session = object()
+    hass.config_entries = config_entries
+    c = PlejdCoordinator(hass, entry)
+    await c._async_poll_cloud(None)
+    assert not reloaded  # no difference → no reload
+
+
+async def test_cloud_poll_device_added_reloads(monkeypatch):
+    from plejd.cloud import PlejdCloudDevice
+
+    new_dev = PlejdCloudDevice(**{**_DEV, "device_id": "d2", "name": "Matbord", "address": 9})
+
+    async def _login(session, email, password):
+        return "TOKEN"
+
+    async def _get_site(session, token, site_id):
+        return _fake_site(devices=[PlejdCloudDevice(**_DEV), new_dev])
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _login)
+    monkeypatch.setattr(coordinator_mod, "async_get_site", _get_site)
+
+    entry = _cloud_poll_entry()
+    updated = {}
+
+    async def _reload(eid):
+        reloaded.append(eid)
+
+    reloaded = []
+    config_entries = types.SimpleNamespace(
+        async_get_entry=lambda eid: entry,
+        async_update_entry=lambda e, data: updated.update(data),
+        async_reload=_reload,
+    )
+    hass = _hass()
+    hass.session = object()
+    hass.config_entries = config_entries
+    c = PlejdCoordinator(hass, entry)
+    await c._async_poll_cloud(None)
+    assert reloaded == ["e1"]
+    assert len(updated[CONF_DEVICES]) == 2
+
+
+async def test_cloud_poll_auth_error_logs_warning(monkeypatch):
+    from plejd.cloud import PlejdAuthError
+
+    async def _login(session, email, password):
+        raise PlejdAuthError("bad creds")
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _login)
+
+    entry = _cloud_poll_entry()
+    reloaded = []
+    config_entries = types.SimpleNamespace(
+        async_get_entry=lambda eid: entry,
+        async_update_entry=lambda e, data: None,
+        async_reload=lambda eid: reloaded.append(eid),
+    )
+    hass = _hass()
+    hass.session = object()
+    hass.config_entries = config_entries
+    c = PlejdCoordinator(hass, entry)
+    await c._async_poll_cloud(None)  # must not raise
+    assert not reloaded
+
+
+async def test_cloud_poll_entry_gone_does_nothing(monkeypatch):
+    """Poll is a no-op when the entry has already been removed."""
+    config_entries = types.SimpleNamespace(
+        async_get_entry=lambda eid: None,
+    )
+    hass = _hass()
+    hass.config_entries = config_entries
+    c = PlejdCoordinator(hass, _cloud_poll_entry())
+    await c._async_poll_cloud(None)  # must not raise
+
+
+async def test_cloud_poll_cloud_error_skips_reload(monkeypatch):
+    from plejd.cloud import PlejdCloudError
+
+    async def _login(session, email, password):
+        raise PlejdCloudError("unreachable")
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _login)
+
+    entry = _cloud_poll_entry()
+    reloaded = []
+    config_entries = types.SimpleNamespace(
+        async_get_entry=lambda eid: entry,
+        async_update_entry=lambda e, data: None,
+        async_reload=lambda eid: reloaded.append(eid),
+    )
+    hass = _hass()
+    hass.session = object()
+    hass.config_entries = config_entries
+    c = PlejdCoordinator(hass, entry)
+    await c._async_poll_cloud(None)  # must not raise
+    assert not reloaded

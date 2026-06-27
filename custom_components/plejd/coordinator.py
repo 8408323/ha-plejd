@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable, Coroutine
+from dataclasses import asdict
 from datetime import timedelta
 from typing import Any
 
@@ -26,7 +27,16 @@ from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.util import dt as dt_util
 
 from . import protocol
-from .cloud import PlejdAuthError, PlejdCloudDevice, PlejdCloudInput, PlejdCloudMotion, PlejdCloudScene, async_login
+from .cloud import (
+    PlejdAuthError,
+    PlejdCloudDevice,
+    PlejdCloudError,
+    PlejdCloudInput,
+    PlejdCloudMotion,
+    PlejdCloudScene,
+    async_get_site,
+    async_login,
+)
 from .connection import PlejdConnection
 from .const import (
     CMD_GROUP_STATE_AND_LEVEL,
@@ -60,6 +70,7 @@ _LOGGER = logging.getLogger(__name__)
 RECONNECT_INITIAL_DELAY = 1.0
 RECONNECT_MAX_DELAY = 60.0
 NOTIFY_POLL_INTERVAL = timedelta(minutes=10)  # device-health (NotifyEvents) poll cadence
+CLOUD_POLL_INTERVAL = timedelta(hours=24)  # how often to check for site changes (added/renamed devices)
 
 
 class PlejdCoordinator:
@@ -76,6 +87,10 @@ class PlejdCoordinator:
         self.site_id = entry.data.get(CONF_SITE_ID, entry.entry_id)
         self._preferred = entry.data.get(CONF_DISCOVERED_ADDRESS)
         self._transport_pref = (getattr(entry, "options", None) or {}).get(CONF_TRANSPORT, TRANSPORT_AUTO)
+        self._email = entry.data.get(CONF_EMAIL, "")
+        self._password = entry.data.get(CONF_PASSWORD, "")
+        self._site_id = entry.data.get(CONF_SITE_ID, "")
+        self._entry_id = entry.entry_id
         self._connection = PlejdConnection(
             bytes.fromhex(entry.data[CONF_CRYPTO_KEY]), self._on_event, self._handle_disconnect
         )
@@ -84,8 +99,6 @@ class PlejdCoordinator:
         gateways = entry.data.get(CONF_GATEWAYS) or []
         resource_set_id = entry.data.get(CONF_RESOURCE_SET_ID)
         if gateways and resource_set_id:
-            self._email = entry.data[CONF_EMAIL]
-            self._password = entry.data[CONF_PASSWORD]
             self._gateway = PlejdGatewayConnection(
                 async_get_clientsession(hass),
                 entry.data[CONF_SITE_ID],
@@ -102,6 +115,7 @@ class PlejdCoordinator:
         self._faults: dict[int, frozenset[str]] = {}
         self._clock_unsub: Callable[[], None] | None = None
         self._faults_unsub: Callable[[], None] | None = None
+        self._cloud_poll_unsub: Callable[[], None] | None = None
         self._available = False
         self._active: str | None = None  # "gateway" | "ble"
         self._closed = False
@@ -220,6 +234,40 @@ class PlejdCoordinator:
     async def async_start(self) -> None:
         """Connect to the mesh — gateway-first when one exists, else BLE."""
         await self._async_select_and_connect()
+        self._cloud_poll_unsub = async_track_time_interval(
+            self.hass, self._async_poll_cloud, CLOUD_POLL_INTERVAL
+        )
+
+    async def _async_poll_cloud(self, _now: object) -> None:
+        """Detect site changes and reload the integration if anything differs."""
+        entry = self.hass.config_entries.async_get_entry(self._entry_id)
+        if entry is None:
+            return
+        session = async_get_clientsession(self.hass)
+        try:
+            token = await async_login(session, self._email, self._password)
+            site = await async_get_site(session, token, self._site_id)
+        except PlejdAuthError:
+            _LOGGER.warning("Plejd cloud poll: credentials rejected — use Reconfigure if this persists")
+            return
+        except PlejdCloudError:
+            _LOGGER.debug("Plejd cloud poll: cloud unreachable, will retry at next interval")
+            return
+        new_data = {
+            CONF_CRYPTO_KEY: site.crypto_key.hex(),
+            CONF_DEVICES: [asdict(d) for d in site.devices],
+            CONF_INPUTS: [asdict(i) for i in site.inputs],
+            CONF_MOTION: [asdict(m) for m in site.motion],
+            CONF_SCENES: [asdict(s) for s in site.scenes],
+            CONF_GATEWAYS: site.gateways,
+            CONF_RESOURCE_SET_ID: site.resource_set_id,
+        }
+        changed = [k for k, v in new_data.items() if entry.data.get(k) != v]
+        if not changed:
+            return
+        _LOGGER.info("Plejd site changed (%s) — reloading to apply updates", ", ".join(changed))
+        self.hass.config_entries.async_update_entry(entry, data={**entry.data, **new_data})
+        await self.hass.config_entries.async_reload(self._entry_id)
 
     async def _async_select_and_connect(self) -> None:
         """Connect over the chosen transport.
@@ -434,6 +482,9 @@ class PlejdCoordinator:
 
     async def async_shutdown(self) -> None:
         self._closed = True
+        if self._cloud_poll_unsub is not None:
+            self._cloud_poll_unsub()
+            self._cloud_poll_unsub = None
         if self._clock_unsub is not None:
             self._clock_unsub()
             self._clock_unsub = None
