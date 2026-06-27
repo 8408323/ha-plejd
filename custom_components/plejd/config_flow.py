@@ -128,6 +128,35 @@ class PlejdConfigFlow(ConfigFlow, domain=DOMAIN):
         schema = vol.Schema({vol.Required(CONF_SITE_ID): SelectSelector(SelectSelectorConfig(options=options))})
         return self.async_show_form(step_id="site", data_schema=schema)
 
+    async def async_step_reconfigure(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """Re-fetch the site's device list from the Plejd cloud."""
+        entry = self._get_reconfigure_entry()
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            session = async_get_clientsession(self.hass)
+            try:
+                token = await async_login(session, entry.data[CONF_EMAIL], entry.data[CONF_PASSWORD])
+                site = await async_get_site(session, token, entry.data[CONF_SITE_ID])
+            except PlejdAuthError:
+                errors["base"] = "invalid_auth"
+            except PlejdCloudError:
+                errors["base"] = "cannot_connect"
+            else:
+                return self.async_update_reload_and_abort(
+                    entry,
+                    data_updates={
+                        CONF_CRYPTO_KEY: site.crypto_key.hex(),
+                        CONF_DEVICES: [asdict(d) for d in site.devices],
+                        CONF_INPUTS: [asdict(i) for i in site.inputs],
+                        CONF_MOTION: [asdict(m) for m in site.motion],
+                        CONF_SCENES: [asdict(s) for s in site.scenes],
+                        CONF_GATEWAYS: site.gateways,
+                        CONF_RESOURCE_SET_ID: site.resource_set_id,
+                    },
+                    reason="reconfigure_successful",
+                )
+        return self.async_show_form(step_id="reconfigure", data_schema=vol.Schema({}), errors=errors)
+
     async def async_step_reauth(self, entry_data: dict[str, Any]) -> ConfigFlowResult:
         """Re-authentication started (e.g. the gateway rejected stored credentials)."""
         return await self.async_step_reauth_confirm()
@@ -146,7 +175,9 @@ class PlejdConfigFlow(ConfigFlow, domain=DOMAIN):
                 errors["base"] = "cannot_connect"
             else:
                 return self.async_update_reload_and_abort(
-                    entry, data_updates={CONF_PASSWORD: user_input[CONF_PASSWORD]}
+                    entry,
+                    data_updates={CONF_PASSWORD: user_input[CONF_PASSWORD]},
+                    reason="reauth_successful",
                 )
         return self.async_show_form(
             step_id="reauth_confirm",
