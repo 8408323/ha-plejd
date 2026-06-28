@@ -26,11 +26,20 @@ def _device(category="light", address=5, dimmable=True, output_index=0):
 
 
 class _Coordinator:
-    def __init__(self, devices):
+    def __init__(self, devices, settings=None):
         self.devices = devices
         self.min_calls = []
         self.max_calls = []
         self.speed_calls = []
+        self._settings = settings
+        self._listener = None
+
+    def settings_for(self, address):
+        return self._settings
+
+    def async_add_listener(self, cb):
+        self._listener = cb
+        return lambda: None
 
     async def async_set_output_min_level(self, address, output, fraction):
         self.min_calls.append((address, output, fraction))
@@ -96,6 +105,43 @@ async def test_no_restore_when_no_prior_state():
     assert getattr(entity, "_attr_native_value", None) is None
 
 
+async def test_init_uses_coordinator_settings_min():
+    from plejd.protocol import OutputSettings
+
+    settings = OutputSettings(min_level=20.0, max_level=90.0)
+    entity = PlejdDimLevelNumber(_Coordinator([], settings=settings), _device(), "min")
+    await entity.async_added_to_hass()
+    assert entity._attr_native_value == 20.0
+
+
+async def test_init_uses_coordinator_settings_max():
+    from plejd.protocol import OutputSettings
+
+    settings = OutputSettings(min_level=20.0, max_level=90.0)
+    entity = PlejdDimLevelNumber(_Coordinator([], settings=settings), _device(), "max")
+    await entity.async_added_to_hass()
+    assert entity._attr_native_value == 90.0
+
+
+async def test_listener_updates_dim_level():
+    from plejd.protocol import OutputSettings
+
+    coord = _Coordinator([])
+    entity = PlejdDimLevelNumber(coord, _device(), "min")
+    await entity.async_added_to_hass()
+    coord._settings = OutputSettings(min_level=15.0)
+    coord._listener()
+    assert entity._attr_native_value == 15.0
+
+
+async def test_listener_no_update_when_settings_none():
+    coord = _Coordinator([])
+    entity = PlejdDimLevelNumber(coord, _device(), "min")
+    await entity.async_added_to_hass()
+    coord._listener()  # settings_for returns None -> early return, no crash
+    assert getattr(entity, "_attr_native_value", None) is None
+
+
 def test_transition_time_attributes():
     t = PlejdTransitionTimeNumber(_Coordinator([]), _device(output_index=2))
     assert t._attr_entity_category == EntityCategory.CONFIG
@@ -116,3 +162,31 @@ async def test_transition_time_sets_seconds_and_restores():
     t.async_get_last_number_data = _last
     await t.async_added_to_hass()
     assert t._attr_native_value == 1.0
+
+
+async def test_transition_time_init_uses_coordinator_settings():
+    from plejd.protocol import OutputSettings
+
+    settings = OutputSettings(speed=3.5)
+    t = PlejdTransitionTimeNumber(_Coordinator([], settings=settings), _device())
+    await t.async_added_to_hass()
+    assert t._attr_native_value == 3.5
+
+
+async def test_transition_time_listener_updates_speed():
+    from plejd.protocol import OutputSettings
+
+    coord = _Coordinator([])
+    t = PlejdTransitionTimeNumber(coord, _device())
+    await t.async_added_to_hass()
+    coord._settings = OutputSettings(speed=2.0)
+    coord._listener()
+    assert t._attr_native_value == 2.0
+
+
+async def test_transition_time_listener_no_update_when_settings_none():
+    coord = _Coordinator([])
+    t = PlejdTransitionTimeNumber(coord, _device())
+    await t.async_added_to_hass()
+    coord._listener()  # settings_for returns None -> early return, no crash
+    assert getattr(t, "_attr_native_value", None) is None

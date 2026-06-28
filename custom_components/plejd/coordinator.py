@@ -31,7 +31,12 @@ from .connection import PlejdConnection
 from .const import (
     CMD_GROUP_STATE_AND_LEVEL,
     CMD_INPUT_BUTTON,
+    CMD_OUTPUT_CURVE_TYPE,
+    CMD_OUTPUT_MAX_LEVEL,
+    CMD_OUTPUT_MIN_LEVEL,
+    CMD_OUTPUT_PHASE_DIM_TYPE,
     CMD_OUTPUT_SET,
+    CMD_OUTPUT_SPEED,
     CMD_OUTPUT_STATE_AND_LEVEL,
     CONF_CRYPTO_KEY,
     CONF_DEVICES,
@@ -52,12 +57,40 @@ from .const import (
     TRANSPORT_GATEWAY,
 )
 from .gateway_transport import PlejdGatewayConnection
-from .protocol import Command, MotionEvent, OutputState, decode_motion
+from .protocol import (
+    Command,
+    MotionEvent,
+    OutputSettings,
+    OutputState,
+    decode_motion,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
 RECONNECT_INITIAL_DELAY = 1.0
 RECONNECT_MAX_DELAY = 60.0
+
+_SETTINGS_CMDS = frozenset(
+    {CMD_OUTPUT_MIN_LEVEL, CMD_OUTPUT_MAX_LEVEL, CMD_OUTPUT_SPEED, CMD_OUTPUT_CURVE_TYPE, CMD_OUTPUT_PHASE_DIM_TYPE}
+)
+
+
+def _settings_from_cloud(raw: dict) -> OutputSettings | None:
+    """Best-effort decode of a cloud outputSettings dict.
+
+    NOTE: field names are speculative pending a capture that includes outputSettings.
+    """
+    min_dim = raw.get("minDim")
+    max_dim = raw.get("maxDim")
+    curve = raw.get("dimCurve")
+    s = OutputSettings(
+        min_level=round(int(min_dim) / 0xFFFF * 100, 1) if isinstance(min_dim, (int, float)) else None,
+        max_level=round(int(max_dim) / 0xFFFF * 100, 1) if isinstance(max_dim, (int, float)) else None,
+        curve=int(curve) if isinstance(curve, (int, float)) else None,
+    )
+    if s.min_level is None and s.max_level is None and s.curve is None:
+        return None
+    return s
 
 
 class PlejdCoordinator:
@@ -102,6 +135,13 @@ class PlejdCoordinator:
         self._closed = False
         self._reconnecting = False
         self._reconnect_task: asyncio.Task | None = None
+        self._output_settings: dict[int, OutputSettings] = {}
+        # Pre-populate from cloud so entities have a value before BLE reads return.
+        for _device in self.devices:
+            if _device.address is not None and _device.output_settings:
+                _cloud_s = _settings_from_cloud(_device.output_settings)
+                if _cloud_s is not None:
+                    self._output_settings[_device.address] = _cloud_s
 
     def _active_transport(self) -> PlejdConnection | PlejdGatewayConnection | None:
         if self._active == "gateway":
@@ -170,6 +210,45 @@ class PlejdCoordinator:
             if event is not None:
                 for motion_cb in list(self._motion_listeners):
                     motion_cb(event)
+        elif command.command in _SETTINGS_CMDS:
+            self._update_output_settings(command)
+
+    def _update_output_settings(self, command: Command) -> None:
+        """Store a settings read-reply and notify listeners."""
+        cmd = command.command
+        addr = command.address
+        s = self._output_settings.get(addr) or OutputSettings()
+        if cmd == CMD_OUTPUT_MIN_LEVEL:
+            val = protocol.decode_output_level_reply(command)
+            if val is None:
+                return
+            s.min_level = val
+        elif cmd == CMD_OUTPUT_MAX_LEVEL:
+            val = protocol.decode_output_level_reply(command)
+            if val is None:
+                return
+            s.max_level = val
+        elif cmd == CMD_OUTPUT_SPEED:
+            val = protocol.decode_output_speed_reply(command)
+            if val is None:
+                return
+            s.speed = val
+        elif cmd == CMD_OUTPUT_CURVE_TYPE:
+            val = protocol.decode_output_curve_reply(command)
+            if val is None:
+                return
+            s.curve = val
+        else:  # CMD_OUTPUT_PHASE_DIM_TYPE
+            val = protocol.decode_output_phase_dim_reply(command)
+            if val is None:
+                return
+            s.phase_dim = val
+        self._output_settings[addr] = s
+        self._notify_outputs()
+
+    def settings_for(self, address: int) -> OutputSettings | None:
+        """Last-known per-output settings for a mesh address, if read."""
+        return self._output_settings.get(address)
 
     def state_for(self, address: int) -> OutputState | None:
         """Last-known output state for a mesh address, if seen."""
@@ -243,6 +322,7 @@ class PlejdCoordinator:
         except Exception as err:  # noqa: BLE001 - surface any BLE failure as a setup retry
             raise ConfigEntryNotReady(f"failed to connect: {err}") from err
         await self._async_read_all_states()
+        await self._async_read_all_settings()
         self._active = "ble"
         self._available = True
         self._notify_outputs()
@@ -276,6 +356,23 @@ class PlejdCoordinator:
                 continue
             seen.add(device.address)
             await self._connection.write(mesh.request_output(device.address, device.output_index))
+
+    async def _async_read_all_settings(self) -> None:
+        """Read dimmer settings from each dimmable output after BLE connect."""
+        mesh = self._connection.mesh
+        if mesh is None:
+            return
+        seen: set[int] = set()
+        for device in self.devices:
+            if device.address is None or not device.dimmable or device.address in seen:
+                continue
+            seen.add(device.address)
+            addr, out = device.address, device.output_index
+            await self._connection.write(mesh.encrypt(protocol.request_output_min_level(addr, out)))
+            await self._connection.write(mesh.encrypt(protocol.request_output_max_level(addr, out)))
+            await self._connection.write(mesh.encrypt(protocol.request_output_speed(addr, out)))
+            await self._connection.write(mesh.encrypt(protocol.request_output_curve(addr, out)))
+            await self._connection.write(mesh.encrypt(protocol.request_output_phase_dim(addr, out)))
 
     @callback
     def _handle_disconnect(self) -> None:

@@ -312,6 +312,70 @@ class OutputState:
     level: int
 
 
+@dataclass
+class OutputSettings:
+    """Per-output dimmer settings from BLE read-back or cloud pre-load."""
+
+    min_level: float | None = None  # 0-100 percent
+    max_level: float | None = None  # 0-100 percent
+    speed: float | None = None  # seconds (0 = instant)
+    curve: int | None = None  # LoadCurve byte
+    phase_dim: int | None = None  # PhaseOutputType byte
+
+
+def request_output_min_level(address: int, output: int) -> bytes:
+    """Read an output's minimum dim level (0x00C9, Read)."""
+    return encode_command(address, CMD_OUTPUT_MIN_LEVEL, bytes([output & 0xFF]), command_type=TYPE_READ)
+
+
+def request_output_max_level(address: int, output: int) -> bytes:
+    """Read an output's maximum dim level (0x00CA, Read)."""
+    return encode_command(address, CMD_OUTPUT_MAX_LEVEL, bytes([output & 0xFF]), command_type=TYPE_READ)
+
+
+def request_output_speed(address: int, output: int) -> bytes:
+    """Read an output's dim transition time (0x00CB, Read)."""
+    return encode_command(address, CMD_OUTPUT_SPEED, bytes([output & 0xFF]), command_type=TYPE_READ)
+
+
+def request_output_curve(address: int, output: int) -> bytes:
+    """Read an output's dimming curve (0x00CC, Read)."""
+    return encode_command(address, CMD_OUTPUT_CURVE_TYPE, bytes([output & 0xFF]), command_type=TYPE_READ)
+
+
+def request_output_phase_dim(address: int, output: int) -> bytes:
+    """Read an output's phase-dim edge (0x00CE, Read)."""
+    return encode_command(address, CMD_OUTPUT_PHASE_DIM_TYPE, bytes([output & 0xFF]), command_type=TYPE_READ)
+
+
+def decode_output_level_reply(cmd: Command) -> float | None:
+    """Decode a min/max level read reply: [lo, hi] → 0-100 percent."""
+    if len(cmd.data) < 2:
+        return None
+    return round((cmd.data[0] | (cmd.data[1] << 8)) / 0xFFFF * 100, 1)
+
+
+def decode_output_speed_reply(cmd: Command) -> float | None:
+    """Decode a speed read reply: [lo, hi] → seconds (inverse of set_output_speed)."""
+    if len(cmd.data) < 2:
+        return None
+    lo, raw_hi = cmd.data[0], cmd.data[1]
+    if lo == 0xFF and raw_hi == 0xFF:  # instant sentinel (see set_output_speed)
+        return 0.0
+    steps = lo | ((raw_hi & 0x7F) << 8)  # strip the >0.5s flag from the high byte
+    return round(0xFFFF / steps / 100, 2) if steps else 0.0
+
+
+def decode_output_curve_reply(cmd: Command) -> int | None:
+    """Decode a curve type read reply: [curve_byte] → LoadCurve int."""
+    return int(cmd.data[0]) if cmd.data else None
+
+
+def decode_output_phase_dim_reply(cmd: Command) -> int | None:
+    """Decode a phase-dim edge read reply: [phase_byte] → PhaseOutputType int."""
+    return int(cmd.data[0]) if cmd.data else None
+
+
 def decode_output_state(cmd: Command) -> OutputState | None:
     """Decode an on/off + level state report (validated against real devices).
 

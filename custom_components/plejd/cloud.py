@@ -59,6 +59,7 @@ class PlejdCloudDevice:
     dimmable: bool
     traits: int
     room_id: str | None
+    output_settings: dict | None = None  # raw cloud outputSettings dict, if returned by the API
 
 
 @dataclass
@@ -184,6 +185,7 @@ def parse_site(site: dict) -> PlejdCloudSite:
         # omits traits (a light-category output can still be on/off only).
         traits = int(info.get("traits") or 0)
         dimmable = bool(traits & TRAIT_DIMMABLE) if "traits" in info else category == CATEGORY_LIGHT
+        raw_settings = info.get("outputSettings")
         devices.append(
             PlejdCloudDevice(
                 device_id=device_id,
@@ -197,6 +199,7 @@ def parse_site(site: dict) -> PlejdCloudSite:
                 dimmable=dimmable,
                 traits=traits,
                 room_id=info.get("roomId"),
+                output_settings=raw_settings if isinstance(raw_settings, dict) else None,
             )
         )
 

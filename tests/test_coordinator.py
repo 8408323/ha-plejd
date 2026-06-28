@@ -277,8 +277,9 @@ async def test_initial_state_read_one_per_address(monkeypatch):
     )
     c = PlejdCoordinator(hass, entry)
     await c.async_start()
-    # one state-read written per unique non-None address (addr 5); None + duplicate skipped.
+    # one state-read + 5 settings-reads per unique non-None address (addr 5); None + duplicate skipped.
     # (Other DATA writes after connect — e.g. clock sync — are not reads.)
+    from plejd.const import CMD_OUTPUT_STATE_AND_LEVEL
     from plejd.protocol import TYPE_READ, decode_command
 
     reads = [
@@ -286,12 +287,50 @@ async def test_initial_state_read_one_per_address(monkeypatch):
         for w in client.writes
         if w[0] == PLEJD_CHAR_DATA_UUID and decode_command(c._connection.mesh.decrypt(w[1])).command_type == TYPE_READ
     ]
-    assert len(reads) == 1
+    read_cmds = [decode_command(c._connection.mesh.decrypt(w[1])) for w in reads]
+    state_reads = [r for r in read_cmds if r.command == CMD_OUTPUT_STATE_AND_LEVEL]
+    assert len(state_reads) == 1  # exactly one state read per unique address
+    assert len(reads) == 6  # 1 state + 5 settings for the single dimmable address
 
 
 async def test_read_all_states_noop_without_mesh():
     c = PlejdCoordinator(_hass(), _entry())
     await c._async_read_all_states()  # mesh is None — returns without writing
+
+
+async def test_read_all_settings_noop_without_mesh():
+    c = PlejdCoordinator(_hass(), _entry())
+    await c._async_read_all_settings()  # mesh is None — returns without writing
+
+
+async def test_settings_short_reply_ignored_for_all_commands(monkeypatch):
+    """val-is-None guard returns early for every settings command on short data."""
+    from plejd.const import (
+        CMD_OUTPUT_CURVE_TYPE,
+        CMD_OUTPUT_MAX_LEVEL,
+        CMD_OUTPUT_PHASE_DIM_TYPE,
+        CMD_OUTPUT_SPEED,
+    )
+    from plejd.protocol import Command
+
+    client = _FakeClient()
+    _patch_connect(monkeypatch, client)
+    ble = types.SimpleNamespace(address="01:02:03:04:05:a0")
+    hass = _hass([_info("01:02:03:04:05:a0")], {"01:02:03:04:05:a0": ble})
+    c = PlejdCoordinator(hass, _entry(discovered=None))
+    await c.async_start()
+
+    # 1-byte payload → decode_output_level_reply returns None → max-level guard line
+    c._on_event(Command(5, 0x02, CMD_OUTPUT_MAX_LEVEL, bytes([0x01])))
+    # 1-byte payload → decode_output_speed_reply returns None → speed guard line
+    c._on_event(Command(5, 0x02, CMD_OUTPUT_SPEED, bytes([0x01])))
+    # 0-byte payload → decode_output_curve_reply returns None → curve guard line
+    c._on_event(Command(5, 0x02, CMD_OUTPUT_CURVE_TYPE, b""))
+    # 0-byte payload → decode_output_phase_dim_reply returns None → phase guard line
+    c._on_event(Command(5, 0x02, CMD_OUTPUT_PHASE_DIM_TYPE, b""))
+
+    # None of the short replies should be stored
+    assert c.settings_for(5) is None
 
 
 async def test_disconnect_marks_unavailable_and_reconnects(monkeypatch):
@@ -702,3 +741,137 @@ async def test_dimmer_tuning_settings(monkeypatch):
     await c.async_set_output_phase_dim(9, 1, 1)
     ph = decode_command(c._connection.mesh.decrypt(client.writes[-1][1]))
     assert ph.command == CMD_OUTPUT_PHASE_DIM_TYPE and ph.data == bytes([1, 1])
+
+
+def test_settings_for_returns_none_before_connect():
+    c = PlejdCoordinator(_hass(), _entry())
+    assert c.settings_for(5) is None
+
+
+async def test_settings_read_on_ble_connect(monkeypatch):
+    """Connect issues READ requests for each dimmable output's settings."""
+    from plejd.const import CMD_OUTPUT_CURVE_TYPE, CMD_OUTPUT_MAX_LEVEL, CMD_OUTPUT_MIN_LEVEL, CMD_OUTPUT_SPEED
+    from plejd.protocol import TYPE_READ, decode_command
+
+    client = _FakeClient()
+    _patch_connect(monkeypatch, client)
+    ble = types.SimpleNamespace(address="01:02:03:04:05:a0")
+    hass = _hass([_info("01:02:03:04:05:a0")], {"01:02:03:04:05:a0": ble})
+    c = PlejdCoordinator(hass, _entry(discovered=None))
+    await c.async_start()
+
+    # Only DATA characteristic writes are valid commands; filter and ignore decode errors.
+    def _try_decode(payload):
+        try:
+            return decode_command(c._connection.mesh.decrypt(payload))
+        except ValueError:
+            return None
+
+    cmds = [_try_decode(w[1]) for w in client.writes if w[0] == PLEJD_CHAR_DATA_UUID]
+    read_cmds = [cmd for cmd in cmds if cmd is not None and cmd.command_type == TYPE_READ]
+    # Expect state read + 5 settings reads (min, max, speed, curve, phase) for the dimmable device.
+    settings_codes = {cmd.command for cmd in read_cmds}
+    assert CMD_OUTPUT_MIN_LEVEL in settings_codes
+    assert CMD_OUTPUT_MAX_LEVEL in settings_codes
+    assert CMD_OUTPUT_SPEED in settings_codes
+    assert CMD_OUTPUT_CURVE_TYPE in settings_codes
+
+
+async def test_settings_stored_on_event_and_listener_notified(monkeypatch):
+    """_on_event for a settings reply stores the value and fires listeners."""
+    from plejd.const import CMD_OUTPUT_MIN_LEVEL
+    from plejd.protocol import Command
+
+    client = _FakeClient()
+    _patch_connect(monkeypatch, client)
+    ble = types.SimpleNamespace(address="01:02:03:04:05:a0")
+    hass = _hass([_info("01:02:03:04:05:a0")], {"01:02:03:04:05:a0": ble})
+    c = PlejdCoordinator(hass, _entry(discovered=None))
+    await c.async_start()
+    seen = []
+    c.async_add_listener(lambda: seen.append(1))
+    # Simulate a min-level reply for address 5: [0xFF, 0xFF] = 100%
+    c._on_event(Command(address=5, command_type=0x02, command=CMD_OUTPUT_MIN_LEVEL, data=bytes([0xFF, 0xFF])))
+    assert c.settings_for(5) is not None
+    assert c.settings_for(5).min_level == 100.0
+    assert seen == [1]
+
+
+async def test_settings_all_five_commands_stored(monkeypatch):
+    """All five settings command codes are stored in _output_settings."""
+    from plejd.const import (
+        CMD_OUTPUT_CURVE_TYPE,
+        CMD_OUTPUT_MAX_LEVEL,
+        CMD_OUTPUT_MIN_LEVEL,
+        CMD_OUTPUT_PHASE_DIM_TYPE,
+        CMD_OUTPUT_SPEED,
+    )
+    from plejd.protocol import Command
+
+    client = _FakeClient()
+    _patch_connect(monkeypatch, client)
+    ble = types.SimpleNamespace(address="01:02:03:04:05:a0")
+    hass = _hass([_info("01:02:03:04:05:a0")], {"01:02:03:04:05:a0": ble})
+    c = PlejdCoordinator(hass, _entry(discovered=None))
+    await c.async_start()
+
+    # min: 50% = 0x7FFF
+    c._on_event(Command(5, 0x02, CMD_OUTPUT_MIN_LEVEL, bytes([0xFF, 0x7F])))
+    # max: 100%
+    c._on_event(Command(5, 0x02, CMD_OUTPUT_MAX_LEVEL, bytes([0xFF, 0xFF])))
+    # speed: instant
+    c._on_event(Command(5, 0x02, CMD_OUTPUT_SPEED, bytes([0xFF, 0xFF])))
+    # curve: logarithmic (1)
+    c._on_event(Command(5, 0x02, CMD_OUTPUT_CURVE_TYPE, bytes([1])))
+    # phase: leading_edge (1)
+    c._on_event(Command(5, 0x02, CMD_OUTPUT_PHASE_DIM_TYPE, bytes([1])))
+
+    s = c.settings_for(5)
+    assert s.max_level == 100.0
+    assert s.speed == 0.0
+    assert s.curve == 1
+    assert s.phase_dim == 1
+
+
+async def test_settings_short_reply_ignored(monkeypatch):
+    """A too-short settings reply is silently dropped."""
+    from plejd.const import CMD_OUTPUT_MIN_LEVEL
+    from plejd.protocol import Command
+
+    client = _FakeClient()
+    _patch_connect(monkeypatch, client)
+    ble = types.SimpleNamespace(address="01:02:03:04:05:a0")
+    hass = _hass([_info("01:02:03:04:05:a0")], {"01:02:03:04:05:a0": ble})
+    c = PlejdCoordinator(hass, _entry(discovered=None))
+    await c.async_start()
+    c._on_event(Command(5, 0x02, CMD_OUTPUT_MIN_LEVEL, bytes([0x01])))  # only 1 byte, too short
+    assert c.settings_for(5) is None  # not stored
+
+
+def test_settings_from_cloud_with_values():
+    from plejd.coordinator import _settings_from_cloud
+
+    s = _settings_from_cloud({"minDim": 32767, "maxDim": 65535, "dimCurve": 1})
+    assert s is not None
+    assert s.curve == 1
+    assert s.min_level == pytest.approx(50.0, abs=0.1)
+    assert s.max_level == 100.0
+
+
+def test_settings_from_cloud_empty_returns_none():
+    from plejd.coordinator import _settings_from_cloud
+
+    assert _settings_from_cloud({}) is None
+
+
+def test_coordinator_pre_populates_from_cloud_output_settings():
+    """Cloud outputSettings pre-populate _output_settings on init."""
+    dev = {**_DEV, "output_settings": {"minDim": 32767, "maxDim": 65535, "dimCurve": 1}}
+    entry = types.SimpleNamespace(
+        entry_id="e1",
+        data={CONF_CRYPTO_KEY: _KEY_HEX, CONF_DEVICES: [dev], CONF_DISCOVERED_ADDRESS: None},
+    )
+    c = PlejdCoordinator(_hass(), entry)
+    s = c.settings_for(_DEV["address"])
+    assert s is not None
+    assert s.curve == 1

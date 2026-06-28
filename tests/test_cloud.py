@@ -211,3 +211,28 @@ def test_parse_site_handles_missing_address_and_hardware():
     assert dev.address is None and dev.outputs == []
     assert dev.hardware_id == 0 and dev.category == "none"
     assert site.title == "Plejd"  # default
+
+
+def test_parse_site_captures_output_settings():
+    site = parse_site(
+        {
+            "plejdMesh": {"cryptoKey": "00" * 16},
+            "devices": [
+                {"deviceId": "a", "outputType": "LIGHT", "outputSettings": {"minDim": 100, "dimCurve": 1}},
+                {"deviceId": "b", "outputType": "LIGHT"},  # no outputSettings
+            ],
+        }
+    )
+    by_id = {d.device_id: d for d in site.devices}
+    assert by_id["a"].output_settings == {"minDim": 100, "dimCurve": 1}
+    assert by_id["b"].output_settings is None
+
+
+def test_parse_site_ignores_non_dict_output_settings():
+    site = parse_site(
+        {
+            "plejdMesh": {"cryptoKey": "00" * 16},
+            "devices": [{"deviceId": "a", "outputType": "LIGHT", "outputSettings": "bad"}],
+        }
+    )
+    assert site.devices[0].output_settings is None

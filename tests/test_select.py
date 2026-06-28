@@ -26,10 +26,19 @@ def _device(category="light", address=5, dimmable=True, output_index=0, hardware
 
 
 class _Coordinator:
-    def __init__(self, devices):
+    def __init__(self, devices, settings=None):
         self.devices = devices
         self.curve_calls = []
         self.phase_calls = []
+        self._settings = settings
+        self._listener = None
+
+    def settings_for(self, address):
+        return self._settings
+
+    def async_add_listener(self, cb):
+        self._listener = cb
+        return lambda: None
 
     async def async_set_output_curve(self, address, output, curve):
         self.curve_calls.append((address, output, curve))
@@ -96,4 +105,62 @@ async def test_ignores_unknown_restored_option():
 
     entity.async_get_last_state = _last
     await entity.async_added_to_hass()
+    assert getattr(entity, "_attr_current_option", None) is None
+
+
+async def test_init_uses_coordinator_settings_curve():
+    from plejd.protocol import OutputSettings
+
+    settings = OutputSettings(curve=1)  # 1 = logarithmic
+    entity = PlejdOutputSettingSelect(_Coordinator([], settings=settings), _device(), "curve")
+    await entity.async_added_to_hass()
+    assert entity._attr_current_option == "logarithmic"
+
+
+async def test_init_uses_coordinator_settings_phase():
+    from plejd.protocol import OutputSettings
+
+    settings = OutputSettings(phase_dim=1)  # 1 = leading_edge
+    entity = PlejdOutputSettingSelect(_Coordinator([], settings=settings), _device(), "phase")
+    await entity.async_added_to_hass()
+    assert entity._attr_current_option == "leading_edge"
+
+
+async def test_init_falls_back_to_restore_when_settings_none():
+    entity = PlejdOutputSettingSelect(_Coordinator([]), _device(), "curve")
+
+    async def _last():
+        return types.SimpleNamespace(state="antilogarithmic")
+
+    entity.async_get_last_state = _last
+    await entity.async_added_to_hass()
+    assert entity._attr_current_option == "antilogarithmic"
+
+
+async def test_listener_updates_curve_option():
+    from plejd.protocol import OutputSettings
+
+    coord = _Coordinator([])
+    entity = PlejdOutputSettingSelect(coord, _device(), "curve")
+    await entity.async_added_to_hass()
+    coord._settings = OutputSettings(curve=3)  # antilogarithmic
+    coord._listener()
+    assert entity._attr_current_option == "antilogarithmic"
+
+
+async def test_listener_no_update_when_settings_none():
+    coord = _Coordinator([])
+    entity = PlejdOutputSettingSelect(coord, _device(), "curve")
+    await entity.async_added_to_hass()
+    coord._listener()  # settings_for returns None -> early return, no crash
+    assert getattr(entity, "_attr_current_option", None) is None
+
+
+async def test_listener_no_update_when_unknown_raw_value():
+    from plejd.protocol import OutputSettings
+
+    coord = _Coordinator([], settings=OutputSettings(curve=99))  # 99 not in CURVE_OPTIONS
+    entity = PlejdOutputSettingSelect(coord, _device(), "curve")
+    await entity.async_added_to_hass()
+    # Should not crash and should not set an option
     assert getattr(entity, "_attr_current_option", None) is None

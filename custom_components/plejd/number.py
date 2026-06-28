@@ -1,10 +1,9 @@
 """Plejd number platform — per-output min/max dim level config.
 
 These are device *settings* (the floor/ceiling a dimmer scales to), not live state.
-The read-back response doesn't echo the output index, so reliable per-output reads
-over the shared broadcast channel aren't possible; the entities are therefore
-optimistic and restore their last value across restarts. The wire encoding (a
-0-1 fraction as u16 little-endian) is byte-exact, decoded from the app.
+Settings are read back over BLE after connect; entities fall back to restore-state
+when the read hasn't arrived yet. The wire encoding (0-1 fraction as u16 little-endian)
+is byte-exact, decoded from the app.
 """
 
 from __future__ import annotations
@@ -14,7 +13,7 @@ from collections.abc import Awaitable, Callable
 from homeassistant.components.number import NumberMode, RestoreNumber
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import PERCENTAGE, EntityCategory, UnitOfTime
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
@@ -49,10 +48,11 @@ class PlejdDimLevelNumber(RestoreNumber):
     def __init__(self, coordinator: PlejdCoordinator, device: PlejdCloudDevice, kind: str) -> None:
         self._coordinator = coordinator
         self._device = device
+        self._is_min = kind == "min"
         self._setter: Callable[[int, int, float], Awaitable[None]] = (
-            coordinator.async_set_output_min_level if kind == "min" else coordinator.async_set_output_max_level
+            coordinator.async_set_output_min_level if self._is_min else coordinator.async_set_output_max_level
         )
-        self._attr_translation_key = "min_dim_level" if kind == "min" else "max_dim_level"
+        self._attr_translation_key = "min_dim_level" if self._is_min else "max_dim_level"
         base = device.device_id if device.output_index == 0 else f"{device.device_id}_{device.output_index}"
         self._attr_unique_id = f"{base}_{kind}_level"
         self._attr_device_info = DeviceInfo(
@@ -69,9 +69,25 @@ class PlejdDimLevelNumber(RestoreNumber):
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
-        last = await self.async_get_last_number_data()
-        if last is not None and last.native_value is not None:
-            self._attr_native_value = last.native_value
+        settings = self._coordinator.settings_for(self._device.address)
+        val = (settings.min_level if self._is_min else settings.max_level) if settings else None
+        if val is not None:
+            self._attr_native_value = val
+        else:
+            last = await self.async_get_last_number_data()
+            if last is not None and last.native_value is not None:
+                self._attr_native_value = last.native_value
+        self.async_on_remove(self._coordinator.async_add_listener(self._handle_coordinator_update))
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        settings = self._coordinator.settings_for(self._device.address)
+        if settings is None:
+            return
+        val = settings.min_level if self._is_min else settings.max_level
+        if val is not None and val != getattr(self, "_attr_native_value", None):
+            self._attr_native_value = val
+            self.async_write_ha_state()
 
 
 class PlejdTransitionTimeNumber(RestoreNumber):
@@ -105,6 +121,20 @@ class PlejdTransitionTimeNumber(RestoreNumber):
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
-        last = await self.async_get_last_number_data()
-        if last is not None and last.native_value is not None:
-            self._attr_native_value = last.native_value
+        settings = self._coordinator.settings_for(self._device.address)
+        if settings is not None and settings.speed is not None:
+            self._attr_native_value = settings.speed
+        else:
+            last = await self.async_get_last_number_data()
+            if last is not None and last.native_value is not None:
+                self._attr_native_value = last.native_value
+        self.async_on_remove(self._coordinator.async_add_listener(self._handle_coordinator_update))
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        settings = self._coordinator.settings_for(self._device.address)
+        if settings is None:
+            return
+        if settings.speed is not None and settings.speed != getattr(self, "_attr_native_value", None):
+            self._attr_native_value = settings.speed
+            self.async_write_ha_state()

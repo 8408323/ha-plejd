@@ -1,8 +1,7 @@
 """Plejd select platform — per-output dimmer tuning (curve + phase-dim edge).
 
-Device *settings*, not live state. Like the dim-level numbers, the read-back lands
-on the Datavector characteristic this push-based integration doesn't subscribe to,
-so the entities are optimistic and restore their last selection across restarts.
+Device *settings*, not live state. Settings are read back over BLE after connect;
+entities fall back to restore-state when the read hasn't arrived yet.
 Wire values are byte-exact, decoded from the app (LoadCurve / PhaseOutputType).
 """
 
@@ -13,7 +12,7 @@ from collections.abc import Awaitable, Callable
 from homeassistant.components.select import SelectEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
@@ -43,7 +42,9 @@ class PlejdOutputSettingSelect(SelectEntity, RestoreEntity):
     _attr_entity_category = EntityCategory.CONFIG
 
     def __init__(self, coordinator: PlejdCoordinator, device: PlejdCloudDevice, kind: str) -> None:
+        self._coordinator = coordinator
         self._device = device
+        self._kind = kind
         if kind == "curve":
             self._options_map = CURVE_OPTIONS
             self._setter: Callable[[int, int, int], Awaitable[None]] = coordinator.async_set_output_curve
@@ -69,6 +70,27 @@ class PlejdOutputSettingSelect(SelectEntity, RestoreEntity):
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
-        last = await self.async_get_last_state()
-        if last is not None and last.state in self._options_map:
-            self._attr_current_option = last.state
+        settings = self._coordinator.settings_for(self._device.address)
+        raw = (settings.curve if self._kind == "curve" else settings.phase_dim) if settings else None
+        # Reverse-map the raw byte to the option key.
+        inv = {v: k for k, v in self._options_map.items()}
+        if raw is not None and raw in inv:
+            self._attr_current_option = inv[raw]
+        else:
+            last = await self.async_get_last_state()
+            if last is not None and last.state in self._options_map:
+                self._attr_current_option = last.state
+        self.async_on_remove(self._coordinator.async_add_listener(self._handle_coordinator_update))
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        settings = self._coordinator.settings_for(self._device.address)
+        if settings is None:
+            return
+        raw = settings.curve if self._kind == "curve" else settings.phase_dim
+        inv = {v: k for k, v in self._options_map.items()}
+        if raw is not None and raw in inv:
+            option = inv[raw]
+            if option != getattr(self, "_attr_current_option", None):
+                self._attr_current_option = option
+                self.async_write_ha_state()

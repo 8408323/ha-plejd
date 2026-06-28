@@ -250,3 +250,79 @@ def test_dimmer_tuning_setting_bytes():
     phase = set_output_phase_dim(9, 0, 1)  # leading edge
     assert (phase[3] << 8) | phase[4] == CMD_OUTPUT_PHASE_DIM_TYPE
     assert phase[5:] == bytes([0x00, 0x01])
+
+
+def test_settings_read_requests_use_read_type():
+    from plejd.const import (
+        CMD_OUTPUT_CURVE_TYPE,
+        CMD_OUTPUT_MAX_LEVEL,
+        CMD_OUTPUT_MIN_LEVEL,
+        CMD_OUTPUT_PHASE_DIM_TYPE,
+        CMD_OUTPUT_SPEED,
+    )
+    from plejd.protocol import (
+        request_output_curve,
+        request_output_max_level,
+        request_output_min_level,
+        request_output_phase_dim,
+        request_output_speed,
+    )
+
+    for req_fn, expected_cmd in [
+        (request_output_min_level, CMD_OUTPUT_MIN_LEVEL),
+        (request_output_max_level, CMD_OUTPUT_MAX_LEVEL),
+        (request_output_speed, CMD_OUTPUT_SPEED),
+        (request_output_curve, CMD_OUTPUT_CURVE_TYPE),
+        (request_output_phase_dim, CMD_OUTPUT_PHASE_DIM_TYPE),
+    ]:
+        v = req_fn(0x05, 1)
+        assert v[2] == TYPE_READ
+        assert (v[3] << 8) | v[4] == expected_cmd
+        assert v[5:] == bytes([0x01])  # output index
+
+
+def test_decode_output_level_reply_round_trips():
+    from plejd.protocol import Command, decode_output_level_reply
+
+    # 50% = round(32767.5 / 65535 * 100) = 50.0
+    half_u16 = 0x7FFF
+    cmd = Command(address=5, command_type=0x02, command=0x00C9, data=bytes([half_u16 & 0xFF, half_u16 >> 8]))
+    assert decode_output_level_reply(cmd) == 50.0
+
+    # full range
+    cmd_full = Command(address=5, command_type=0x02, command=0x00C9, data=bytes([0xFF, 0xFF]))
+    assert decode_output_level_reply(cmd_full) == 100.0
+
+    # too short
+    cmd_short = Command(address=5, command_type=0x02, command=0x00C9, data=bytes([0xFF]))
+    assert decode_output_level_reply(cmd_short) is None
+
+
+def test_decode_output_speed_reply_round_trips():
+    from plejd.protocol import Command, decode_output_speed_reply
+
+    # instant sentinel: [0xFF, 0xFF] -> 0.0s
+    instant = Command(address=5, command_type=0x02, command=0x00CB, data=bytes([0xFF, 0xFF]))
+    assert decode_output_speed_reply(instant) == 0.0
+
+    # 1-second fade: encode -> steps=655 -> [0x8F, 0x82] (bit7 of hi = >0.5s flag)
+    one_sec = Command(address=5, command_type=0x02, command=0x00CB, data=bytes([0x8F, 0x82]))
+    assert decode_output_speed_reply(one_sec) == pytest.approx(1.0, rel=0.02)
+
+    # too short
+    short = Command(address=5, command_type=0x02, command=0x00CB, data=bytes([0x01]))
+    assert decode_output_speed_reply(short) is None
+
+
+def test_decode_output_curve_and_phase_dim_replies():
+    from plejd.protocol import Command, decode_output_curve_reply, decode_output_phase_dim_reply
+
+    curve_cmd = Command(address=5, command_type=0x02, command=0x00CC, data=bytes([1]))  # logarithmic
+    assert decode_output_curve_reply(curve_cmd) == 1
+
+    phase_cmd = Command(address=5, command_type=0x02, command=0x00CE, data=bytes([0]))  # trailing_edge
+    assert decode_output_phase_dim_reply(phase_cmd) == 0
+
+    # empty data -> None
+    assert decode_output_curve_reply(Command(5, 0x02, 0x00CC, b"")) is None
+    assert decode_output_phase_dim_reply(Command(5, 0x02, 0x00CE, b"")) is None
