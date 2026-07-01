@@ -1,4 +1,4 @@
-"""Tests for the Plejd number platform (min/max dim level settings)."""
+"""Tests for the Plejd number platform (min/max dim level settings + relay off time)."""
 
 from __future__ import annotations
 
@@ -6,17 +6,23 @@ import types
 
 from homeassistant.const import EntityCategory
 from plejd.cloud import PlejdCloudDevice
-from plejd.number import PlejdDimLevelNumber, PlejdTransitionTimeNumber, async_setup_entry
+from plejd.number import (
+    PlejdDimLevelNumber,
+    PlejdInrushCurrentNumber,
+    PlejdRelayOffTimeNumber,
+    PlejdTransitionTimeNumber,
+    async_setup_entry,
+)
 
 
-def _device(category="light", address=5, dimmable=True, output_index=0):
+def _device(category="light", address=5, dimmable=True, output_index=0, hardware_id=1):
     return PlejdCloudDevice(
         device_id="d1",
         name="Lamp",
         address=address,
         output_index=output_index,
         outputs=[address],
-        hardware_id=1,
+        hardware_id=hardware_id,
         model="DIM-01",
         category=category,
         dimmable=dimmable,
@@ -31,6 +37,8 @@ class _Coordinator:
         self.min_calls = []
         self.max_calls = []
         self.speed_calls = []
+        self.relay_off_calls = []
+        self.inrush_calls = []
         self._settings = settings
         self._listener = None
 
@@ -50,6 +58,12 @@ class _Coordinator:
     async def async_set_output_speed(self, address, output, seconds):
         self.speed_calls.append((address, output, seconds))
 
+    async def async_set_output_relay_off_time(self, address, output, seconds):
+        self.relay_off_calls.append((address, output, seconds))
+
+    async def async_set_output_inrush_current(self, address, output, time_ms):
+        self.inrush_calls.append((address, output, time_ms))
+
 
 async def test_setup_creates_settings_only_for_dimmable_lights():
     coord = _Coordinator(
@@ -63,9 +77,24 @@ async def test_setup_creates_settings_only_for_dimmable_lights():
     entry = types.SimpleNamespace(runtime_data=coord)
     added = []
     await async_setup_entry(None, entry, lambda entities: added.extend(entities))
-    # One dimmable light -> a min + a max + a transition-time entity.
-    assert len(added) == 3
-    assert {e._attr_translation_key for e in added} == {"min_dim_level", "max_dim_level", "transition_time"}
+    # One dimmable light -> min + max + transition-time + inrush-current (hardware_id=1 in PHASE_DIM_HARDWARE).
+    assert len(added) == 4
+    assert {e._attr_translation_key for e in added} == {
+        "min_dim_level",
+        "max_dim_level",
+        "transition_time",
+        "inrush_current_time",
+    }
+
+
+async def test_setup_creates_relay_off_time_for_relay_hardware():
+    # hardware_id=3 (CTR-01) is in RELAY_HARDWARE; dimmable=False so no dim entities.
+    coord = _Coordinator([_device(hardware_id=3, dimmable=False)])
+    entry = types.SimpleNamespace(runtime_data=coord)
+    added = []
+    await async_setup_entry(None, entry, lambda entities: added.extend(entities))
+    assert len(added) == 1
+    assert added[0]._attr_translation_key == "relay_off_time"
 
 
 def test_attributes_and_unique_id():
@@ -190,3 +219,165 @@ async def test_transition_time_listener_no_update_when_settings_none():
     await t.async_added_to_hass()
     coord._listener()  # settings_for returns None -> early return, no crash
     assert getattr(t, "_attr_native_value", None) is None
+
+
+# ── PlejdRelayOffTimeNumber ───────────────────────────────────────────────────
+
+
+def test_relay_off_time_attributes():
+    t = PlejdRelayOffTimeNumber(_Coordinator([]), _device(hardware_id=3, output_index=2))
+    assert t._attr_entity_category == EntityCategory.CONFIG
+    assert t._attr_translation_key == "relay_off_time"
+    assert t._attr_unique_id == "d1_2_relay_off_time"
+    assert t._attr_native_min_value == 0.1
+    assert t._attr_native_max_value == 10.0
+
+
+async def test_relay_off_time_set_value():
+    coord = _Coordinator([])
+    t = PlejdRelayOffTimeNumber(coord, _device(hardware_id=3))
+    await t.async_set_native_value(2.0)
+    assert coord.relay_off_calls == [(5, 0, 2.0)]
+    assert t._attr_native_value == 2.0
+
+
+async def test_relay_off_time_init_from_coordinator_settings():
+    from plejd.protocol import OutputSettings
+
+    settings = OutputSettings(relay_off_time=1.5)
+    t = PlejdRelayOffTimeNumber(_Coordinator([], settings=settings), _device(hardware_id=3))
+    await t.async_added_to_hass()
+    assert t._attr_native_value == 1.5
+
+
+async def test_relay_off_time_falls_back_to_restore():
+    t = PlejdRelayOffTimeNumber(_Coordinator([]), _device(hardware_id=3))
+
+    async def _last():
+        return types.SimpleNamespace(native_value=3.0)
+
+    t.async_get_last_number_data = _last
+    await t.async_added_to_hass()
+    assert t._attr_native_value == 3.0
+
+
+async def test_relay_off_time_no_restore_when_no_prior_state():
+    t = PlejdRelayOffTimeNumber(_Coordinator([]), _device(hardware_id=3))
+    await t.async_added_to_hass()
+    assert getattr(t, "_attr_native_value", None) is None
+
+
+async def test_relay_off_time_listener_updates():
+    from plejd.protocol import OutputSettings
+
+    coord = _Coordinator([])
+    t = PlejdRelayOffTimeNumber(coord, _device(hardware_id=3))
+    await t.async_added_to_hass()
+    coord._settings = OutputSettings(relay_off_time=4.0)
+    coord._listener()
+    assert t._attr_native_value == 4.0
+
+
+async def test_relay_off_time_listener_no_update_when_settings_none():
+    coord = _Coordinator([])
+    t = PlejdRelayOffTimeNumber(coord, _device(hardware_id=3))
+    await t.async_added_to_hass()
+    coord._listener()
+    assert getattr(t, "_attr_native_value", None) is None
+
+
+# ── PlejdInrushCurrentNumber ──────────────────────────────────────────────────
+
+
+async def test_setup_creates_inrush_for_phase_dim_hardware():
+    # hardware_id=1 (DIM-01) is in PHASE_DIM_HARDWARE and is dimmable -> inrush entity.
+    coord = _Coordinator([_device(hardware_id=1)])
+    entry = types.SimpleNamespace(runtime_data=coord)
+    added = []
+    await async_setup_entry(None, entry, lambda entities: added.extend(entities))
+    assert any(e._attr_translation_key == "inrush_current_time" for e in added)
+
+
+async def test_setup_no_inrush_for_non_phase_dim_hardware():
+    # hardware_id=5 (LED-10) is NOT in PHASE_DIM_HARDWARE -> no inrush entity.
+    coord = _Coordinator([_device(hardware_id=5)])
+    entry = types.SimpleNamespace(runtime_data=coord)
+    added = []
+    await async_setup_entry(None, entry, lambda entities: added.extend(entities))
+    assert all(e._attr_translation_key != "inrush_current_time" for e in added)
+
+
+def test_inrush_attributes_and_unique_id():
+    t = PlejdInrushCurrentNumber(_Coordinator([]), _device(hardware_id=1))
+    assert t._attr_entity_category == EntityCategory.CONFIG
+    assert t._attr_translation_key == "inrush_current_time"
+    assert t._attr_unique_id == "d1_inrush_current_time"
+    assert t._attr_native_min_value == 0
+    assert t._attr_native_max_value == 5000
+    assert t._attr_native_step == 100
+    assert t._attr_native_unit_of_measurement == "ms"
+
+
+def test_inrush_unique_id_with_output_index():
+    t = PlejdInrushCurrentNumber(_Coordinator([]), _device(hardware_id=1, output_index=2))
+    assert t._attr_unique_id == "d1_2_inrush_current_time"
+
+
+async def test_inrush_set_value_sends_ms():
+    coord = _Coordinator([])
+    t = PlejdInrushCurrentNumber(coord, _device(hardware_id=1))
+    await t.async_set_native_value(500)
+    assert coord.inrush_calls == [(5, 0, 500)]
+    assert t._attr_native_value == 500
+
+
+async def test_inrush_init_from_coordinator_settings():
+    from plejd.protocol import OutputSettings
+
+    settings = OutputSettings(inrush_current_ms=300)
+    t = PlejdInrushCurrentNumber(_Coordinator([], settings=settings), _device(hardware_id=1))
+    await t.async_added_to_hass()
+    assert t._attr_native_value == 300
+
+
+async def test_inrush_falls_back_to_restore():
+    t = PlejdInrushCurrentNumber(_Coordinator([]), _device(hardware_id=1))
+
+    async def _last():
+        return types.SimpleNamespace(native_value=200)
+
+    t.async_get_last_number_data = _last
+    await t.async_added_to_hass()
+    assert t._attr_native_value == 200
+
+
+async def test_inrush_no_restore_when_no_prior_state():
+    t = PlejdInrushCurrentNumber(_Coordinator([]), _device(hardware_id=1))
+    await t.async_added_to_hass()
+    assert getattr(t, "_attr_native_value", None) is None
+
+
+async def test_inrush_listener_updates():
+    from plejd.protocol import OutputSettings
+
+    coord = _Coordinator([])
+    t = PlejdInrushCurrentNumber(coord, _device(hardware_id=1))
+    await t.async_added_to_hass()
+    coord._settings = OutputSettings(inrush_current_ms=400)
+    coord._listener()
+    assert t._attr_native_value == 400
+
+
+async def test_inrush_listener_no_update_when_settings_none():
+    coord = _Coordinator([])
+    t = PlejdInrushCurrentNumber(coord, _device(hardware_id=1))
+    await t.async_added_to_hass()
+    coord._listener()
+    assert getattr(t, "_attr_native_value", None) is None
+
+
+async def test_inrush_disabled_value_zero_accepted():
+    coord = _Coordinator([])
+    t = PlejdInrushCurrentNumber(coord, _device(hardware_id=1))
+    await t.async_set_native_value(0)
+    assert coord.inrush_calls == [(5, 0, 0)]

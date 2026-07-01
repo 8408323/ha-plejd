@@ -29,12 +29,18 @@ from . import protocol
 from .cloud import PlejdAuthError, PlejdCloudDevice, PlejdCloudInput, PlejdCloudMotion, PlejdCloudScene, async_login
 from .connection import PlejdConnection
 from .const import (
+    CATEGORY_LIGHT,
+    CATEGORY_SWITCH,
     CMD_GROUP_STATE_AND_LEVEL,
     CMD_INPUT_BUTTON,
+    CMD_OUTPUT_BOOT_STATE,
     CMD_OUTPUT_CURVE_TYPE,
+    CMD_OUTPUT_INRUSH_CURRENT,
     CMD_OUTPUT_MAX_LEVEL,
     CMD_OUTPUT_MIN_LEVEL,
     CMD_OUTPUT_PHASE_DIM_TYPE,
+    CMD_OUTPUT_RELAY_CONFIG,
+    CMD_OUTPUT_RELAY_OFF_TIME,
     CMD_OUTPUT_SET,
     CMD_OUTPUT_SPEED,
     CMD_OUTPUT_STATE_AND_LEVEL,
@@ -49,7 +55,10 @@ from .const import (
     CONF_SCENES,
     CONF_SITE_ID,
     CONF_TRANSPORT,
+    PHASE_DIM_HARDWARE,
     PLEJD_SERVICE_UUID,
+    RELAY_CONFIG_HARDWARE,
+    RELAY_HARDWARE,
     TIME_EVENT_REP_FOREVER,
     TIME_EVENT_RESULT_SCENE,
     TRANSPORT_AUTO,
@@ -71,7 +80,17 @@ RECONNECT_INITIAL_DELAY = 1.0
 RECONNECT_MAX_DELAY = 60.0
 
 _SETTINGS_CMDS = frozenset(
-    {CMD_OUTPUT_MIN_LEVEL, CMD_OUTPUT_MAX_LEVEL, CMD_OUTPUT_SPEED, CMD_OUTPUT_CURVE_TYPE, CMD_OUTPUT_PHASE_DIM_TYPE}
+    {
+        CMD_OUTPUT_MIN_LEVEL,
+        CMD_OUTPUT_MAX_LEVEL,
+        CMD_OUTPUT_SPEED,
+        CMD_OUTPUT_CURVE_TYPE,
+        CMD_OUTPUT_PHASE_DIM_TYPE,
+        CMD_OUTPUT_BOOT_STATE,
+        CMD_OUTPUT_RELAY_OFF_TIME,
+        CMD_OUTPUT_RELAY_CONFIG,
+        CMD_OUTPUT_INRUSH_CURRENT,
+    }
 )
 
 
@@ -238,17 +257,50 @@ class PlejdCoordinator:
             if val is None:
                 return
             s.curve = val
-        else:  # CMD_OUTPUT_PHASE_DIM_TYPE
+        elif cmd == CMD_OUTPUT_PHASE_DIM_TYPE:
             val = protocol.decode_output_phase_dim_reply(command)
             if val is None:
                 return
             s.phase_dim = val
+        elif cmd == CMD_OUTPUT_BOOT_STATE:
+            val = protocol.decode_output_boot_state_reply(command)
+            if val is None:
+                return
+            s.boot_state = val
+        elif cmd == CMD_OUTPUT_RELAY_OFF_TIME:
+            val = protocol.decode_output_relay_off_time_reply(command)
+            if val is None:
+                return
+            s.relay_off_time = val
+        elif cmd == CMD_OUTPUT_RELAY_CONFIG:
+            val = protocol.decode_output_relay_config_reply(command)
+            if val is None:
+                return
+            s.relay_pole_config = val
+        else:  # CMD_OUTPUT_INRUSH_CURRENT
+            val = protocol.decode_output_inrush_current_reply(command)
+            if val is None:
+                return
+            s.inrush_current_ms = val
         self._output_settings[addr] = s
         self._notify_outputs()
 
     def settings_for(self, address: int) -> OutputSettings | None:
         """Last-known per-output settings for a mesh address, if read."""
         return self._output_settings.get(address)
+
+    def _cache_output_setting(self, address: int, **fields: object) -> None:
+        """Optimistically update the settings cache after a local write.
+
+        Without this, a BLE notification for an unrelated field arriving right after
+        a local write would re-read the old cached value and overwrite the entity's
+        new state until the next full settings read.
+        """
+        s = self._output_settings.get(address) or OutputSettings()
+        for name, value in fields.items():
+            setattr(s, name, value)
+        self._output_settings[address] = s
+        self._notify_outputs()
 
     def state_for(self, address: int) -> OutputState | None:
         """Last-known output state for a mesh address, if seen."""
@@ -358,21 +410,30 @@ class PlejdCoordinator:
             await self._connection.write(mesh.request_output(device.address, device.output_index))
 
     async def _async_read_all_settings(self) -> None:
-        """Read dimmer settings from each dimmable output after BLE connect."""
+        """Read per-output settings from each addressable device after BLE connect."""
         mesh = self._connection.mesh
         if mesh is None:
             return
         seen: set[int] = set()
         for device in self.devices:
-            if device.address is None or not device.dimmable or device.address in seen:
+            if device.address is None or device.address in seen:
                 continue
             seen.add(device.address)
             addr, out = device.address, device.output_index
-            await self._connection.write(mesh.encrypt(protocol.request_output_min_level(addr, out)))
-            await self._connection.write(mesh.encrypt(protocol.request_output_max_level(addr, out)))
-            await self._connection.write(mesh.encrypt(protocol.request_output_speed(addr, out)))
-            await self._connection.write(mesh.encrypt(protocol.request_output_curve(addr, out)))
-            await self._connection.write(mesh.encrypt(protocol.request_output_phase_dim(addr, out)))
+            if device.dimmable:
+                await self._connection.write(mesh.encrypt(protocol.request_output_min_level(addr, out)))
+                await self._connection.write(mesh.encrypt(protocol.request_output_max_level(addr, out)))
+                await self._connection.write(mesh.encrypt(protocol.request_output_speed(addr, out)))
+                await self._connection.write(mesh.encrypt(protocol.request_output_curve(addr, out)))
+                await self._connection.write(mesh.encrypt(protocol.request_output_phase_dim(addr, out)))
+                if device.hardware_id in PHASE_DIM_HARDWARE:
+                    await self._connection.write(mesh.encrypt(protocol.request_output_inrush_current(addr, out)))
+            if device.category in (CATEGORY_LIGHT, CATEGORY_SWITCH):
+                await self._connection.write(mesh.encrypt(protocol.request_output_boot_state(addr, out)))
+            if device.hardware_id in RELAY_HARDWARE:
+                await self._connection.write(mesh.encrypt(protocol.request_output_relay_off_time(addr, out)))
+            if device.hardware_id in RELAY_CONFIG_HARDWARE:
+                await self._connection.write(mesh.encrypt(protocol.request_output_relay_config(addr, out)))
 
     @callback
     def _handle_disconnect(self) -> None:
@@ -450,22 +511,47 @@ class PlejdCoordinator:
     async def async_set_output_min_level(self, address: int, output: int, fraction: float) -> None:
         """Set an output's minimum dim level (0-1 fraction)."""
         await self._write_vector(protocol.set_output_min_level(address, output, fraction))
+        self._cache_output_setting(address, min_level=fraction * 100)
 
     async def async_set_output_max_level(self, address: int, output: int, fraction: float) -> None:
         """Set an output's maximum dim level (0-1 fraction)."""
         await self._write_vector(protocol.set_output_max_level(address, output, fraction))
+        self._cache_output_setting(address, max_level=fraction * 100)
 
     async def async_set_output_speed(self, address: int, output: int, seconds: float) -> None:
         """Set an output's dim transition time (seconds; 0 = instant)."""
         await self._write_vector(protocol.set_output_speed(address, output, seconds))
+        self._cache_output_setting(address, speed=seconds)
 
     async def async_set_output_curve(self, address: int, output: int, curve: int) -> None:
         """Set an output's dimming curve (LoadCurve byte)."""
         await self._write_vector(protocol.set_output_curve(address, output, curve))
+        self._cache_output_setting(address, curve=curve)
 
     async def async_set_output_phase_dim(self, address: int, output: int, phase: int) -> None:
         """Set an output's phase-dim edge (PhaseOutputType byte)."""
         await self._write_vector(protocol.set_output_phase_dim(address, output, phase))
+        self._cache_output_setting(address, phase_dim=phase)
+
+    async def async_set_output_boot_state(self, address: int, output: int, use_last: bool) -> None:
+        """Set an output's after-power-outage boot state (True=restore, False=off)."""
+        await self._write_vector(protocol.set_output_boot_state(address, output, use_last))
+        self._cache_output_setting(address, boot_state=use_last)
+
+    async def async_set_output_relay_off_time(self, address: int, output: int, seconds: float) -> None:
+        """Set minimum relay off time in seconds (relay devices only)."""
+        await self._write_vector(protocol.set_output_relay_off_time(address, output, seconds))
+        self._cache_output_setting(address, relay_off_time=seconds)
+
+    async def async_set_output_relay_config(self, address: int, output: int, config: int) -> None:
+        """Set relay pole configuration (0=TwoPole, 1=OnePole)."""
+        await self._write_vector(protocol.set_output_relay_config(address, output, config))
+        self._cache_output_setting(address, relay_pole_config=config)
+
+    async def async_set_output_inrush_current(self, address: int, output: int, time_ms: int) -> None:
+        """Set inrush current protection time in milliseconds (0=disabled)."""
+        await self._write_vector(protocol.set_output_inrush_current(address, output, time_ms))
+        self._cache_output_setting(address, inrush_current_ms=time_ms)
 
     async def async_execute_scene(self, index: int) -> None:
         """Trigger a Plejd scene (broadcast to address 0)."""

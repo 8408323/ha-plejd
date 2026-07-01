@@ -70,14 +70,40 @@ CMD_OUTPUT_MAX_LEVEL = 0x00CA
 CMD_OUTPUT_SPEED = 0x00CB  # set/report dim transition time (output, u16le steps + >0.5s flag)
 CMD_OUTPUT_CURVE_TYPE = 0x00CC  # set/report dimming curve (output, LoadCurve byte)
 CMD_OUTPUT_PHASE_DIM_TYPE = 0x00CE  # set/report phase-dim edge (output, PhaseOutputType byte)
+CMD_OUTPUT_RELAY_OFF_TIME = 0x00D4  # minimum relay off time (output, u16le centiseconds)
+CMD_OUTPUT_BOOT_STATE = 0x00D7  # after-power-outage state (output[, 0x00=off]; 1-byte=use_last)
+CMD_OUTPUT_INRUSH_CURRENT = 0x00A2  # inrush current protection time (output, u16le centiseconds; 0=disabled)
+CMD_OUTPUT_RELAY_CONFIG = 0x022A  # relay pole configuration (output, RelayConfig wire byte)
 
-# Dimming-curve options (LoadCurve enum subset that applies to dimmable outputs).
-CURVE_OPTIONS: dict[str, int] = {"linear": 0, "logarithmic": 1, "antilogarithmic": 3}
-# Phase-dim edge (PhaseOutputType enum): trailing edge for resistive/LED, leading for inductive.
-PHASE_DIM_OPTIONS: dict[str, int] = {"trailing_edge": 0, "leading_edge": 1}
+# Dimming-curve options (LoadCurve enum, app: Standard/Linjär/Logaritmisk/Partiell).
+CURVE_OPTIONS: dict[str, int] = {
+    "standard": 0,
+    "linear": 1,
+    "logarithmic": 2,
+    "partial": 3,
+}
+# Light-source / phase-dim type (PhaseOutputType enum: TrailingEdge=0, LeadingEdge=1).
+# "Halogen" and "Non-dimmable LED" in the Plejd app are predefined cloud loads that
+# configure LoadCurve + Phase together — they are NOT PhaseOutputType values (2 and 3
+# map to PhaseOutputType.Invalid and are silently discarded by the firmware).
+PHASE_DIM_OPTIONS: dict[str, int] = {
+    "trailing_edge": 0,
+    "leading_edge": 1,
+}
 # Hardware that actually phase-cuts (app's IPhaseable: DIM-01/02 family, SPD-01, FAK-01).
 # Constant-current LED drivers, DALI, and downlights dim but aren't phase dimmers.
 PHASE_DIM_HARDWARE: frozenset[int] = frozenset({1, 2, 11, 14, 15, 22, 24, 25, 40, 164})
+# After-power-outage boot state options (0x00D7); True=restore last state, False=boot off.
+BOOT_STATE_OPTIONS: dict[str, bool] = {
+    "previous_state": True,
+    "off": False,
+}
+# Hardware with a real relay that supports minimum relay-off time (IRelayOffTimeable, 0x00D4).
+RELAY_HARDWARE: frozenset[int] = frozenset({3, 8, 17, 18})
+# Wire bytes for relay pole config (app GetBytes: TwoPole→0, OnePole→1; enum values differ).
+RELAY_POLE_OPTIONS: dict[str, int] = {"two_pole": 0, "one_pole": 1}
+# Hardware with relay pole config (IRelayConfigurable: DIM-01-2P hw 11, DIM-01-2P-LC2 hw 25).
+RELAY_CONFIG_HARDWARE: frozenset[int] = frozenset({11, 25})
 CMD_SCENE = 0x0021  # execute scene
 CMD_TIME_EVENT_TIME = 0x0258  # set/remove a time event's schedule
 CMD_TIME_EVENT_TYPE = 0x0259  # what a time event does (TimeEventResult)

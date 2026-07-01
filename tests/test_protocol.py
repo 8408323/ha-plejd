@@ -103,6 +103,79 @@ def test_decode_output_state_ignores_other_opcodes_and_short_data():
     assert decode_output_state(Command(11, 0, CMD_GROUP_STATE_AND_LEVEL, b"\x01")) is None
 
 
+# ── relay pole config (0x022A) ────────────────────────────────────────────────
+
+
+def test_set_output_relay_config_bytes():
+    from plejd.const import CMD_OUTPUT_RELAY_CONFIG
+    from plejd.protocol import set_output_relay_config
+
+    v = set_output_relay_config(0x05, output=0, config=0)  # two_pole
+    assert v[2] == TYPE_DONT_RESPOND
+    assert (v[3] << 8) | v[4] == CMD_OUTPUT_RELAY_CONFIG
+    assert v[5:] == bytes([0x00, 0x00])
+
+    v2 = set_output_relay_config(0x05, output=1, config=1)  # one_pole
+    assert v2[5:] == bytes([0x01, 0x01])
+
+
+def test_request_output_relay_config_uses_read_type():
+    from plejd.protocol import request_output_relay_config
+
+    v = request_output_relay_config(0x05, output=0)
+    assert v[2] == TYPE_READ
+    assert v[5:] == bytes([0x00])
+
+
+def test_decode_output_relay_config_reply():
+    from plejd.protocol import decode_output_relay_config_reply
+
+    assert decode_output_relay_config_reply(Command(5, 0, 0x022A, bytes([0]))) == 0
+    assert decode_output_relay_config_reply(Command(5, 0, 0x022A, bytes([1]))) == 1
+    assert decode_output_relay_config_reply(Command(5, 0, 0x022A, b"")) is None
+
+
+# ── inrush current protection time (0x00A2) ───────────────────────────────────
+
+
+def test_set_output_inrush_current_bytes():
+    from plejd.const import CMD_OUTPUT_INRUSH_CURRENT
+    from plejd.protocol import set_output_inrush_current
+
+    # 500 ms → 50 centiseconds (0x32, 0x00)
+    v = set_output_inrush_current(0x05, output=0, time_ms=500)
+    assert v[2] == TYPE_DONT_RESPOND
+    assert (v[3] << 8) | v[4] == CMD_OUTPUT_INRUSH_CURRENT
+    assert v[5:] == bytes([0x00, 50, 0x00])
+
+    # 0 ms → disabled (0x00, 0x00)
+    v2 = set_output_inrush_current(0x05, output=0, time_ms=0)
+    assert v2[5:] == bytes([0x00, 0x00, 0x00])
+
+    # 2560 ms → 256 centiseconds (u16le: 0x00, 0x01)
+    v3 = set_output_inrush_current(0x05, output=0, time_ms=2560)
+    assert v3[5:] == bytes([0x00, 0x00, 0x01])
+
+
+def test_request_output_inrush_current_uses_read_type():
+    from plejd.protocol import request_output_inrush_current
+
+    v = request_output_inrush_current(0x05, output=0)
+    assert v[2] == TYPE_READ
+    assert v[5:] == bytes([0x00])
+
+
+def test_decode_output_inrush_current_reply():
+    from plejd.protocol import decode_output_inrush_current_reply
+
+    # 50 cs → 500 ms
+    assert decode_output_inrush_current_reply(Command(5, 0, 0x00A2, bytes([50, 0]))) == 500
+    # 0 → disabled (0 ms)
+    assert decode_output_inrush_current_reply(Command(5, 0, 0x00A2, bytes([0, 0]))) == 0
+    # too short
+    assert decode_output_inrush_current_reply(Command(5, 0, 0x00A2, bytes([50]))) is None
+
+
 def test_set_climate_setpoint_bytes():
     from plejd.const import CMD_TRM_SETPOINT
     from plejd.protocol import set_climate_setpoint
@@ -326,3 +399,77 @@ def test_decode_output_curve_and_phase_dim_replies():
     # empty data -> None
     assert decode_output_curve_reply(Command(5, 0x02, 0x00CC, b"")) is None
     assert decode_output_phase_dim_reply(Command(5, 0x02, 0x00CE, b"")) is None
+
+
+def test_set_output_boot_state_bytes():
+    from plejd.const import CMD_OUTPUT_BOOT_STATE
+    from plejd.protocol import set_output_boot_state
+
+    # use_last → 1-byte payload [output]
+    v = set_output_boot_state(9, 0, True)
+    assert (v[3] << 8) | v[4] == CMD_OUTPUT_BOOT_STATE
+    assert v[5:] == bytes([0x00])  # just the output byte
+
+    # off → 2-byte payload [output, 0x00]
+    v2 = set_output_boot_state(9, 1, False)
+    assert v2[5:] == bytes([0x01, 0x00])
+
+
+def test_decode_output_boot_state_reply():
+    from plejd.protocol import Command, decode_output_boot_state_reply
+
+    # 1-byte reply → use_last=True
+    cmd1 = Command(5, 0x02, 0x00D7, bytes([0x00]))
+    assert decode_output_boot_state_reply(cmd1) is True
+
+    # 2-byte reply with 0x00 → off=False
+    cmd2 = Command(5, 0x02, 0x00D7, bytes([0x00, 0x00]))
+    assert decode_output_boot_state_reply(cmd2) is False
+
+    # 2-byte reply with non-zero second byte → unrecognised → None
+    cmd3 = Command(5, 0x02, 0x00D7, bytes([0x00, 0x01]))
+    assert decode_output_boot_state_reply(cmd3) is None
+
+    # empty → None
+    cmd4 = Command(5, 0x02, 0x00D7, b"")
+    assert decode_output_boot_state_reply(cmd4) is None
+
+
+def test_set_output_relay_off_time_bytes():
+    from plejd.const import CMD_OUTPUT_RELAY_OFF_TIME
+    from plejd.protocol import set_output_relay_off_time
+
+    # 2 seconds = 200 centiseconds = 0x00C8 little-endian
+    v = set_output_relay_off_time(9, 0, 2.0)
+    assert (v[3] << 8) | v[4] == CMD_OUTPUT_RELAY_OFF_TIME
+    assert v[5:] == bytes([0x00, 0xC8, 0x00])  # [output=0, lo=0xC8, hi=0x00]
+
+
+def test_decode_output_relay_off_time_reply():
+    from plejd.protocol import Command, decode_output_relay_off_time_reply
+
+    # 200 centiseconds = 2.0 seconds
+    cmd = Command(5, 0x02, 0x00D4, bytes([0xC8, 0x00]))
+    assert decode_output_relay_off_time_reply(cmd) == 2.0
+
+    # 150 centiseconds = 1.5 seconds
+    cmd2 = Command(5, 0x02, 0x00D4, bytes([0x96, 0x00]))
+    assert decode_output_relay_off_time_reply(cmd2) == 1.5
+
+    # too short → None
+    cmd3 = Command(5, 0x02, 0x00D4, bytes([0x01]))
+    assert decode_output_relay_off_time_reply(cmd3) is None
+
+
+def test_request_boot_state_and_relay_off_time_use_read_type():
+    from plejd.const import CMD_OUTPUT_BOOT_STATE, CMD_OUTPUT_RELAY_OFF_TIME
+    from plejd.protocol import TYPE_READ, request_output_boot_state, request_output_relay_off_time
+
+    for req_fn, expected_cmd in [
+        (request_output_boot_state, CMD_OUTPUT_BOOT_STATE),
+        (request_output_relay_off_time, CMD_OUTPUT_RELAY_OFF_TIME),
+    ]:
+        v = req_fn(0x05, 1)
+        assert v[2] == TYPE_READ
+        assert (v[3] << 8) | v[4] == expected_cmd
+        assert v[5:] == bytes([0x01])  # output index
