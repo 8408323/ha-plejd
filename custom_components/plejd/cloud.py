@@ -4,11 +4,12 @@ Logs in and fetches a site's crypto key + device list, decoded from the app's
 `ParseClient` / `ImportSiteAsync`. Login is plain Parse (`/login`); the site comes
 from the `getSiteById` cloud function. The JSON shape matches the app's
 deserializers; the multi-output address mapping is worth confirming on a live
-capture (#2). See docs/protocol.md.
+capture (#2). See docs/reverse_engineering.md.
 """
 
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass, field
 
 from aiohttp import ClientSession
@@ -19,7 +20,10 @@ from .const import (
     DEFAULT_CATEGORY,
     HARDWARE_TYPES,
     HARDWARE_WMS_01,
+    PLEJD_FN_CREATE_DEVICE,
+    PLEJD_FN_CREATE_ROOM,
     PLEJD_FN_FIRMWARE_BY_HW,
+    PLEJD_FN_SET_INPUT,
     PLEJD_FN_SITE_BY_ID,
     PLEJD_FN_SITE_LIST,
     PLEJD_FN_UPDATE_DEVICE,
@@ -103,11 +107,12 @@ class PlejdCloudScene:
 
 @dataclass
 class PlejdCloudSite:
-    """A site: its crypto key, devices, scenes, and any gateway."""
+    """A site: its crypto key, mesh key, devices, scenes, and any gateway."""
 
     site_id: str
     title: str
     crypto_key: bytes
+    mesh_key: str  # dash-separated hex ("AA-BB-CC-DD") for SetAccessAddress during commissioning
     devices: list[PlejdCloudDevice]
     inputs: list[PlejdCloudInput]
     motion: list[PlejdCloudMotion]
@@ -205,6 +210,132 @@ async def async_get_site(session: ClientSession, token: str, site_id: str) -> Pl
     return parse_site(result)
 
 
+@dataclass
+class NewDeviceInfo:
+    """Per-output metadata for a new device being registered to a site."""
+
+    title: str
+    output_index: int
+    room_id: str | None = None
+    traits: int = 0
+    hidden_from_room_list: bool = False
+
+
+@dataclass
+class NewDeviceAddresses:
+    """Addresses assigned to a newly registered device by the cloud."""
+
+    device_address: int | None  # mesh node address for the device
+    output_addresses: dict[int, int]  # output_index -> mesh address
+
+
+async def async_create_device(
+    session: ClientSession,
+    token: str,
+    site_id: str,
+    device_id: str,
+    hardware_id: str,
+    firmware_build_time: int,
+    device_infos: list[NewDeviceInfo] | None = None,
+    faceplate_id: str = "0",
+    variant: str | None = None,
+    installation_location: str | None = None,
+) -> NewDeviceAddresses:
+    """Register a new device to a site via createPlejdDevice_V2.
+
+    Returns the mesh addresses assigned by the cloud. Call this BEFORE BLE
+    commissioning — the returned device_address is the node index used in SetNodeIndex.
+    device_id is the BLE MAC address as a hex string (no separators, lowercase).
+    """
+    body: dict = {
+        "siteId": site_id,
+        "deviceId": device_id,
+        "hardwareId": hardware_id,
+        "firmwareBuildTime": firmware_build_time,
+        "faceplateId": faceplate_id,
+    }
+    if variant is not None:
+        body["variant"] = variant
+    if installation_location is not None:
+        body["installationLocation"] = installation_location
+    if device_infos:
+        body["deviceInfo"] = [
+            {
+                "title": di.title,
+                "index": di.output_index,
+                "roomId": di.room_id,
+                "traits": di.traits,
+                "hiddenFromRoomList": di.hidden_from_room_list,
+            }
+            for di in device_infos
+        ]
+    result = await _call_function(session, token, PLEJD_FN_CREATE_DEVICE, body)
+    return _parse_new_device_addresses(result)
+
+
+def _parse_new_device_addresses(result: object) -> NewDeviceAddresses:
+    """Parse a createPlejdDevice_V2 response into mesh addresses."""
+    if not isinstance(result, dict):
+        return NewDeviceAddresses(device_address=None, output_addresses={})
+    device_addr_raw = result.get("deviceAddress")
+    device_address = int(device_addr_raw) if device_addr_raw is not None else None
+    output_address_map = result.get("outputAddress") or {}
+    output_addresses: dict[int, int] = {}
+    for idx_str, addr in output_address_map.items():
+        try:
+            output_addresses[int(idx_str)] = int(addr)
+        except (ValueError, TypeError):
+            pass
+    return NewDeviceAddresses(device_address=device_address, output_addresses=output_addresses)
+
+
+async def async_create_room(
+    session: ClientSession,
+    token: str,
+    site_id: str,
+    title: str,
+    category: str = "Other",
+) -> str:
+    """Create a new room and return its ID (a UUID we generate and pass in)."""
+    room_id = str(uuid.uuid4())
+    await _call_function(
+        session,
+        token,
+        PLEJD_FN_CREATE_ROOM,
+        {"siteId": site_id, "roomId": room_id, "title": title, "category": category, "imageHash": 0},
+    )
+    return room_id
+
+
+async def async_set_input_setting(
+    session: ClientSession,
+    token: str,
+    site_id: str,
+    device_id: str,
+    input_index: int,
+    button_type: str,
+) -> None:
+    """Set the button type for one input of a device (e.g. 'Toggle' or 'PushButton')."""
+    await _call_function(
+        session,
+        token,
+        PLEJD_FN_SET_INPUT,
+        {
+            "siteId": site_id,
+            "deviceId": device_id,
+            "input": input_index,
+            "buttonType": button_type,
+            "dimSpeed": 0,
+            "singleClick": None,
+            "doubleClick": None,
+            "doubleSidedDirectionButton": False,
+            "motionSensorData": None,
+            "positiveEdgeScene": None,
+            "negativeEdgeScene": None,
+        },
+    )
+
+
 def parse_site(site: dict) -> PlejdCloudSite:
     """Parse a getSiteById result into a PlejdCloudSite."""
     mesh = site.get("plejdMesh") or {}
@@ -213,6 +344,8 @@ def parse_site(site: dict) -> PlejdCloudSite:
         raise PlejdCloudError("site has no cryptoKey")
     # cryptoKey is dash-separated hex ("XX-XX-..", 16 bytes) — validated against the API.
     crypto_key = bytes.fromhex(key_hex.replace("-", ""))
+    # meshKey is a dash-separated hex string used as the BLE AccessAddress during commissioning.
+    mesh_key: str = mesh.get("meshKey") or ""
 
     device_address = site.get("deviceAddress") or {}
     output_address = site.get("outputAddress") or {}
@@ -319,6 +452,7 @@ def parse_site(site: dict) -> PlejdCloudSite:
         site_id=meta.get("siteId") or "",
         title=meta.get("title") or "Plejd",
         crypto_key=crypto_key,
+        mesh_key=mesh_key,
         devices=devices,
         inputs=inputs,
         motion=motion,

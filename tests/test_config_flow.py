@@ -55,6 +55,7 @@ def _site(site_id="S1"):
         site_id=site_id,
         title="Home",
         crypto_key=bytes(16),
+        mesh_key="AA-BB-CC-DD",
         devices=[dev],
         inputs=[PlejdCloudInput("d1", "Kitchen", 11)],
         motion=[PlejdCloudMotion("w1", "Motion", 33)],

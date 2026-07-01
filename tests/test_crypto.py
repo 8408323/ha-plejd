@@ -2,8 +2,20 @@
 
 from __future__ import annotations
 
+import struct
+
 import pytest
-from plejd.crypto import auth_response, encrypt_decrypt, keystream_block
+from plejd.crypto import (
+    _DH_BASE,
+    _DH_MOD,
+    DEFAULT_MESH_KEY,
+    auth_response,
+    dh_encrypt_site_key,
+    dh_generate_keypair,
+    dh_shared_secret,
+    encrypt_decrypt,
+    keystream_block,
+)
 
 _KEY = bytes.fromhex("00112233445566778899aabbccddeeff")
 _ADDR = bytes.fromhex("0102030405a0")  # reversed device MAC, 6 bytes
@@ -80,3 +92,77 @@ def test_auth_response_rejects_bad_key_length():
 def test_auth_response_rejects_short_challenge():
     with pytest.raises(ValueError, match="challenge must be at least 16 bytes"):
         auth_response(bytes(15), _KEY)
+
+
+# ---- DH commissioning crypto ----
+
+
+def test_default_mesh_key_is_16_bytes():
+    assert len(DEFAULT_MESH_KEY) == 16
+    assert DEFAULT_MESH_KEY == bytes.fromhex("00112233445566778899aabbccddeeff")
+
+
+def test_dh_generate_keypair_returns_nonzero_uint64():
+    priv, pub = dh_generate_keypair()
+    assert 0 < priv < 2**64
+    assert 0 < pub < 2**64
+
+
+def test_dh_keypair_satisfies_discrete_log():
+    # pub = base^priv mod DhMod
+    priv, pub = dh_generate_keypair()
+    assert pow(_DH_BASE, priv, _DH_MOD) == pub
+
+
+def test_dh_generate_keypair_is_random():
+    # Two calls should produce different keys (probabilistically certain).
+    a = dh_generate_keypair()
+    b = dh_generate_keypair()
+    assert a != b
+
+
+def test_dh_shared_secret_agrees_both_sides():
+    # Simulate both parties computing the same shared secret.
+    priv_a, pub_a = dh_generate_keypair()
+    priv_b, pub_b = dh_generate_keypair()
+    secret_a = dh_shared_secret(priv_a, pub_b)  # A computes with B's public key
+    secret_b = dh_shared_secret(priv_b, pub_a)  # B computes with A's public key
+    assert secret_a == secret_b
+    assert secret_a > 0
+
+
+def test_dh_encrypt_site_key_xors_with_secret_bytes():
+    # Encrypt with known secret, verify the XOR manually.
+    secret = 0x0102030405060708
+    site_key = bytes(range(16))
+    secret_bytes = struct.pack("<Q", secret)
+    expected = bytes(b ^ secret_bytes[i % 8] for i, b in enumerate(site_key))
+    assert dh_encrypt_site_key(site_key, secret) == expected
+
+
+def test_dh_encrypt_site_key_is_its_own_inverse():
+    # XOR cipher: encrypting twice restores the original key.
+    priv_a, pub_a = dh_generate_keypair()
+    priv_b, pub_b = dh_generate_keypair()
+    secret = dh_shared_secret(priv_a, pub_b)
+    encrypted = dh_encrypt_site_key(_KEY, secret)
+    assert dh_encrypt_site_key(encrypted, secret) == _KEY
+
+
+def test_dh_encrypt_site_key_rejects_wrong_length():
+    with pytest.raises(ValueError, match="site_key must be 16 bytes"):
+        dh_encrypt_site_key(bytes(8), 12345)
+
+
+def test_dh_full_roundtrip_commissioning():
+    # Full simulation: device side generates a keypair, host side does DH and encrypts.
+    device_priv, device_pub = dh_generate_keypair()
+    host_priv, host_pub = dh_generate_keypair()
+    # Host reads device_pub from CryptoKeyID, writes host_pub, computes shared secret.
+    host_secret = dh_shared_secret(host_priv, device_pub)
+    encrypted_site_key = dh_encrypt_site_key(_KEY, host_secret)
+    # Device computes the same secret and decrypts.
+    device_secret = dh_shared_secret(device_priv, host_pub)
+    recovered = dh_encrypt_site_key(encrypted_site_key, device_secret)
+    assert device_secret == host_secret
+    assert recovered == _KEY

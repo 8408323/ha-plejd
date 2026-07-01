@@ -6,21 +6,29 @@ import aiohttp
 import pytest
 from aioresponses import aioresponses
 from plejd.cloud import (
+    NewDeviceInfo,
     PlejdAuthError,
     PlejdCloudError,
+    _parse_new_device_addresses,
+    async_create_device,
+    async_create_room,
     async_get_available_firmware,
     async_get_site,
     async_get_sites,
     async_login,
     async_set_device_title,
+    async_set_input_setting,
     parse_site,
 )
-from plejd.const import PLEJD_PARSE_URL
+from plejd.const import PLEJD_FN_CREATE_DEVICE, PLEJD_FN_CREATE_ROOM, PLEJD_FN_SET_INPUT, PLEJD_PARSE_URL
 
 _LOGIN = PLEJD_PARSE_URL + "login"
 _SITE_LIST = PLEJD_PARSE_URL + "functions/getSiteList"
 _SITE_BY_ID = PLEJD_PARSE_URL + "functions/getSiteById"
 _FIRMWARE = PLEJD_PARSE_URL + "functions/getFirmwaresByHardwareId"
+_CREATE_DEVICE = PLEJD_PARSE_URL + PLEJD_FN_CREATE_DEVICE
+_CREATE_ROOM = PLEJD_PARSE_URL + PLEJD_FN_CREATE_ROOM
+_SET_INPUT = PLEJD_PARSE_URL + PLEJD_FN_SET_INPUT
 
 _SITE = {
     "siteId": "S1",
@@ -330,3 +338,127 @@ async def test_set_device_title_false_when_cloud_rejects():
         m.post(_UPDATE_DEVICE, payload={"result": False})
         async with aiohttp.ClientSession() as s:
             assert await async_set_device_title(s, "tok", "site-1", "d1", "p1", "X") is False
+
+
+def test_parse_site_extracts_mesh_key():
+    site = parse_site(
+        {
+            "plejdMesh": {"cryptoKey": "00" * 16, "meshKey": "AB-CD-EF-01"},
+            "devices": [],
+        }
+    )
+    assert site.mesh_key == "AB-CD-EF-01"
+
+
+def test_parse_site_mesh_key_defaults_to_empty_string():
+    site = parse_site({"plejdMesh": {"cryptoKey": "00" * 16}, "devices": []})
+    assert site.mesh_key == ""
+
+
+# ---- createPlejdDevice_V2 ----
+
+
+def test_parse_new_device_addresses_full_response():
+    result = {
+        "deviceAddress": 5,
+        "outputAddress": {"0": 50, "1": 51},
+    }
+    addrs = _parse_new_device_addresses(result)
+    assert addrs.device_address == 5
+    assert addrs.output_addresses == {0: 50, 1: 51}
+
+
+def test_parse_new_device_addresses_non_dict_returns_empty():
+    addrs = _parse_new_device_addresses(None)
+    assert addrs.device_address is None
+    assert addrs.output_addresses == {}
+
+
+def test_parse_new_device_addresses_skips_invalid_output_keys():
+    result = {"deviceAddress": 7, "outputAddress": {"0": 70, "bad": "skip", "1": None}}
+    addrs = _parse_new_device_addresses(result)
+    assert addrs.device_address == 7
+    assert addrs.output_addresses == {0: 70}
+
+
+async def test_async_create_device_sends_required_fields():
+    with aioresponses() as m:
+        m.post(_CREATE_DEVICE, payload={"result": {"deviceAddress": 10, "outputAddress": {"0": 100}}})
+        async with aiohttp.ClientSession() as s:
+            addrs = await async_create_device(s, "tok", "site1", "aabbccddeeff", "1", 20241101000000)
+    assert addrs.device_address == 10
+    assert addrs.output_addresses == {0: 100}
+
+
+async def test_async_create_device_sends_optional_fields():
+    with aioresponses() as m:
+        m.post(_CREATE_DEVICE, payload={"result": {"deviceAddress": 3}})
+        async with aiohttp.ClientSession() as s:
+            addrs = await async_create_device(
+                s,
+                "tok",
+                "site1",
+                "aabbccddeeff",
+                "1",
+                20241101000000,
+                device_infos=[NewDeviceInfo(title="Kitchen", output_index=0, room_id="r1")],
+                faceplate_id="fp1",
+                variant="v2",
+                installation_location="ceiling",
+            )
+    assert addrs.device_address == 3
+
+
+async def test_async_create_device_error_raises():
+    with aioresponses() as m:
+        m.post(_CREATE_DEVICE, status=400, payload={"error": "bad request"})
+        async with aiohttp.ClientSession() as s:
+            with pytest.raises(PlejdCloudError, match="bad request"):
+                await async_create_device(s, "tok", "site1", "aabbccddeeff", "1", 0)
+
+
+async def test_create_room_posts_correct_payload_and_returns_uuid():
+    with aioresponses() as m:
+        m.post(_CREATE_ROOM, payload={"result": 1})
+        async with aiohttp.ClientSession() as s:
+            room_id = await async_create_room(s, "tok", "site1", "Bibliotek")
+    # room_id must be a UUID string
+    import uuid as _uuid
+
+    _uuid.UUID(room_id)  # raises if not a valid UUID
+
+
+async def test_create_room_uses_supplied_category():
+    from aioresponses import CallbackResult
+
+    captured: dict = {}
+
+    def _capture(url, **kwargs):
+        captured.update(kwargs.get("json", {}))
+        return CallbackResult(payload={"result": 1})
+
+    with aioresponses() as m:
+        m.post(_CREATE_ROOM, callback=_capture)
+        async with aiohttp.ClientSession() as s:
+            await async_create_room(s, "tok", "site1", "Garage", category="Garage")
+    assert captured["title"] == "Garage"
+    assert captured["category"] == "Garage"
+
+
+async def test_set_input_setting_posts_toggle():
+    from aioresponses import CallbackResult
+
+    captured: dict = {}
+
+    def _capture(url, **kwargs):
+        captured.update(kwargs.get("json", {}))
+        return CallbackResult(payload={"result": True})
+
+    with aioresponses() as m:
+        m.post(_SET_INPUT, callback=_capture)
+        async with aiohttp.ClientSession() as s:
+            await async_set_input_setting(s, "tok", "site1", "aabbccddeeff", 0, "Toggle")
+    assert captured["deviceId"] == "aabbccddeeff"
+    assert captured["input"] == 0
+    assert captured["buttonType"] == "Toggle"
+    assert captured["doubleSidedDirectionButton"] is False
