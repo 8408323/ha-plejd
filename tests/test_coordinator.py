@@ -355,6 +355,44 @@ async def test_reconnect_backs_off_on_failure(monkeypatch):
     assert calls["n"] == 2  # retried after the first failure, then gave up on close
 
 
+async def test_reconnect_stops_and_starts_reauth_on_auth_failure(monkeypatch):
+    from homeassistant.exceptions import ConfigEntryAuthFailed
+
+    c = PlejdCoordinator(_hass(), _entry())
+    started = []
+    c._entry = types.SimpleNamespace(async_start_reauth=lambda h: started.append(h))
+
+    async def _fake_sleep(_delay):
+        pass
+
+    async def _auth_fail():
+        raise ConfigEntryAuthFailed("credentials rejected")
+
+    monkeypatch.setattr(coordinator_mod.asyncio, "sleep", _fake_sleep)
+    monkeypatch.setattr(c, "_async_select_and_connect", _auth_fail)
+    await c._async_reconnect()
+    assert started == [c.hass]  # reauth started, loop didn't retry forever
+    assert c._reconnecting is False
+
+
+async def test_reconnect_retries_on_unexpected_exception(monkeypatch):
+    c = PlejdCoordinator(_hass(), _entry())
+    calls = {"n": 0}
+
+    async def _fake_sleep(_delay):
+        pass
+
+    async def _flaky():
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(coordinator_mod.asyncio, "sleep", _fake_sleep)
+    monkeypatch.setattr(c, "_async_select_and_connect", _flaky)
+    await c._async_reconnect()
+    assert calls["n"] == 3  # two unexpected failures were retried, not fatal
+
+
 async def test_shutdown_cancels_reconnect_task(monkeypatch):
     client = _FakeClient()
     _patch_connect(monkeypatch, client)

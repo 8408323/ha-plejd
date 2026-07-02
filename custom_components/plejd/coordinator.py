@@ -430,7 +430,12 @@ class PlejdCoordinator:
         return asyncio.ensure_future(coro)
 
     async def _async_reconnect(self) -> None:
-        """Reconnect to the mesh with exponential backoff until it succeeds or we close."""
+        """Reconnect to the mesh with exponential backoff until it succeeds or we close.
+
+        Any failure to (re)connect must keep this loop alive: a single uncaught
+        exception here silently kills the background task and the mesh never
+        reconnects again on its own, even if the underlying issue clears.
+        """
         if self._reconnecting:
             return
         self._reconnecting = True
@@ -444,7 +449,13 @@ class PlejdCoordinator:
                     await self._async_select_and_connect()
                     _LOGGER.debug("reconnected to Plejd mesh")
                     return
-                except ConfigEntryNotReady as err:
+                except ConfigEntryAuthFailed:
+                    # Retrying with the same rejected credentials can't succeed; prompt
+                    # reauth and stop until the entry reloads with fresh ones.
+                    self._entry.async_start_reauth(self.hass)
+                    _LOGGER.warning("Plejd reconnect stopped: cloud credentials rejected, reauth requested")
+                    return
+                except Exception as err:  # noqa: BLE001 - any failure must be retried, never kill this loop
                     delay = min(delay * 2, RECONNECT_MAX_DELAY)
                     _LOGGER.debug("Plejd reconnect failed (retry in %ss): %s", delay, err)
         finally:
