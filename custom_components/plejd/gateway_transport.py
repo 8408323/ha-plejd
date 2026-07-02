@@ -16,12 +16,15 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import logging
 from collections.abc import Awaitable, Callable
 
 import aiohttp
 
 from . import gateway, protocol
 from .protocol import OutputState
+
+_LOGGER = logging.getLogger(__name__)
 
 # App-level keep-alive: ping the gateway and reconnect if it doesn't pong. This
 # catches a hung gateway behind a still-open WebSocket (the WS heartbeat only
@@ -163,7 +166,7 @@ class PlejdGatewayConnection:
                 await self._publish_control({"controlType": gateway.CONTROL_TYPE_PING})
                 await asyncio.sleep(GATEWAY_PONG_TIMEOUT)
             except Exception:  # noqa: BLE001 - a failed ping is a missed pong, not a dead loop
-                pass
+                _LOGGER.warning("Plejd gateway ping failed, treating as a missed pong", exc_info=True)
             if not self._pong and not self._closing and self._ws is ws and not ws.closed:
                 await ws.close()  # the receive loop will exit → owner reconnects
                 return
