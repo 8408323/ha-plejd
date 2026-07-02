@@ -151,26 +151,35 @@ class PlejdGatewayConnection:
 
     async def _ping_loop(self) -> None:
         # Periodic app-level Ping; if the gateway misses a Pong, close to reconnect.
+        # A failed send (a half-broken connection the receive loop hasn't noticed yet)
+        # must be treated the same as a missed pong, not left to kill this loop silently.
         while not self._closing:
             await asyncio.sleep(GATEWAY_PING_INTERVAL)
             ws = self._ws  # tie this round to the socket we ping, not a later reconnect's
             if self._closing or ws is None or ws.closed:
                 return
             self._pong = False
-            await self._publish_control({"controlType": gateway.CONTROL_TYPE_PING})
-            await asyncio.sleep(GATEWAY_PONG_TIMEOUT)
+            try:
+                await self._publish_control({"controlType": gateway.CONTROL_TYPE_PING})
+                await asyncio.sleep(GATEWAY_PONG_TIMEOUT)
+            except Exception:  # noqa: BLE001 - a failed ping is a missed pong, not a dead loop
+                pass
             if not self._pong and not self._closing and self._ws is ws and not ws.closed:
                 await ws.close()  # the receive loop will exit → owner reconnects
                 return
 
     async def _receive_loop(self) -> None:
+        # Any exit from this loop — clean close or an unexpected exception — must
+        # notify the owner. Losing that notification silently means the coordinator
+        # never learns the gateway dropped and never reconnects.
         assert self._ws is not None
-        async for msg in self._ws:
-            if msg.type is aiohttp.WSMsgType.TEXT:
-                self._handle_frame(msg.data)
-        # The socket closed; if it wasn't us, let the owner reconnect.
-        if not self._closing and self._on_disconnect is not None:
-            self._on_disconnect()
+        try:
+            async for msg in self._ws:
+                if msg.type is aiohttp.WSMsgType.TEXT:
+                    self._handle_frame(msg.data)
+        finally:
+            if not self._closing and self._on_disconnect is not None:
+                self._on_disconnect()
 
     def _cancel_tasks(self) -> None:
         for task in (self._recv_task, self._ping_task):
