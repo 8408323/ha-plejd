@@ -26,12 +26,12 @@ def _hass(service_infos=()):
 
 
 def test_parse_mfr_data_on_default_mesh():
-    result = _parse_plejd_mfr_data({0x02E5: bytes([0x08, 0, 0, 2])})
+    result = _parse_plejd_mfr_data({887: bytes([0x08, 0, 0, 2])})
     assert result == {"hardware_id": 2, "is_unprovisioned": True, "firmware_build_time": 0}
 
 
 def test_parse_mfr_data_provisioned():
-    result = _parse_plejd_mfr_data({0x02E5: bytes([0x07, 0, 0, 1])})
+    result = _parse_plejd_mfr_data({887: bytes([0x07, 0, 0, 1])})
     assert result == {"hardware_id": 1, "is_unprovisioned": False, "firmware_build_time": 0}
 
 
@@ -39,7 +39,7 @@ def test_parse_mfr_data_includes_build_time():
     # 17 bytes: LoginByte + pad[2] + hw_id + mac[6] + buildTime[6 BE] + extra
     bt = (20240701133622).to_bytes(6, "big")
     data = bytes([0x08, 0, 0, 22]) + bytes(6) + bt + bytes([0x07])
-    result = _parse_plejd_mfr_data({0x02E5: data})
+    result = _parse_plejd_mfr_data({887: data})
     assert result is not None
     assert result["hardware_id"] == 22
     assert result["firmware_build_time"] == 20240701133622
@@ -50,11 +50,11 @@ def test_parse_mfr_data_empty_dict_returns_none():
 
 
 def test_parse_mfr_data_too_short_returns_none():
-    assert _parse_plejd_mfr_data({0x02E5: bytes([0x08, 0, 0])}) is None
+    assert _parse_plejd_mfr_data({887: bytes([0x08, 0, 0])}) is None
 
 
 def test_parse_mfr_data_ignores_other_company_ids():
-    # Some other vendor's manufacturer data, not Plejd's 0x02E5 - must not be parsed.
+    # Some other vendor's manufacturer data, not Plejd's 887 - must not be parsed.
     assert _parse_plejd_mfr_data({0x004C: bytes([0x08, 0, 0, 1, 0, 0, 0, 0])}) is None
 
 
@@ -63,7 +63,7 @@ def test_parse_mfr_data_ignores_other_company_ids():
 
 def test_scan_finds_unprovisioned_on_default_mesh():
     # LoginByte 0x08 = IsOnDefaultMesh, hardware_id byte at offset 3 = 1 (DIM-01)
-    hass = _hass([_fake_service_info("AA:BB:CC:DD:EE:FF", {0x02E5: bytes([0x08, 0, 0, 1])})])
+    hass = _hass([_fake_service_info("AA:BB:CC:DD:EE:FF", {887: bytes([0x08, 0, 0, 1])})])
     devs = async_scan_unprovisioned(hass)
     assert len(devs) == 1
     assert devs[0]["address"] == "AA:BB:CC:DD:EE:FF"
@@ -73,14 +73,14 @@ def test_scan_finds_unprovisioned_on_default_mesh():
 
 def test_scan_finds_unclaimed_device():
     # LoginByte 0x00 = no flags set = unclaimed; hardware_id at offset 3 = 3 (CTR-01)
-    hass = _hass([_fake_service_info("11:22:33:44:55:66", {0x02E5: bytes([0x00, 0, 0, 3])})])
+    hass = _hass([_fake_service_info("11:22:33:44:55:66", {887: bytes([0x00, 0, 0, 3])})])
     devs = async_scan_unprovisioned(hass)
     assert devs[0]["model"] == "CTR-01"
 
 
 def test_scan_excludes_provisioned_device():
     # LoginByte 0x07 = all three provisioning bits set, not on default mesh -> provisioned
-    hass = _hass([_fake_service_info("AA:BB:CC:DD:EE:FF", {0x02E5: bytes([0x07, 0, 0, 1])})])
+    hass = _hass([_fake_service_info("AA:BB:CC:DD:EE:FF", {887: bytes([0x07, 0, 0, 1])})])
     assert async_scan_unprovisioned(hass) == []
 
 
@@ -90,7 +90,7 @@ def test_scan_excludes_non_plejd_devices():
         [
             _fake_service_info(
                 "AA:BB:CC:DD:EE:FF",
-                {0x02E5: bytes([0x08, 0, 0, 1])},
+                {887: bytes([0x08, 0, 0, 1])},
                 service_uuids=["0000180a-0000-1000-8000-00805f9b34fb"],
             )
         ]

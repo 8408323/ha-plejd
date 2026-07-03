@@ -46,6 +46,16 @@ def _parse_plejd_mfr_data(manufacturer_data: dict[int, bytes]) -> dict | None:
     }
 
 
+def async_bluetooth_available(hass: HomeAssistant) -> bool:
+    """Whether HA has at least one connectable Bluetooth scanner right now.
+
+    Commissioning needs a real BLE GATT connection to the new device, so a local
+    adapter or an active-mode ESPHome Bluetooth proxy is required - passive-only
+    coverage (or none at all) can't do it.
+    """
+    return bluetooth.async_scanner_count(hass, connectable=True) > 0
+
+
 def async_scan_unprovisioned(hass: HomeAssistant) -> list[dict]:
     """Return every unprovisioned Plejd device currently visible over Bluetooth.
 

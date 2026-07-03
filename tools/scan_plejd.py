@@ -16,7 +16,7 @@ from bleak.backends.device import BLEDevice
 from bleak.backends.scanner import AdvertisementData
 
 PLEJD_SERVICE_UUID = "31ba0001-6085-4726-be45-040c957391b5"
-PLEJD_BLE_COMPANY_ID = 0x02E5
+PLEJD_BLE_COMPANY_ID = 887  # Plejd.Shared PlejdManufacturerId
 
 _FLAG_HAS_ACCESS_ADDRESS = 0x01
 _FLAG_HAS_NODE_INDEX = 0x02

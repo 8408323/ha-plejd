@@ -504,6 +504,13 @@ async def test_add_device_raises_if_not_in_range():
         await async_add_device(hass, _entry(), address=_ADDR, name="X")
 
 
+async def test_add_device_raises_when_bluetooth_unavailable():
+    hass = _hass(ble_devices={_ADDR: _device()})
+    hass.scanner_count = 0  # no local adapter, no ESPHome Bluetooth proxy
+    with pytest.raises(HomeAssistantError, match="Bluetooth is not available"):
+        await async_add_device(hass, _entry(), address=_ADDR, name="X")
+
+
 async def test_add_device_raises_on_cloud_error(monkeypatch):
     hass = _hass(ble_devices={_ADDR: _device()})
     monkeypatch.setattr("plejd.commission.async_login", AsyncMock(side_effect=PlejdCloudError("down")))
@@ -585,7 +592,7 @@ async def test_add_device_auto_extracts_hw_and_build_time_from_advertisement(mon
     # 17-byte mfr data: unprovisioned, hw=22, 6-byte build time 20240701133622
     bt = (20240701133622).to_bytes(6, "big")
     mfr = bytes([0x08, 0, 0, 22]) + bytes(6) + bt + bytes([0x07])
-    hass = _hass(service_infos=[_fake_service_info(_ADDR, {0x02E5: mfr})], ble_devices={_ADDR: _device()})
+    hass = _hass(service_infos=[_fake_service_info(_ADDR, {887: mfr})], ble_devices={_ADDR: _device()})
     monkeypatch.setattr("plejd.commission.async_login", AsyncMock(return_value="tok"))
     monkeypatch.setattr("plejd.commission.async_get_site", AsyncMock(return_value=_site()))
 

@@ -279,12 +279,25 @@ async def test_scan_service_is_registered_on_setup(monkeypatch):
     assert f"plejd.{SERVICE_SCAN_DEVICES}" in hass.services._handlers
 
 
+async def test_scan_raises_when_bluetooth_unavailable(monkeypatch):
+    from homeassistant.exceptions import HomeAssistantError
+
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    _FakeCoordinator.instances.clear()
+    hass, entry = _hass(), _entry()
+    hass.scanner_count = 0  # no local adapter, no ESPHome Bluetooth proxy
+    await async_setup_entry(hass, entry)
+    handler = hass.services._handlers[f"plejd.{SERVICE_SCAN_DEVICES}"]
+    with pytest.raises(HomeAssistantError, match="Bluetooth is not available"):
+        await handler(types.SimpleNamespace(data={}))
+
+
 async def test_scan_finds_unprovisioned_on_default_mesh(monkeypatch):
     monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
     _FakeCoordinator.instances.clear()
     hass, entry = _hass(), _entry()
     # LoginByte 0x08 = IsOnDefaultMesh, hardware_id byte at offset 3 = 1 (DIM-01)
-    hass.service_infos = [_fake_service_info("AA:BB:CC:DD:EE:FF", None, {0x02E5: bytes([0x08, 0, 0, 1])})]
+    hass.service_infos = [_fake_service_info("AA:BB:CC:DD:EE:FF", None, {887: bytes([0x08, 0, 0, 1])})]
     await async_setup_entry(hass, entry)
     handler = hass.services._handlers[f"plejd.{SERVICE_SCAN_DEVICES}"]
     await handler(types.SimpleNamespace(data={}))
@@ -303,7 +316,7 @@ async def test_scan_finds_unclaimed_device(monkeypatch):
     _FakeCoordinator.instances.clear()
     hass, entry = _hass(), _entry()
     # LoginByte 0x00 = no flags set = unclaimed; hardware_id at offset 3 = 3 (CTR-01)
-    hass.service_infos = [_fake_service_info("11:22:33:44:55:66", None, {0x02E5: bytes([0x00, 0, 0, 3])})]
+    hass.service_infos = [_fake_service_info("11:22:33:44:55:66", None, {887: bytes([0x00, 0, 0, 3])})]
     await async_setup_entry(hass, entry)
     handler = hass.services._handlers[f"plejd.{SERVICE_SCAN_DEVICES}"]
     await handler(types.SimpleNamespace(data={}))
@@ -316,7 +329,7 @@ async def test_scan_excludes_provisioned_device(monkeypatch):
     _FakeCoordinator.instances.clear()
     hass, entry = _hass(), _entry()
     # LoginByte 0x07 = all three provisioning bits set, not on default mesh → provisioned
-    hass.service_infos = [_fake_service_info("AA:BB:CC:DD:EE:FF", None, {0x02E5: bytes([0x07, 0, 0, 1])})]
+    hass.service_infos = [_fake_service_info("AA:BB:CC:DD:EE:FF", None, {887: bytes([0x07, 0, 0, 1])})]
     await async_setup_entry(hass, entry)
     handler = hass.services._handlers[f"plejd.{SERVICE_SCAN_DEVICES}"]
     await handler(types.SimpleNamespace(data={}))
@@ -330,9 +343,7 @@ async def test_scan_excludes_non_plejd_devices(monkeypatch):
     hass, entry = _hass(), _entry()
     # Different service UUID — not a Plejd device
     hass.service_infos = [
-        _fake_service_info(
-            "AA:BB:CC:DD:EE:FF", ["0000180a-0000-1000-8000-00805f9b34fb"], {0x02E5: bytes([0x08, 0, 0, 1])}
-        )
+        _fake_service_info("AA:BB:CC:DD:EE:FF", ["0000180a-0000-1000-8000-00805f9b34fb"], {887: bytes([0x08, 0, 0, 1])})
     ]
     await async_setup_entry(hass, entry)
     handler = hass.services._handlers[f"plejd.{SERVICE_SCAN_DEVICES}"]

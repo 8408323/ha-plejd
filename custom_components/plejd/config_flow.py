@@ -42,7 +42,7 @@ from .const import (
     TRANSPORT_GATEWAY,
     WEEKDAYS,
 )
-from .discovery import async_scan_unprovisioned
+from .discovery import async_bluetooth_available, async_scan_unprovisioned
 
 if TYPE_CHECKING:
     from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
@@ -286,11 +286,11 @@ class PlejdOptionsFlow(OptionsFlow):
 
     async def async_step_add_device(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Pick an unprovisioned device from what's currently visible over Bluetooth."""
+        if not async_bluetooth_available(self.hass):
+            return self.async_show_form(step_id="add_device", data_schema=None, errors={"base": "no_bluetooth"})
         devices = async_scan_unprovisioned(self.hass)
         if not devices:
-            return self.async_show_form(
-                step_id="add_device", data_schema=vol.Schema({}), errors={"base": "no_devices_found"}
-            )
+            return self.async_show_form(step_id="add_device", data_schema=None, errors={"base": "no_devices_found"})
         if user_input is not None and (address := user_input.get("device_address")):
             self._new_device_address = address
             return await self.async_step_add_device_details()

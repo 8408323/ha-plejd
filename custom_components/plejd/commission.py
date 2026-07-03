@@ -53,7 +53,7 @@ from .const import (
     PLEJD_CHAR_PING_UUID,
 )
 from .crypto import dh_encrypt_site_key, dh_generate_keypair, dh_shared_secret
-from .discovery import _parse_plejd_mfr_data
+from .discovery import _parse_plejd_mfr_data, async_bluetooth_available
 from .mesh import PlejdMesh
 from .protocol import (
     access_address_bytes,
@@ -250,6 +250,12 @@ async def async_add_device(
 
     Shared by the add_device service and the "Add a device" options-flow wizard.
     """
+    if not async_bluetooth_available(hass):
+        raise HomeAssistantError(
+            "Bluetooth is not available on this Home Assistant instance. Add a local "
+            "Bluetooth adapter or an ESPHome Bluetooth proxy (in active mode), then try again."
+        )
+
     # Validate the device is actually in range before touching the cloud, so a
     # typo'd address fails fast instead of creating an orphaned cloud room first.
     ble_device = bluetooth.async_ble_device_from_address(hass, address, connectable=True)

@@ -194,9 +194,13 @@ except ImportError:
     def _async_ble_device_from_address(hass, address, connectable=True):
         return getattr(hass, "ble_devices", {}).get(address)
 
+    def _async_scanner_count(hass, connectable=True):
+        return getattr(hass, "scanner_count", 1)
+
     _bt.BluetoothServiceInfoBleak = _BluetoothServiceInfoBleak  # type: ignore[attr-defined]
     _bt.async_discovered_service_info = _async_discovered_service_info  # type: ignore[attr-defined]
     _bt.async_ble_device_from_address = _async_ble_device_from_address  # type: ignore[attr-defined]
+    _bt.async_scanner_count = _async_scanner_count  # type: ignore[attr-defined]
     sys.modules.setdefault("homeassistant.components.bluetooth", _bt)
 
     _light = types.ModuleType("homeassistant.components.light")

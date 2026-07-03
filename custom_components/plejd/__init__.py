@@ -8,12 +8,13 @@ import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry
 
 from .commission import async_add_device
 from .const import DOMAIN
 from .coordinator import PlejdCoordinator
-from .discovery import async_scan_unprovisioned
+from .discovery import async_bluetooth_available, async_scan_unprovisioned
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -83,6 +84,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         )
 
     async def _async_handle_scan_devices(call) -> None:
+        if not async_bluetooth_available(hass):
+            raise HomeAssistantError(
+                "Bluetooth is not available on this Home Assistant instance. Add a local "
+                "Bluetooth adapter or an ESPHome Bluetooth proxy, then try again."
+            )
         new_devices = async_scan_unprovisioned(hass)
         _LOGGER.info("Plejd scan found %d unprovisioned device(s)", len(new_devices))
         _LOGGER.debug("Plejd scan found unprovisioned device(s): %s", [d["address"] for d in new_devices])

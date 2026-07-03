@@ -384,7 +384,7 @@ async def test_add_device_no_devices_found_shows_error():
 async def test_add_device_reshow_form_when_empty_submit_but_devices_appeared():
     """Submitting the empty no-devices form after a device appears must not KeyError."""
     hass = types.SimpleNamespace(
-        service_infos=[_fake_service_info("AA:BB:CC:DD:EE:FF", {0x02E5: bytes([0x08, 0, 0, 1])})],
+        service_infos=[_fake_service_info("AA:BB:CC:DD:EE:FF", {887: bytes([0x08, 0, 0, 1])})],
         ble_devices={},
     )
     flow = _opt_flow(hass=hass)
@@ -395,9 +395,16 @@ async def test_add_device_reshow_form_when_empty_submit_but_devices_appeared():
     assert res["errors"] is None  # devices are now visible; no error
 
 
+async def test_add_device_shows_error_when_bluetooth_unavailable():
+    hass = types.SimpleNamespace(service_infos=[], ble_devices={}, scanner_count=0)
+    res = await _opt_flow(hass=hass).async_step_add_device()
+    assert res["type"] == "form" and res["step_id"] == "add_device"
+    assert res["errors"] == {"base": "no_bluetooth"}
+
+
 async def test_add_device_lists_discovered_devices():
     hass = types.SimpleNamespace(
-        service_infos=[_fake_service_info("AA:BB:CC:DD:EE:FF", {0x02E5: bytes([0x08, 0, 0, 1])})],
+        service_infos=[_fake_service_info("AA:BB:CC:DD:EE:FF", {887: bytes([0x08, 0, 0, 1])})],
         ble_devices={},
     )
     res = await _opt_flow(hass=hass).async_step_add_device()
@@ -408,7 +415,7 @@ async def test_add_device_lists_discovered_devices():
 
 async def test_add_device_picking_device_advances_to_details():
     hass = types.SimpleNamespace(
-        service_infos=[_fake_service_info("AA:BB:CC:DD:EE:FF", {0x02E5: bytes([0x08, 0, 0, 1])})],
+        service_infos=[_fake_service_info("AA:BB:CC:DD:EE:FF", {887: bytes([0x08, 0, 0, 1])})],
         ble_devices={},
     )
     flow = _opt_flow(hass=hass)

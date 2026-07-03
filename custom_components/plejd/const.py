@@ -36,8 +36,9 @@ TRANSPORT_BLE = "ble"  # local Bluetooth only
 # (the "0001") swapped for the role suffix below.
 PLEJD_SERVICE_UUID = "31ba0001-6085-4726-be45-040c957391b5"
 
-# Bluetooth SIG company identifier Plejd uses in advertisement manufacturer data.
-PLEJD_BLE_COMPANY_ID = 0x02E5
+# Bluetooth SIG company identifier Plejd uses in advertisement manufacturer data
+# (Plejd.Shared PlejdManufacturerId; confirmed against a live capture).
+PLEJD_BLE_COMPANY_ID = 887
 
 
 def _char(suffix: str) -> str:

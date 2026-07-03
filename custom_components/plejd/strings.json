@@ -129,7 +129,8 @@
       "invalid_time": "Enter the time as HH:MM (24-hour).",
       "no_devices_found": "No unprovisioned Plejd devices found nearby. Make sure the device is powered and in Bluetooth range, then try again.",
       "name_required": "Enter a name for the device.",
-      "add_device_failed": "Failed to add the device: {error}"
+      "add_device_failed": "Failed to add the device: {error}",
+      "no_bluetooth": "Bluetooth is not available on this Home Assistant instance. Add a local Bluetooth adapter or an ESPHome Bluetooth proxy (in active mode), then try again."
     }
   }
 }
