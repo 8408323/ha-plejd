@@ -24,6 +24,7 @@ from .const import (
     CONF_SITE_ID,
     DOMAIN,
     HARDWARE_TYPES,
+    PLEJD_BLE_COMPANY_ID,
     PLEJD_SERVICE_UUID,
 )
 from .coordinator import PlejdCoordinator
@@ -80,20 +81,20 @@ def _parse_plejd_mfr_data(manufacturer_data: dict[int, bytes]) -> dict | None:
     Returns None if no usable data is found. The 'is_unprovisioned' flag is True
     when the device is on the default mesh (bit 3) or has no provisioning at all.
     """
-    for data in manufacturer_data.values():
-        if len(data) >= _MFR_HW_OFFSET + 1:
-            login = data[_MFR_LOGIN_OFFSET]
-            hardware_id = data[_MFR_HW_OFFSET]
-            on_default_mesh = bool(login & _FLAG_ON_DEFAULT_MESH)
-            unclaimed = not (login & (_FLAG_HAS_ACCESS_ADDRESS | _FLAG_HAS_NODE_INDEX | _FLAG_HAS_CRYPTO_KEY))
-            end = _MFR_BUILD_TIME_OFFSET + _MFR_BUILD_TIME_LEN
-            firmware_build_time = int.from_bytes(data[_MFR_BUILD_TIME_OFFSET:end], "big") if len(data) >= end else 0
-            return {
-                "hardware_id": hardware_id,
-                "is_unprovisioned": on_default_mesh or unclaimed,
-                "firmware_build_time": firmware_build_time,
-            }
-    return None
+    data = manufacturer_data.get(PLEJD_BLE_COMPANY_ID)
+    if data is None or len(data) < _MFR_HW_OFFSET + 1:
+        return None
+    login = data[_MFR_LOGIN_OFFSET]
+    hardware_id = data[_MFR_HW_OFFSET]
+    on_default_mesh = bool(login & _FLAG_ON_DEFAULT_MESH)
+    unclaimed = not (login & (_FLAG_HAS_ACCESS_ADDRESS | _FLAG_HAS_NODE_INDEX | _FLAG_HAS_CRYPTO_KEY))
+    end = _MFR_BUILD_TIME_OFFSET + _MFR_BUILD_TIME_LEN
+    firmware_build_time = int.from_bytes(data[_MFR_BUILD_TIME_OFFSET:end], "big") if len(data) >= end else 0
+    return {
+        "hardware_id": hardware_id,
+        "is_unprovisioned": on_default_mesh or unclaimed,
+        "firmware_build_time": firmware_build_time,
+    }
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -124,6 +125,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         firmware_build_time: int = int(call.data.get("firmware_build_time", 0))
         input_settings: list[dict] = call.data.get("input_settings", [])
 
+        # Validate the device is actually in range before touching the cloud, so a
+        # typo'd address fails fast instead of creating an orphaned cloud room first.
+        ble_device = bluetooth.async_ble_device_from_address(hass, address, connectable=True)
+        if ble_device is None:
+            raise HomeAssistantError(f"Plejd device {address} not found in Bluetooth range")
+
         # Auto-fill hardware_id and firmware_build_time from the BLE advertisement when not provided.
         if hardware_id == "0" or firmware_build_time == 0:
             service_infos = bluetooth.async_discovered_service_info(hass, connectable=True)
@@ -144,10 +151,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 room_id = await async_create_room(http_session, token, site.site_id, room_title)
         except PlejdCloudError as err:
             raise HomeAssistantError(f"Plejd cloud error during device add: {err}") from err
-
-        ble_device = bluetooth.async_ble_device_from_address(hass, address, connectable=True)
-        if ble_device is None:
-            raise HomeAssistantError(f"Plejd device {address} not found in Bluetooth range")
 
         device_id = address.replace(":", "").lower()
         try:
@@ -199,17 +202,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     "firmware_build_time": parsed["firmware_build_time"],
                 }
             )
-        _LOGGER.info(
-            "Plejd scan found %d unprovisioned device(s): %s",
-            len(new_devices),
-            [d["address"] for d in new_devices],
-        )
+        _LOGGER.info("Plejd scan found %d unprovisioned device(s)", len(new_devices))
+        _LOGGER.debug("Plejd scan found unprovisioned device(s): %s", [d["address"] for d in new_devices])
         hass.bus.async_fire(f"{DOMAIN}_new_devices_found", {"devices": new_devices})
 
-    entry.async_on_unload(
-        hass.services.async_register(DOMAIN, SERVICE_ADD_DEVICE, _async_handle_add_device, schema=_ADD_DEVICE_SCHEMA)
-    )
-    entry.async_on_unload(hass.services.async_register(DOMAIN, SERVICE_SCAN_DEVICES, _async_handle_scan_devices))
+    hass.services.async_register(DOMAIN, SERVICE_ADD_DEVICE, _async_handle_add_device, schema=_ADD_DEVICE_SCHEMA)
+    entry.async_on_unload(lambda: hass.services.async_remove(DOMAIN, SERVICE_ADD_DEVICE))
+    hass.services.async_register(DOMAIN, SERVICE_SCAN_DEVICES, _async_handle_scan_devices)
+    entry.async_on_unload(lambda: hass.services.async_remove(DOMAIN, SERVICE_SCAN_DEVICES))
     return True
 
 

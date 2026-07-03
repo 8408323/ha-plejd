@@ -10,15 +10,13 @@ Usage:
 from __future__ import annotations
 
 import asyncio
-import sys
-
-sys.path.insert(0, ".")  # so we can import from custom_components
 
 from bleak import BleakScanner
 from bleak.backends.device import BLEDevice
 from bleak.backends.scanner import AdvertisementData
 
 PLEJD_SERVICE_UUID = "31ba0001-6085-4726-be45-040c957391b5"
+PLEJD_BLE_COMPANY_ID = 0x02E5
 
 _FLAG_HAS_ACCESS_ADDRESS = 0x01
 _FLAG_HAS_NODE_INDEX = 0x02
@@ -27,20 +25,20 @@ _FLAG_ON_DEFAULT_MESH = 0x08
 
 
 def _parse(manufacturer_data: dict[int, bytes]) -> dict | None:
-    for data in manufacturer_data.values():
-        if len(data) >= 4:
-            login = data[0]
-            hw_id = data[3]
-            on_default_mesh = bool(login & _FLAG_ON_DEFAULT_MESH)
-            unclaimed = not (login & (_FLAG_HAS_ACCESS_ADDRESS | _FLAG_HAS_NODE_INDEX | _FLAG_HAS_CRYPTO_KEY))
-            return {
-                "login_byte": f"0x{login:02x}",
-                "hardware_id": hw_id,
-                "on_default_mesh": on_default_mesh,
-                "unclaimed": unclaimed,
-                "is_unprovisioned": on_default_mesh or unclaimed,
-            }
-    return None
+    data = manufacturer_data.get(PLEJD_BLE_COMPANY_ID)
+    if data is None or len(data) < 4:
+        return None
+    login = data[0]
+    hw_id = data[3]
+    on_default_mesh = bool(login & _FLAG_ON_DEFAULT_MESH)
+    unclaimed = not (login & (_FLAG_HAS_ACCESS_ADDRESS | _FLAG_HAS_NODE_INDEX | _FLAG_HAS_CRYPTO_KEY))
+    return {
+        "login_byte": f"0x{login:02x}",
+        "hardware_id": hw_id,
+        "on_default_mesh": on_default_mesh,
+        "unclaimed": unclaimed,
+        "is_unprovisioned": on_default_mesh or unclaimed,
+    }
 
 
 async def main() -> None:

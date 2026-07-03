@@ -285,7 +285,7 @@ def _parse_new_device_addresses(result: object) -> NewDeviceAddresses:
         try:
             output_addresses[int(idx_str)] = int(addr)
         except (ValueError, TypeError):
-            pass
+            continue  # malformed entry from the cloud - skip it, not fatal
     return NewDeviceAddresses(device_address=device_address, output_addresses=output_addresses)
 
 

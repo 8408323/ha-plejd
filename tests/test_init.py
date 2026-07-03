@@ -251,6 +251,7 @@ async def test_add_device_service_raises_on_cloud_error(monkeypatch):
     _FakeCoordinator.instances.clear()
 
     hass = _hass()
+    hass.ble_devices = {"AA:BB:CC:DD:EE:FF": MagicMock()}
     entry_data = {"email": "u@x.com", "password": "pw", "site_id": "S1"}
     entry = _entry(data=entry_data)
 

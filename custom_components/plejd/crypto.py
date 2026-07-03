@@ -75,10 +75,12 @@ def _dh_power_mod(base: int, exp: int, mod: int) -> int:
 
 
 def _dh_mul_mod(a: int, b: int, mod: int) -> int:
-    """64-bit multiply-modulo, kept within uint64 range to match C# MultiplyModulo."""
+    """64-bit multiply-modulo, matching C# MultiplyModulo's result."""
     a = a % mod
     b = b % mod
-    # Python handles big ints natively; mask to 64-bit to match the C# behaviour.
+    # Python ints never overflow, so no masking is needed: reducing both operands
+    # mod `mod` first keeps the product mathematically equivalent to C#'s
+    # (overflow-prone) 64-bit multiply-then-modulo, since mod itself fits in 64 bits.
     return (a * b) % mod
 
 

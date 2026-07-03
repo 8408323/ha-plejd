@@ -178,6 +178,8 @@ async def async_commission_device(
     node_index = addresses.device_address
     if node_index is None:
         raise RuntimeError("cloud did not return a node address for the new device")
+    if not site.mesh_key:
+        raise RuntimeError("site has no mesh key (meshKey); cannot set the device's access address")
 
     _LOGGER.debug("commissioning: node index %d, starting BLE setup", node_index)
     session = PlejdCommissioningSession(site.crypto_key)

@@ -376,6 +376,16 @@ async def test_async_commission_device_raises_if_cloud_returns_no_address(monkey
         await async_commission_device(MagicMock(), "tok", _site(), _device(), "X")
 
 
+async def test_async_commission_device_raises_if_site_has_no_mesh_key(monkeypatch):
+    addresses = NewDeviceAddresses(device_address=5, output_addresses={})
+
+    import plejd.commission as cm
+
+    monkeypatch.setattr(cm, "async_create_device", AsyncMock(return_value=addresses))
+    with pytest.raises(RuntimeError, match="mesh key"):
+        await async_commission_device(MagicMock(), "tok", _site(mesh_key=""), _device(), "X")
+
+
 async def test_async_commission_device_raises_if_set_crypto_key_fails(monkeypatch):
     client = _mock_client()
     client.read_gatt_char.return_value = bytes(8)  # always zero → set_crypto_key returns False
@@ -448,11 +458,9 @@ async def test_async_commission_device_disconnects_on_error(monkeypatch):
     with (
         patch("plejd.commission.establish_connection", return_value=client),
         patch("plejd.commission.asyncio.sleep"),
+        pytest.raises(RuntimeError, match="crypto key"),
     ):
-        try:
-            await async_commission_device(MagicMock(), "tok", _site(), _device(), "X")
-        except RuntimeError:
-            pass
+        await async_commission_device(MagicMock(), "tok", _site(), _device(), "X")
 
     # disconnect() must always be called (via finally)
     client.disconnect.assert_called_once()

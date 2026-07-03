@@ -1,0 +1,66 @@
+add_device:
+  name: Add device
+  description: >-
+    Commission a new, unprovisioned Plejd device into the mesh: registers it in
+    the Plejd cloud, then runs the BLE commissioning sequence (crypto key
+    exchange, access address, node index) and reloads the config entry.
+  fields:
+    device_address:
+      name: Device address
+      description: >-
+        BLE MAC address of the unprovisioned device, as reported by
+        scan_new_devices.
+      required: true
+      example: "AA:BB:CC:DD:EE:FF"
+      selector:
+        text:
+    name:
+      name: Name
+      description: Display name for the new device.
+      required: true
+      example: Kitchen ceiling light
+      selector:
+        text:
+    hardware_id:
+      name: Hardware ID
+      description: >-
+        Plejd hardware type ID. Auto-detected from the BLE advertisement when
+        omitted.
+      required: false
+      selector:
+        text:
+    room_id:
+      name: Room ID
+      description: Existing Plejd cloud room ID to place the device in.
+      required: false
+      selector:
+        text:
+    room_title:
+      name: Room title
+      description: Create a new room with this name (ignored if room_id is set).
+      required: false
+      selector:
+        text:
+    firmware_build_time:
+      name: Firmware build time
+      description: >-
+        Firmware build timestamp. Auto-detected from the BLE advertisement when
+        omitted.
+      required: false
+      selector:
+        number:
+          mode: box
+    input_settings:
+      name: Input settings
+      description: >-
+        Per-input button type configuration to apply after commissioning, e.g.
+        [{input: 0, button_type: Toggle}].
+      required: false
+      selector:
+        object:
+
+scan_new_devices:
+  name: Scan for new devices
+  description: >-
+    Scan for unprovisioned Plejd devices in Bluetooth range and fire
+    plejd_new_devices_found with what was found.
