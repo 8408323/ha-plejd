@@ -16,14 +16,36 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import asdict
 
 from aiohttp import ClientSession
 from bleak.backends.device import BLEDevice
 from bleak_retry_connector import BleakClientWithServiceCache, establish_connection
+from homeassistant.components import bluetooth
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
+from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .cloud import NewDeviceAddresses, NewDeviceInfo, PlejdCloudSite, async_create_device
+from .cloud import (
+    NewDeviceAddresses,
+    NewDeviceInfo,
+    PlejdCloudError,
+    PlejdCloudSite,
+    async_create_device,
+    async_create_room,
+    async_get_site,
+    async_login,
+    async_set_input_setting,
+)
 from .connection import reversed_mac
 from .const import (
+    CONF_DEVICES,
+    CONF_INPUTS,
+    CONF_MOTION,
+    CONF_SCENES,
+    CONF_SITE_ID,
     PLEJD_CHAR_ACCESS_ADDRESS_UUID,
     PLEJD_CHAR_CRYPTO_KEY_UUID,
     PLEJD_CHAR_DATA_UUID,
@@ -31,6 +53,7 @@ from .const import (
     PLEJD_CHAR_PING_UUID,
 )
 from .crypto import dh_encrypt_site_key, dh_generate_keypair, dh_shared_secret
+from .discovery import _parse_plejd_mfr_data
 from .mesh import PlejdMesh
 from .protocol import (
     access_address_bytes,
@@ -208,3 +231,77 @@ async def async_commission_device(
 
     _LOGGER.debug("commissioning: %s successfully joined mesh at node %d", device_id, node_index)
     return addresses
+
+
+async def async_add_device(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    *,
+    address: str,
+    name: str,
+    hardware_id: str = "0",
+    room_id: str | None = None,
+    room_title: str | None = None,
+    firmware_build_time: int = 0,
+    input_settings: list[dict] | None = None,
+) -> None:
+    """Add a new Plejd device end-to-end: cloud registration, BLE commissioning,
+    input-button config, then refresh + reload the config entry.
+
+    Shared by the add_device service and the "Add a device" options-flow wizard.
+    """
+    # Validate the device is actually in range before touching the cloud, so a
+    # typo'd address fails fast instead of creating an orphaned cloud room first.
+    ble_device = bluetooth.async_ble_device_from_address(hass, address, connectable=True)
+    if ble_device is None:
+        raise HomeAssistantError(f"Plejd device {address} not found in Bluetooth range")
+
+    # Auto-fill hardware_id and firmware_build_time from the BLE advertisement when not provided.
+    if hardware_id == "0" or firmware_build_time == 0:
+        service_infos = bluetooth.async_discovered_service_info(hass, connectable=True)
+        adv = next((si for si in service_infos if si.address == address), None)
+        if adv:
+            parsed_adv = _parse_plejd_mfr_data(adv.manufacturer_data or {})
+            if parsed_adv:
+                if hardware_id == "0":
+                    hardware_id = str(parsed_adv["hardware_id"])
+                if firmware_build_time == 0:
+                    firmware_build_time = parsed_adv["firmware_build_time"]
+
+    http_session = async_get_clientsession(hass)
+    try:
+        token = await async_login(http_session, entry.data[CONF_EMAIL], entry.data[CONF_PASSWORD])
+        site = await async_get_site(http_session, token, entry.data[CONF_SITE_ID])
+        if room_title and not room_id:
+            room_id = await async_create_room(http_session, token, site.site_id, room_title)
+    except PlejdCloudError as err:
+        raise HomeAssistantError(f"Plejd cloud error during device add: {err}") from err
+
+    device_id = address.replace(":", "").lower()
+    try:
+        await async_commission_device(
+            http_session, token, site, ble_device, name, hardware_id, firmware_build_time, room_id
+        )
+        for cfg in input_settings or []:
+            await async_set_input_setting(
+                http_session, token, site.site_id, device_id, cfg["input"], cfg["button_type"]
+            )
+    except Exception as err:
+        raise HomeAssistantError(f"Plejd commissioning failed: {err}") from err
+
+    # Refresh device list from cloud so the new device is present on reload.
+    try:
+        fresh_site = await async_get_site(http_session, token, entry.data[CONF_SITE_ID])
+    except PlejdCloudError as err:
+        raise HomeAssistantError(f"Plejd cloud error refreshing device list: {err}") from err
+    hass.config_entries.async_update_entry(
+        entry,
+        data={
+            **entry.data,
+            CONF_DEVICES: [asdict(d) for d in fresh_site.devices],
+            CONF_INPUTS: [asdict(i) for i in fresh_site.inputs],
+            CONF_MOTION: [asdict(m) for m in fresh_site.motion],
+            CONF_SCENES: [asdict(s) for s in fresh_site.scenes],
+        },
+    )
+    await hass.config_entries.async_reload(entry.entry_id)

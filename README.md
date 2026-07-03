@@ -64,6 +64,22 @@ Or manually:
 Devices, scenes, buttons and sensors appear automatically. Per-device tuning and
 schedules are added as entities (see below).
 
+### Adding a new Plejd device
+
+Go to **Settings → Devices & Services → Plejd → Configure → Add a device**. This
+wizard lives on the integration entry itself, not on any specific device (not the
+gateway, not a light) — so it works the same whether your site has a GWY-01 or not.
+
+1. Power up the new device; it broadcasts as unprovisioned over Bluetooth.
+2. Pick it from the list (address, model, signal strength).
+3. Give it a name (and optionally a new room). It's commissioned directly from Home
+   Assistant — DH key exchange, mesh access address, node index — no need to open
+   the Plejd app at all.
+
+Prefer scripting it? The same logic is exposed as the `plejd.add_device` and
+`plejd.scan_new_devices` services (**Developer Tools → Actions**), which the wizard
+calls under the hood.
+
 ## Features
 
 Entities are created automatically from your site:

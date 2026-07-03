@@ -126,8 +126,11 @@ except ImportError:
         def async_create_entry(self, *, title, data):
             return {"type": "create_entry", "title": title, "data": data}
 
-        def async_show_form(self, *, step_id, data_schema=None, errors=None):
-            return {"type": "form", "step_id": step_id, "data_schema": data_schema, "errors": errors}
+        def async_show_form(self, *, step_id, data_schema=None, errors=None, **kwargs):
+            return {"type": "form", "step_id": step_id, "data_schema": data_schema, "errors": errors, **kwargs}
+
+        def async_show_menu(self, *, step_id, menu_options):
+            return {"type": "menu", "step_id": step_id, "menu_options": menu_options}
 
     _ce.ConfigEntry = _ConfigEntry  # type: ignore[attr-defined]
     _ce.ConfigFlow = _ConfigFlow  # type: ignore[attr-defined]
