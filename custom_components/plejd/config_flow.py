@@ -291,8 +291,8 @@ class PlejdOptionsFlow(OptionsFlow):
             return self.async_show_form(
                 step_id="add_device", data_schema=vol.Schema({}), errors={"base": "no_devices_found"}
             )
-        if user_input is not None:
-            self._new_device_address = user_input["device_address"]
+        if user_input is not None and (address := user_input.get("device_address")):
+            self._new_device_address = address
             return await self.async_step_add_device_details()
         options = [
             {"value": d["address"], "label": f"{d['address']} — {d['model']} (RSSI {d['rssi']})"} for d in devices

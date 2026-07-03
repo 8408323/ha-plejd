@@ -381,6 +381,20 @@ async def test_add_device_no_devices_found_shows_error():
     assert res["errors"] == {"base": "no_devices_found"}
 
 
+async def test_add_device_reshow_form_when_empty_submit_but_devices_appeared():
+    """Submitting the empty no-devices form after a device appears must not KeyError."""
+    hass = types.SimpleNamespace(
+        service_infos=[_fake_service_info("AA:BB:CC:DD:EE:FF", {0x02E5: bytes([0x08, 0, 0, 1])})],
+        ble_devices={},
+    )
+    flow = _opt_flow(hass=hass)
+    # user_input={} simulates submitting the empty form returned on the no-devices path
+    res = await flow.async_step_add_device({})
+    # No device_address in user_input → fall through to show the picker form
+    assert res["type"] == "form" and res["step_id"] == "add_device"
+    assert res["errors"] is None  # devices are now visible; no error
+
+
 async def test_add_device_lists_discovered_devices():
     hass = types.SimpleNamespace(
         service_infos=[_fake_service_info("AA:BB:CC:DD:EE:FF", {0x02E5: bytes([0x08, 0, 0, 1])})],
