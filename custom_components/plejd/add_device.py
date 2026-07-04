@@ -67,17 +67,22 @@ async def async_add_device(
     if ble_device is None:
         raise HomeAssistantError(f"Plejd device {address} not found in Bluetooth range")
 
-    # Auto-fill hardware_id and firmware_build_time from the BLE advertisement when not provided.
-    if hardware_id == "0" or firmware_build_time == 0:
-        service_infos = bluetooth.async_discovered_service_info(hass, connectable=True)
-        adv = next((si for si in service_infos if si.address == address), None)
-        if adv:
-            parsed_adv = _parse_plejd_mfr_data(adv.manufacturer_data or {})
-            if parsed_adv:
-                if hardware_id == "0":
-                    hardware_id = str(parsed_adv["hardware_id"])
-                if firmware_build_time == 0:
-                    firmware_build_time = parsed_adv["firmware_build_time"]
+    # Confirm the address is actually advertising as unprovisioned before any cloud
+    # mutation - the options-flow wizard only ever offers unprovisioned addresses,
+    # but this service can be called directly (Developer Tools, automations) with
+    # any address, including an already-commissioned device or an unrelated one.
+    service_infos = bluetooth.async_discovered_service_info(hass, connectable=True)
+    adv = next((si for si in service_infos if si.address == address), None)
+    parsed_adv = _parse_plejd_mfr_data(adv.manufacturer_data or {}) if adv else None
+    if parsed_adv is None or not parsed_adv["is_unprovisioned"]:
+        raise HomeAssistantError(
+            f"Plejd device {address} is not currently advertising as unprovisioned "
+            "(it may already be commissioned, or isn't a Plejd device)"
+        )
+    if hardware_id == "0":
+        hardware_id = str(parsed_adv["hardware_id"])
+    if firmware_build_time == 0:
+        firmware_build_time = parsed_adv["firmware_build_time"]
 
     http_session = async_get_clientsession(hass)
     try:

@@ -36,7 +36,12 @@ def _site(mesh_key: str = "01-02-03-04") -> PlejdCloudSite:
     )
 
 
-def _hass(service_infos=(), ble_devices=None):
+def _hass(service_infos=None, ble_devices=None):
+    # Default to a valid unprovisioned advertisement for _ADDR, matching what the
+    # options-flow wizard would already have filtered for - tests that care about
+    # rejecting a non-unprovisioned address pass their own service_infos instead.
+    if service_infos is None:
+        service_infos = [_fake_service_info(_ADDR, {887: bytes([0x08, 0, 0, 1])})]
     return types.SimpleNamespace(
         service_infos=list(service_infos),
         ble_devices=ble_devices or {},
@@ -73,6 +78,22 @@ async def test_add_device_raises_when_bluetooth_unavailable():
     hass = _hass(ble_devices={_ADDR: _device()})
     hass.scanner_count = 0  # no local adapter, no ESPHome Bluetooth proxy
     with pytest.raises(HomeAssistantError, match="Bluetooth is not available"):
+        await async_add_device(hass, _entry(), address=_ADDR, name="X")
+
+
+async def test_add_device_raises_if_not_advertising_unprovisioned():
+    # No advertisement at all for this address (e.g. called directly via a service
+    # call/automation, bypassing the wizard's own unprovisioned-only filtering).
+    hass = _hass(service_infos=[], ble_devices={_ADDR: _device()})
+    with pytest.raises(HomeAssistantError, match="not currently advertising as unprovisioned"):
+        await async_add_device(hass, _entry(), address=_ADDR, name="X")
+
+
+async def test_add_device_raises_if_already_provisioned():
+    # login_byte 0x07 = has access address + node index + crypto key, no default-mesh bit -> provisioned.
+    adv = _fake_service_info(_ADDR, {887: bytes([0x07, 0, 0, 1])})
+    hass = _hass(service_infos=[adv], ble_devices={_ADDR: _device()})
+    with pytest.raises(HomeAssistantError, match="not currently advertising as unprovisioned"):
         await async_add_device(hass, _entry(), address=_ADDR, name="X")
 
 
