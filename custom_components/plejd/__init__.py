@@ -36,7 +36,7 @@ PLATFORMS: list[Platform] = [
 SERVICE_ADD_DEVICE = "add_device"
 SERVICE_SCAN_DEVICES = "scan_new_devices"
 
-_INPUT_SETTING_SCHEMA = vol.Schema({"input": int, "button_type": str})
+_INPUT_SETTING_SCHEMA = vol.Schema({vol.Required("input"): int, vol.Required("button_type"): str})
 
 _ADD_DEVICE_SCHEMA = vol.Schema(
     {

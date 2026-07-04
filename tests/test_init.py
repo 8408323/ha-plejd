@@ -168,7 +168,7 @@ def test_every_platform_module_is_forwarded():
 # ── Service: add_device ───────────────────────────────────────────────────────
 #
 # async_add_device() itself (cloud calls, BLE validation, commissioning, error
-# paths) is unit-tested in test_commission.py, where it lives. These tests only
+# paths) is unit-tested in test_add_device.py, where it lives. These tests only
 # cover that the service is registered and forwards call.data correctly.
 
 
@@ -178,6 +178,19 @@ async def test_add_device_service_is_registered_on_setup(monkeypatch):
     hass, entry = _hass(), _entry()
     await async_setup_entry(hass, entry)
     assert f"plejd.{SERVICE_ADD_DEVICE}" in hass.services._handlers
+
+
+def test_input_setting_schema_requires_input_and_button_type():
+    import voluptuous as vol
+
+    with pytest.raises(vol.Invalid):
+        plejd._INPUT_SETTING_SCHEMA({"button_type": "Toggle"})
+    with pytest.raises(vol.Invalid):
+        plejd._INPUT_SETTING_SCHEMA({"input": 0})
+    assert plejd._INPUT_SETTING_SCHEMA({"input": 0, "button_type": "Toggle"}) == {
+        "input": 0,
+        "button_type": "Toggle",
+    }
 
 
 async def test_add_device_service_unregistered_on_unload(monkeypatch):

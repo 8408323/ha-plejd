@@ -145,14 +145,9 @@ async def main() -> None:
         except cloud.PlejdCloudError as err:
             raise SystemExit(f"Plejd cloud error: {err}") from err
 
-        room_id = None
-        if args.room:
-            room_id = await cloud.async_create_room(session, token, site.site_id, args.room)
-            print(f"Created room '{args.room}' -> {room_id}")
-
         print("Commissioning...")
         addresses = await commission.async_commission_device(
-            session, token, site, ble_device, args.name, hardware_id, firmware_build_time, room_id
+            session, token, site, ble_device, args.name, hardware_id, firmware_build_time, room_title=args.room
         )
         print(f"Done! Node index {addresses.device_address}, outputs {addresses.output_addresses}")
         print("Reload the Plejd config entry in Home Assistant to pick up the new device.")

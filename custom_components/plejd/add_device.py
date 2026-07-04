@@ -54,6 +54,10 @@ async def async_add_device(
     """Add a new Plejd device end-to-end: cloud registration, BLE commissioning,
     input-button config, then refresh + reload the config entry.
     """
+    for cfg in input_settings or []:
+        if "input" not in cfg or "button_type" not in cfg:
+            raise HomeAssistantError(f"Invalid input_settings entry (needs 'input' and 'button_type'): {cfg}")
+
     if not async_bluetooth_available(hass):
         raise HomeAssistantError(
             "Bluetooth is not available on this Home Assistant instance. Add a local "

@@ -203,6 +203,16 @@ async def test_add_device_applies_input_settings(monkeypatch):
     assert args[5] == "Toggle"  # button_type
 
 
+async def test_add_device_rejects_malformed_input_settings_before_commissioning():
+    # Missing "input"/"button_type" must fail fast, before the device ever joins
+    # the mesh - not surface as a raw KeyError once commissioning is underway.
+    hass = _hass(ble_devices={_ADDR: _device()})
+    with pytest.raises(HomeAssistantError, match="Invalid input_settings entry"):
+        await async_add_device(
+            hass, _entry(), address=_ADDR, name="Taklampa", input_settings=[{"button_type": "Toggle"}]
+        )
+
+
 async def test_add_device_refreshes_and_reloads_despite_input_setting_failure(monkeypatch):
     # The device already joined the mesh by this point - a failed (optional) input
     # setting must not skip the refresh/reload, or HA never learns about it.
