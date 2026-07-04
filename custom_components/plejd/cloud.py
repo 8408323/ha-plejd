@@ -20,6 +20,7 @@ from .const import (
     DEFAULT_CATEGORY,
     HARDWARE_TYPES,
     HARDWARE_WMS_01,
+    PLEJD_FN_COMPATIBLE_DEVICES,
     PLEJD_FN_CREATE_DEVICE,
     PLEJD_FN_CREATE_ROOM,
     PLEJD_FN_FIRMWARE_BY_HW,
@@ -187,6 +188,37 @@ async def async_get_available_firmware(
         if best is None or build_time > best[1]:
             best = (version, build_time)
     return best
+
+
+async def async_get_needed_output_count(
+    session: ClientSession, token: str, hardware_id: str, firmware_build_time: int, faceplate_id: str = "0"
+) -> int:
+    """How many output addresses createPlejdDevice_V2's deviceInfo needs for this hardware.
+
+    Wall controllers (WPH-01, WRT-01, CTR-01, ...) need zero; multi-output hardware
+    (DIM-02, REL-02, OUT-02, ...) need more than one. Falls back to 1 (the common
+    single-output case) if the cloud doesn't confirm a compatible entry.
+    """
+    body = {
+        "devices": [
+            {
+                "buildTime": firmware_build_time,
+                "firmwareNumber": None,
+                "hardwareId": hardware_id,
+                "faceplateId": faceplate_id,
+                "variant": None,
+            }
+        ],
+        "appVersion": "7.3.0.1.65",
+        "deviceType": "android",
+    }
+    result = await _call_function(session, token, PLEJD_FN_COMPATIBLE_DEVICES, body)
+    compatible = result.get("compatible") if isinstance(result, dict) else None
+    for entry in compatible if isinstance(compatible, list) else []:
+        info = entry.get(hardware_id) if isinstance(entry, dict) else None
+        if isinstance(info, dict) and isinstance(info.get("neededAddresses"), int):
+            return info["neededAddresses"]
+    return 1
 
 
 async def async_set_device_title(

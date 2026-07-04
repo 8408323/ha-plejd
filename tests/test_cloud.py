@@ -13,6 +13,7 @@ from plejd.cloud import (
     async_create_device,
     async_create_room,
     async_get_available_firmware,
+    async_get_needed_output_count,
     async_get_site,
     async_get_sites,
     async_login,
@@ -20,7 +21,13 @@ from plejd.cloud import (
     async_set_input_setting,
     parse_site,
 )
-from plejd.const import PLEJD_FN_CREATE_DEVICE, PLEJD_FN_CREATE_ROOM, PLEJD_FN_SET_INPUT, PLEJD_PARSE_URL
+from plejd.const import (
+    PLEJD_FN_COMPATIBLE_DEVICES,
+    PLEJD_FN_CREATE_DEVICE,
+    PLEJD_FN_CREATE_ROOM,
+    PLEJD_FN_SET_INPUT,
+    PLEJD_PARSE_URL,
+)
 
 _LOGIN = PLEJD_PARSE_URL + "login"
 _SITE_LIST = PLEJD_PARSE_URL + "functions/getSiteList"
@@ -309,6 +316,48 @@ async def test_available_firmware_skips_malformed_entries():
         )
         async with aiohttp.ClientSession() as s:
             assert await async_get_available_firmware(s, "tok", 9, None) == ("6.1.0", 42)
+
+
+_COMPATIBLE_DEVICES = PLEJD_PARSE_URL + PLEJD_FN_COMPATIBLE_DEVICES
+
+
+async def test_needed_output_count_reads_needed_addresses():
+    with aioresponses() as m:
+        m.post(_COMPATIBLE_DEVICES, payload={"result": {"compatible": [{"24": {"neededAddresses": 2}}]}})
+        async with aiohttp.ClientSession() as s:
+            assert await async_get_needed_output_count(s, "tok", "24", 20240101000000) == 2
+
+
+async def test_needed_output_count_zero_for_wall_controller():
+    with aioresponses() as m:
+        m.post(_COMPATIBLE_DEVICES, payload={"result": {"compatible": [{"10": {"neededAddresses": 0}}]}})
+        async with aiohttp.ClientSession() as s:
+            assert await async_get_needed_output_count(s, "tok", "10", 20240101000000) == 0
+
+
+async def test_needed_output_count_falls_back_to_one_when_not_confirmed():
+    with aioresponses() as m:
+        m.post(_COMPATIBLE_DEVICES, payload={"result": {"compatible": [], "incompatible": ["22"]}})
+        async with aiohttp.ClientSession() as s:
+            assert await async_get_needed_output_count(s, "tok", "22", 20240101000000) == 1
+
+
+async def test_needed_output_count_sends_hardware_and_build_time():
+    from aioresponses import CallbackResult
+
+    captured: dict = {}
+
+    def _capture(url, **kwargs):
+        captured.update(kwargs.get("json", {}))
+        return CallbackResult(payload={"result": {"compatible": [{"22": {"neededAddresses": 1}}]}})
+
+    with aioresponses() as m:
+        m.post(_COMPATIBLE_DEVICES, callback=_capture)
+        async with aiohttp.ClientSession() as s:
+            await async_get_needed_output_count(s, "tok", "22", 20240701133622)
+    assert captured["devices"] == [
+        {"buildTime": 20240701133622, "firmwareNumber": None, "hardwareId": "22", "faceplateId": "0", "variant": None}
+    ]
 
 
 _UPDATE_DEVICE = PLEJD_PARSE_URL + "functions/updateDevice_V2"

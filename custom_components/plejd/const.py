@@ -142,6 +142,7 @@ PLEJD_FN_SITE_BY_ID = "functions/getSiteById"  # {siteId} -> site w/ cryptoKey +
 PLEJD_FN_FIRMWARE_BY_HW = "functions/getFirmwaresByHardwareId"  # {hardwareId, faceplateId} -> [] when up to date
 PLEJD_FN_UPDATE_DEVICE = "functions/updateDevice_V2"  # {siteId, deviceId, deviceParseId, title} -> rename in the app
 PLEJD_FN_CREATE_DEVICE = "functions/createPlejdDevice_V2"  # register new device to site
+PLEJD_FN_COMPATIBLE_DEVICES = "functions/getCompatibleDevices"  # {devices:[{hardwareId,...}]} -> neededAddresses
 PLEJD_FN_CREATE_ROOM = "functions/createRoom"  # {siteId, roomId, title, category, imageHash} -> int
 PLEJD_FN_SET_INPUT = "functions/setPlejdDeviceInputSetting"  # {siteId, deviceId, input, buttonType, ...} -> bool
 

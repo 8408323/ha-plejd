@@ -324,6 +324,8 @@ async def test_async_commission_device_full_flow(monkeypatch):
 
     import plejd.commission as cm
 
+    monkeypatch.setattr(cm, "async_get_needed_output_count", AsyncMock(return_value=1))
+
     monkeypatch.setattr(cm, "async_create_device", AsyncMock(return_value=addresses))
     with (
         patch("plejd.commission.establish_connection", return_value=client),
@@ -353,6 +355,8 @@ async def test_async_commission_device_derives_device_id_from_mac(monkeypatch):
 
     import plejd.commission as cm
 
+    monkeypatch.setattr(cm, "async_get_needed_output_count", AsyncMock(return_value=1))
+
     monkeypatch.setattr(cm, "async_create_device", _fake_create)
     with (
         patch("plejd.commission.establish_connection", return_value=client),
@@ -362,6 +366,57 @@ async def test_async_commission_device_derives_device_id_from_mac(monkeypatch):
 
     assert captured[0]["device_id"] == "aabbccddeeff"
     assert captured[0]["device_infos"][0].title == "Lamp"
+
+
+async def test_async_commission_device_builds_one_info_per_output(monkeypatch):
+    # A DIM-02-style device has 2 outputs - deviceInfo must have one entry per output,
+    # not just a single hardcoded output_index=0.
+    client = _mock_client()
+    client.read_gatt_char.side_effect = [bytes([1, 2, 3, 4, 5, 6, 7, 8]), bytes([0x02]), bytes([3])]
+    addresses = NewDeviceAddresses(device_address=3, output_addresses={})
+    captured: list[dict] = []
+
+    async def _fake_create(session, token, site_id, device_id, hw, fw, device_infos=None, **kw):
+        captured.append(device_infos)
+        return addresses
+
+    import plejd.commission as cm
+
+    monkeypatch.setattr(cm, "async_get_needed_output_count", AsyncMock(return_value=2))
+    monkeypatch.setattr(cm, "async_create_device", _fake_create)
+    with (
+        patch("plejd.commission.establish_connection", return_value=client),
+        patch("plejd.commission.asyncio.sleep"),
+    ):
+        await async_commission_device(MagicMock(), "tok", _site(), _device(), "Dimmer")
+
+    infos = captured[0]
+    assert [i.output_index for i in infos] == [0, 1]
+    assert all(i.title == "Dimmer" for i in infos)
+
+
+async def test_async_commission_device_builds_no_infos_for_zero_output_hardware(monkeypatch):
+    # A wall controller (WPH-01, WRT-01, ...) needs zero output addresses.
+    client = _mock_client()
+    client.read_gatt_char.side_effect = [bytes([1, 2, 3, 4, 5, 6, 7, 8]), bytes([0x02]), bytes([3])]
+    addresses = NewDeviceAddresses(device_address=3, output_addresses={})
+    captured: list[dict] = []
+
+    async def _fake_create(session, token, site_id, device_id, hw, fw, device_infos=None, **kw):
+        captured.append(device_infos)
+        return addresses
+
+    import plejd.commission as cm
+
+    monkeypatch.setattr(cm, "async_get_needed_output_count", AsyncMock(return_value=0))
+    monkeypatch.setattr(cm, "async_create_device", _fake_create)
+    with (
+        patch("plejd.commission.establish_connection", return_value=client),
+        patch("plejd.commission.asyncio.sleep"),
+    ):
+        await async_commission_device(MagicMock(), "tok", _site(), _device(), "Switch")
+
+    assert captured[0] == []
 
 
 async def test_async_commission_device_passes_room_id_and_hardware(monkeypatch):
@@ -379,6 +434,8 @@ async def test_async_commission_device_passes_room_id_and_hardware(monkeypatch):
         return addresses
 
     import plejd.commission as cm
+
+    monkeypatch.setattr(cm, "async_get_needed_output_count", AsyncMock(return_value=1))
 
     monkeypatch.setattr(cm, "async_create_device", _fake_create)
     with (
@@ -399,6 +456,8 @@ async def test_async_commission_device_raises_if_cloud_returns_no_address(monkey
 
     import plejd.commission as cm
 
+    monkeypatch.setattr(cm, "async_get_needed_output_count", AsyncMock(return_value=1))
+
     monkeypatch.setattr(cm, "async_create_device", AsyncMock(return_value=addresses))
     with pytest.raises(RuntimeError, match="node address"):
         await async_commission_device(MagicMock(), "tok", _site(), _device(), "X")
@@ -408,6 +467,8 @@ async def test_async_commission_device_raises_if_site_has_no_mesh_key(monkeypatc
     addresses = NewDeviceAddresses(device_address=5, output_addresses={})
 
     import plejd.commission as cm
+
+    monkeypatch.setattr(cm, "async_get_needed_output_count", AsyncMock(return_value=1))
 
     create_device = AsyncMock(return_value=addresses)
     monkeypatch.setattr(cm, "async_create_device", create_device)
@@ -424,6 +485,8 @@ async def test_async_commission_device_raises_if_set_crypto_key_fails(monkeypatc
     addresses = NewDeviceAddresses(device_address=5, output_addresses={})
 
     import plejd.commission as cm
+
+    monkeypatch.setattr(cm, "async_get_needed_output_count", AsyncMock(return_value=1))
 
     monkeypatch.setattr(cm, "async_create_device", AsyncMock(return_value=addresses))
     with (
@@ -444,6 +507,8 @@ async def test_async_commission_device_raises_if_verify_login_fails(monkeypatch)
     addresses = NewDeviceAddresses(device_address=5, output_addresses={})
 
     import plejd.commission as cm
+
+    monkeypatch.setattr(cm, "async_get_needed_output_count", AsyncMock(return_value=1))
 
     monkeypatch.setattr(cm, "async_create_device", AsyncMock(return_value=addresses))
     with (
@@ -468,6 +533,8 @@ async def test_async_commission_device_raises_if_set_node_index_fails(monkeypatc
 
     import plejd.commission as cm
 
+    monkeypatch.setattr(cm, "async_get_needed_output_count", AsyncMock(return_value=1))
+
     monkeypatch.setattr(cm, "async_create_device", AsyncMock(return_value=addresses))
     with (
         patch("plejd.commission.establish_connection", return_value=client),
@@ -484,6 +551,8 @@ async def test_async_commission_device_disconnects_on_error(monkeypatch):
     addresses = NewDeviceAddresses(device_address=5, output_addresses={})
 
     import plejd.commission as cm
+
+    monkeypatch.setattr(cm, "async_get_needed_output_count", AsyncMock(return_value=1))
 
     monkeypatch.setattr(cm, "async_create_device", AsyncMock(return_value=addresses))
     with (

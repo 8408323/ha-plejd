@@ -23,7 +23,13 @@ from aiohttp import ClientSession
 from bleak.backends.device import BLEDevice
 from bleak_retry_connector import BleakClientWithServiceCache, establish_connection
 
-from .cloud import NewDeviceAddresses, NewDeviceInfo, PlejdCloudSite, async_create_device
+from .cloud import (
+    NewDeviceAddresses,
+    NewDeviceInfo,
+    PlejdCloudSite,
+    async_create_device,
+    async_get_needed_output_count,
+)
 from .connection import reversed_mac
 from .const import (
     PLEJD_CHAR_ACCESS_ADDRESS_UUID,
@@ -170,7 +176,8 @@ async def async_commission_device(
         raise RuntimeError("site has no mesh key (meshKey); cannot set the device's access address")
 
     device_id = ble_device.address.replace(":", "").lower()
-    device_infos = [NewDeviceInfo(title=name, output_index=0, room_id=room_id)]
+    output_count = await async_get_needed_output_count(http_session, token, hardware_id, firmware_build_time)
+    device_infos = [NewDeviceInfo(title=name, output_index=i, room_id=room_id) for i in range(output_count)]
 
     _LOGGER.debug("commissioning: registering device %s in cloud", device_id)
     addresses = await async_create_device(
