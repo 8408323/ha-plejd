@@ -28,6 +28,7 @@ from .cloud import (
     NewDeviceInfo,
     PlejdCloudSite,
     async_create_device,
+    async_create_room,
     async_get_needed_output_count,
 )
 from .connection import reversed_mac
@@ -165,6 +166,7 @@ async def async_commission_device(
     hardware_id: str = "0",
     firmware_build_time: int = 0,
     room_id: str | None = None,
+    room_title: str | None = None,
 ) -> NewDeviceAddresses:
     """Commission a new unprovisioned device into the Plejd site.
 
@@ -177,6 +179,12 @@ async def async_commission_device(
 
     device_id = ble_device.address.replace(":", "").lower()
     output_count = await async_get_needed_output_count(http_session, token, hardware_id, firmware_build_time)
+
+    # Create the room only after the checks above - a mesh_key or compatibility
+    # failure must not leave an orphaned empty room behind.
+    if room_title and not room_id:
+        room_id = await async_create_room(http_session, token, site.site_id, room_title)
+
     device_infos = [NewDeviceInfo(title=name, output_index=i, room_id=room_id) for i in range(output_count)]
 
     _LOGGER.debug("commissioning: registering device %s in cloud", device_id)

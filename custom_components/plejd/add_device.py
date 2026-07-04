@@ -20,7 +20,6 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .cloud import (
     PlejdCloudError,
-    async_create_room,
     async_get_site,
     async_login,
     async_set_input_setting,
@@ -88,15 +87,13 @@ async def async_add_device(
     try:
         token = await async_login(http_session, entry.data[CONF_EMAIL], entry.data[CONF_PASSWORD])
         site = await async_get_site(http_session, token, entry.data[CONF_SITE_ID])
-        if room_title and not room_id:
-            room_id = await async_create_room(http_session, token, site.site_id, room_title)
     except PlejdCloudError as err:
         raise HomeAssistantError(f"Plejd cloud error during device add: {err}") from err
 
     device_id = address.replace(":", "").lower()
     try:
         await async_commission_device(
-            http_session, token, site, ble_device, name, hardware_id, firmware_build_time, room_id
+            http_session, token, site, ble_device, name, hardware_id, firmware_build_time, room_id, room_title
         )
     except Exception as err:
         raise HomeAssistantError(f"Plejd commissioning failed: {err}") from err

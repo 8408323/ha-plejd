@@ -120,7 +120,9 @@ async def test_add_device_commissions_and_reloads(monkeypatch):
     monkeypatch.setattr("plejd.add_device.async_get_site", AsyncMock(return_value=_site()))
     commissioned: list = []
 
-    async def _fake_commission(http_session, token, site, ble_device, name, hw="0", fw=0, room_id=None):
+    async def _fake_commission(
+        http_session, token, site, ble_device, name, hw="0", fw=0, room_id=None, room_title=None
+    ):
         commissioned.append({"name": name, "hw": hw, "room_id": room_id})
         return NewDeviceAddresses(device_address=5, output_addresses={0: 50})
 
@@ -160,20 +162,19 @@ async def test_add_device_refreshes_gateway_metadata(monkeypatch):
     assert entry.data["resource_set_id"] == "rs-new"
 
 
-async def test_add_device_creates_room_from_room_title(monkeypatch):
+async def test_add_device_passes_room_title_through_to_commission(monkeypatch):
+    # Room creation itself now happens inside async_commission_device, after its
+    # own mesh_key/compatibility preflight - add_device just forwards room_title.
     hass = _hass(ble_devices={_ADDR: _device()})
     monkeypatch.setattr("plejd.add_device.async_login", AsyncMock(return_value="tok"))
     monkeypatch.setattr("plejd.add_device.async_get_site", AsyncMock(return_value=_site()))
-    create_room = AsyncMock(return_value="room-uuid-1")
-    monkeypatch.setattr("plejd.add_device.async_create_room", create_room)
     commission_mock = AsyncMock(return_value=NewDeviceAddresses(device_address=5, output_addresses={}))
     monkeypatch.setattr("plejd.add_device.async_commission_device", commission_mock)
     monkeypatch.setattr("plejd.add_device.async_set_input_setting", AsyncMock())
 
     await async_add_device(hass, _entry(), address=_ADDR, name="Taklampa", room_title="Bibliotek")
 
-    create_room.assert_awaited_once()
-    assert commission_mock.call_args[0][7] == "room-uuid-1"
+    assert commission_mock.call_args[0][8] == "Bibliotek"
 
 
 async def test_add_device_applies_input_settings(monkeypatch):
@@ -239,7 +240,9 @@ async def test_add_device_auto_extracts_hw_and_build_time_from_advertisement(mon
 
     commissioned = []
 
-    async def _fake_commission(http_session, token, site, ble_device, name, hw="0", fw=0, room_id=None):
+    async def _fake_commission(
+        http_session, token, site, ble_device, name, hw="0", fw=0, room_id=None, room_title=None
+    ):
         commissioned.append({"hw": hw, "fw": fw})
         return NewDeviceAddresses(device_address=5, output_addresses={})
 

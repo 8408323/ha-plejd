@@ -451,6 +451,43 @@ async def test_async_commission_device_passes_room_id_and_hardware(monkeypatch):
     assert captured[0]["infos"][0].room_id == "r1"
 
 
+async def test_async_commission_device_creates_room_from_title(monkeypatch):
+    client = _mock_client()
+    client.read_gatt_char.side_effect = [bytes([1, 2, 3, 4, 5, 6, 7, 8]), bytes([0x02]), bytes([10])]
+    addresses = NewDeviceAddresses(device_address=10, output_addresses={})
+    captured: list[dict] = []
+
+    async def _fake_create(session, token, site_id, device_id, hw, fw, device_infos=None, **kw):
+        captured.append(device_infos)
+        return addresses
+
+    import plejd.commission as cm
+
+    monkeypatch.setattr(cm, "async_get_needed_output_count", AsyncMock(return_value=1))
+    create_room = AsyncMock(return_value="room-uuid-1")
+    monkeypatch.setattr(cm, "async_create_room", create_room)
+    monkeypatch.setattr(cm, "async_create_device", _fake_create)
+    with (
+        patch("plejd.commission.establish_connection", return_value=client),
+        patch("plejd.commission.asyncio.sleep"),
+    ):
+        await async_commission_device(MagicMock(), "tok", _site(), _device(), "Hall", room_title="Bibliotek")
+
+    create_room.assert_awaited_once()
+    assert captured[0][0].room_id == "room-uuid-1"
+
+
+async def test_async_commission_device_does_not_create_room_if_mesh_key_missing(monkeypatch):
+    import plejd.commission as cm
+
+    create_room = AsyncMock(return_value="room-uuid-1")
+    monkeypatch.setattr(cm, "async_create_room", create_room)
+    with pytest.raises(RuntimeError, match="mesh key"):
+        await async_commission_device(MagicMock(), "tok", _site(mesh_key=""), _device(), "X", room_title="Bibliotek")
+    # No orphaned room left behind when the preflight fails.
+    create_room.assert_not_awaited()
+
+
 async def test_async_commission_device_raises_if_cloud_returns_no_address(monkeypatch):
     addresses = NewDeviceAddresses(device_address=None, output_addresses={})
 
