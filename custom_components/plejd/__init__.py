@@ -11,7 +11,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry
 
-from .commission import async_add_device
+from .add_device import async_add_device
 from .const import DOMAIN
 from .coordinator import PlejdCoordinator
 from .discovery import async_bluetooth_available, async_scan_unprovisioned

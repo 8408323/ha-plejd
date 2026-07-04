@@ -119,8 +119,11 @@ except ImportError:
         def _get_reauth_entry(self):
             return getattr(self, "_reauth_entry", None)
 
-        def async_update_reload_and_abort(self, entry, *, data_updates=None, **kwargs):
-            return {"type": "abort", "reason": "reauth_successful", "data_updates": data_updates}
+        def _get_reconfigure_entry(self):
+            return getattr(self, "_reconfigure_entry", None)
+
+        def async_update_reload_and_abort(self, entry, *, data_updates=None, reason="reauth_successful", **kwargs):
+            return {"type": "abort", "reason": reason, "data_updates": data_updates}
 
     class _OptionsFlow:
         def async_create_entry(self, *, title, data):

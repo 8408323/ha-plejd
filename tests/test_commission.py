@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import types
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from bleak.backends.device import BLEDevice
-from homeassistant.exceptions import HomeAssistantError
-from plejd.cloud import NewDeviceAddresses, PlejdCloudError, PlejdCloudSite
-from plejd.commission import _REPLACE_CMD_GAP, PlejdCommissioningSession, async_add_device, async_commission_device
+from plejd.cloud import NewDeviceAddresses, PlejdCloudSite
+from plejd.commission import _REPLACE_CMD_GAP, PlejdCommissioningSession, async_commission_device
 from plejd.const import (
     PLEJD_CHAR_ACCESS_ADDRESS_UUID,
     PLEJD_CHAR_CRYPTO_KEY_UUID,
@@ -46,33 +44,6 @@ def _site(mesh_key: str = "01-02-03-04") -> PlejdCloudSite:
         scenes=[],
         gateways=[],
         resource_set_id=None,
-    )
-
-
-def _hass(service_infos=(), ble_devices=None):
-    return types.SimpleNamespace(
-        service_infos=list(service_infos),
-        ble_devices=ble_devices or {},
-        config_entries=types.SimpleNamespace(
-            async_update_entry=lambda entry, data: setattr(entry, "data", data),
-            async_reload=AsyncMock(),
-        ),
-    )
-
-
-def _entry(data=None):
-    return types.SimpleNamespace(entry_id="e1", data=data or {"email": "u@x.com", "password": "pw", "site_id": "S1"})
-
-
-def _fake_service_info(address, mfr_data, service_uuids=None, rssi=-70, name=None):
-    from plejd.const import PLEJD_SERVICE_UUID
-
-    return types.SimpleNamespace(
-        address=address,
-        name=name,
-        rssi=rssi,
-        service_uuids=service_uuids or [PLEJD_SERVICE_UUID],
-        manufacturer_data=mfr_data,
     )
 
 
@@ -493,136 +464,3 @@ async def test_async_commission_device_disconnects_on_error(monkeypatch):
 
     # disconnect() must always be called (via finally)
     client.disconnect.assert_called_once()
-
-
-# ── async_add_device (end-to-end orchestration) ───────────────────────────────
-
-
-async def test_add_device_raises_if_not_in_range():
-    hass = _hass()  # ble_devices is empty -> device not found
-    with pytest.raises(HomeAssistantError, match="not found"):
-        await async_add_device(hass, _entry(), address=_ADDR, name="X")
-
-
-async def test_add_device_raises_when_bluetooth_unavailable():
-    hass = _hass(ble_devices={_ADDR: _device()})
-    hass.scanner_count = 0  # no local adapter, no ESPHome Bluetooth proxy
-    with pytest.raises(HomeAssistantError, match="Bluetooth is not available"):
-        await async_add_device(hass, _entry(), address=_ADDR, name="X")
-
-
-async def test_add_device_raises_on_cloud_error(monkeypatch):
-    hass = _hass(ble_devices={_ADDR: _device()})
-    monkeypatch.setattr("plejd.commission.async_login", AsyncMock(side_effect=PlejdCloudError("down")))
-    with pytest.raises(HomeAssistantError, match="cloud error"):
-        await async_add_device(hass, _entry(), address=_ADDR, name="X")
-
-
-async def test_add_device_wraps_commission_error(monkeypatch):
-    hass = _hass(ble_devices={_ADDR: _device()})
-    monkeypatch.setattr("plejd.commission.async_login", AsyncMock(return_value="tok"))
-    monkeypatch.setattr("plejd.commission.async_get_site", AsyncMock(return_value=_site()))
-    monkeypatch.setattr("plejd.commission.async_commission_device", AsyncMock(side_effect=RuntimeError("BLE failed")))
-    with pytest.raises(HomeAssistantError, match="commissioning failed"):
-        await async_add_device(hass, _entry(), address=_ADDR, name="X")
-
-
-async def test_add_device_commissions_and_reloads(monkeypatch):
-    hass = _hass(ble_devices={_ADDR: _device()})
-    entry = _entry()
-    monkeypatch.setattr("plejd.commission.async_login", AsyncMock(return_value="tok"))
-    monkeypatch.setattr("plejd.commission.async_get_site", AsyncMock(return_value=_site()))
-    commissioned: list = []
-
-    async def _fake_commission(http_session, token, site, ble_device, name, hw="0", fw=0, room_id=None):
-        commissioned.append({"name": name, "hw": hw, "room_id": room_id})
-        return NewDeviceAddresses(device_address=5, output_addresses={0: 50})
-
-    monkeypatch.setattr("plejd.commission.async_commission_device", _fake_commission)
-
-    await async_add_device(hass, entry, address=_ADDR, name="Bedroom", hardware_id="1", room_id="r1")
-
-    assert commissioned[0] == {"name": "Bedroom", "hw": "1", "room_id": "r1"}
-    hass.config_entries.async_reload.assert_awaited_once_with("e1")
-
-
-async def test_add_device_creates_room_from_room_title(monkeypatch):
-    hass = _hass(ble_devices={_ADDR: _device()})
-    monkeypatch.setattr("plejd.commission.async_login", AsyncMock(return_value="tok"))
-    monkeypatch.setattr("plejd.commission.async_get_site", AsyncMock(return_value=_site()))
-    create_room = AsyncMock(return_value="room-uuid-1")
-    monkeypatch.setattr("plejd.commission.async_create_room", create_room)
-    commission_mock = AsyncMock(return_value=NewDeviceAddresses(device_address=5, output_addresses={}))
-    monkeypatch.setattr("plejd.commission.async_commission_device", commission_mock)
-    monkeypatch.setattr("plejd.commission.async_set_input_setting", AsyncMock())
-
-    await async_add_device(hass, _entry(), address=_ADDR, name="Taklampa", room_title="Bibliotek")
-
-    create_room.assert_awaited_once()
-    assert commission_mock.call_args[0][7] == "room-uuid-1"
-
-
-async def test_add_device_applies_input_settings(monkeypatch):
-    hass = _hass(ble_devices={_ADDR: _device()})
-    monkeypatch.setattr("plejd.commission.async_login", AsyncMock(return_value="tok"))
-    monkeypatch.setattr("plejd.commission.async_get_site", AsyncMock(return_value=_site()))
-    monkeypatch.setattr(
-        "plejd.commission.async_commission_device",
-        AsyncMock(return_value=NewDeviceAddresses(device_address=5, output_addresses={})),
-    )
-    set_input = AsyncMock()
-    monkeypatch.setattr("plejd.commission.async_set_input_setting", set_input)
-
-    await async_add_device(
-        hass,
-        _entry(),
-        address=_ADDR,
-        name="Taklampa",
-        input_settings=[{"input": 0, "button_type": "Toggle"}],
-    )
-
-    set_input.assert_awaited_once()
-    args = set_input.call_args[0]
-    assert args[3] == "aabbccddeeff"  # device_id derived from address
-    assert args[4] == 0  # input_index
-    assert args[5] == "Toggle"  # button_type
-
-
-async def test_add_device_auto_extracts_hw_and_build_time_from_advertisement(monkeypatch):
-    # 17-byte mfr data: unprovisioned, hw=22, 6-byte build time 20240701133622
-    bt = (20240701133622).to_bytes(6, "big")
-    mfr = bytes([0x08, 0, 0, 22]) + bytes(6) + bt + bytes([0x07])
-    hass = _hass(service_infos=[_fake_service_info(_ADDR, {887: mfr})], ble_devices={_ADDR: _device()})
-    monkeypatch.setattr("plejd.commission.async_login", AsyncMock(return_value="tok"))
-    monkeypatch.setattr("plejd.commission.async_get_site", AsyncMock(return_value=_site()))
-
-    commissioned = []
-
-    async def _fake_commission(http_session, token, site, ble_device, name, hw="0", fw=0, room_id=None):
-        commissioned.append({"hw": hw, "fw": fw})
-        return NewDeviceAddresses(device_address=5, output_addresses={})
-
-    monkeypatch.setattr("plejd.commission.async_commission_device", _fake_commission)
-
-    # Neither hardware_id nor firmware_build_time provided -> both auto-extracted.
-    await async_add_device(hass, _entry(), address=_ADDR, name="X")
-
-    assert commissioned[0]["hw"] == "22"
-    assert commissioned[0]["fw"] == 20240701133622
-
-
-async def test_add_device_raises_on_device_list_refresh_error(monkeypatch):
-    hass = _hass(ble_devices={_ADDR: _device()})
-    monkeypatch.setattr("plejd.commission.async_login", AsyncMock(return_value="tok"))
-    # First call succeeds (site setup), second call fails (device list refresh).
-    monkeypatch.setattr(
-        "plejd.commission.async_get_site",
-        AsyncMock(side_effect=[_site(), PlejdCloudError("network error")]),
-    )
-    monkeypatch.setattr(
-        "plejd.commission.async_commission_device",
-        AsyncMock(return_value=NewDeviceAddresses(device_address=5, output_addresses={})),
-    )
-
-    with pytest.raises(HomeAssistantError, match="refreshing"):
-        await async_add_device(hass, _entry(), address=_ADDR, name="X", hardware_id="1")

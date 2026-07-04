@@ -201,6 +201,62 @@ async def test_reauth_confirm_cannot_connect(monkeypatch):
     assert res["errors"] == {"base": "cannot_connect"}
 
 
+def _reconfigure_flow(reconfigure_entry):
+    flow = _flow()
+    flow._reconfigure_entry = reconfigure_entry
+    return flow
+
+
+def _stored_entry(site_id="S1"):
+    return types.SimpleNamespace(
+        data={
+            CONF_EMAIL: "user@example.com",
+            CONF_PASSWORD: "pw",
+            CONF_SITE_ID: site_id,
+        }
+    )
+
+
+async def test_reconfigure_shows_form():
+    flow = _reconfigure_flow(_stored_entry())
+    res = await flow.async_step_reconfigure()
+    assert res["type"] == "form" and res["step_id"] == "reconfigure"
+
+
+async def test_reconfigure_fetches_and_updates_entry(monkeypatch):
+    new_site = _site()
+    _patch_cloud(monkeypatch, login="tok", site=new_site)
+    flow = _reconfigure_flow(_stored_entry())
+    res = await flow.async_step_reconfigure({})
+    assert res["type"] == "abort" and res["reason"] == "reconfigure_successful"
+    updates = res["data_updates"]
+    assert updates[CONF_DEVICES][0]["model"] == "DIM-01"
+    assert updates[CONF_GATEWAYS] == ["gw1"]
+    assert updates[CONF_RESOURCE_SET_ID] == "rsABC"
+    assert updates[CONF_CRYPTO_KEY] == bytes(16).hex()
+
+
+async def test_reconfigure_invalid_auth(monkeypatch):
+    _patch_cloud(monkeypatch, login=PlejdAuthError("bad"))
+    flow = _reconfigure_flow(_stored_entry())
+    res = await flow.async_step_reconfigure({})
+    assert res["type"] == "form" and res["errors"] == {"base": "invalid_auth"}
+
+
+async def test_reconfigure_cannot_connect(monkeypatch):
+    _patch_cloud(monkeypatch, login=PlejdCloudError("down"))
+    flow = _reconfigure_flow(_stored_entry())
+    res = await flow.async_step_reconfigure({})
+    assert res["type"] == "form" and res["errors"] == {"base": "cannot_connect"}
+
+
+async def test_reconfigure_cannot_connect_on_site_fetch(monkeypatch):
+    _patch_cloud(monkeypatch, login="tok", site=PlejdCloudError("down"))
+    flow = _reconfigure_flow(_stored_entry())
+    res = await flow.async_step_reconfigure({})
+    assert res["type"] == "form" and res["errors"] == {"base": "cannot_connect"}
+
+
 def _opt_flow(options=None, scenes=None, runtime_data=None, gateways=None, resource_set_id="rs1", hass=None):
     data = {"scenes": scenes if scenes is not None else [{"index": 3, "name": "Movie"}]}
     if gateways is not None:

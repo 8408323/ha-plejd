@@ -390,6 +390,24 @@ async def test_async_create_device_sends_required_fields():
     assert addrs.output_addresses == {0: 100}
 
 
+async def test_async_create_device_always_sends_variant_and_installation_location():
+    """The cloud function rejects the request if these keys are missing entirely (even as null)."""
+    from aioresponses import CallbackResult
+
+    captured: dict = {}
+
+    def _capture(url, **kwargs):
+        captured.update(kwargs.get("json", {}))
+        return CallbackResult(payload={"result": {"deviceAddress": 1}})
+
+    with aioresponses() as m:
+        m.post(_CREATE_DEVICE, callback=_capture)
+        async with aiohttp.ClientSession() as s:
+            await async_create_device(s, "tok", "site1", "aabbccddeeff", "1", 0)
+    assert "variant" in captured and captured["variant"] is None
+    assert "installationLocation" in captured and captured["installationLocation"] == ""
+
+
 async def test_async_create_device_sends_optional_fields():
     with aioresponses() as m:
         m.post(_CREATE_DEVICE, payload={"result": {"deviceAddress": 3}})

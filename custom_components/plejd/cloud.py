@@ -217,7 +217,10 @@ class NewDeviceInfo:
     title: str
     output_index: int
     room_id: str | None = None
-    traits: int = 0
+    # Powerable | Groupable (DeviceTrait bitmask) - the baseline the app sends at
+    # creation time regardless of hardware type; the cloud fills in the rest
+    # (e.g. Dimmable) from its own hardware config once the device is registered.
+    traits: int = 9
     hidden_from_room_list: bool = False
 
 
@@ -239,7 +242,7 @@ async def async_create_device(
     device_infos: list[NewDeviceInfo] | None = None,
     faceplate_id: str = "0",
     variant: str | None = None,
-    installation_location: str | None = None,
+    installation_location: str = "",
 ) -> NewDeviceAddresses:
     """Register a new device to a site via createPlejdDevice_V2.
 
@@ -252,12 +255,13 @@ async def async_create_device(
         "deviceId": device_id,
         "hardwareId": hardware_id,
         "firmwareBuildTime": firmware_build_time,
+        # The app always sends these two keys - a captured real request had
+        # variant=null (fine) but installationLocation as non-null free text;
+        # omitting either key entirely gets a generic "Invalid request." rejection.
+        "variant": variant,
+        "installationLocation": installation_location,
         "faceplateId": faceplate_id,
     }
-    if variant is not None:
-        body["variant"] = variant
-    if installation_location is not None:
-        body["installationLocation"] = installation_location
     if device_infos:
         body["deviceInfo"] = [
             {
