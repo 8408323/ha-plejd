@@ -15,6 +15,7 @@ from plejd.const import (
     PLEJD_CHAR_NODE_INDEX_UUID,
     PLEJD_CHAR_PING_UUID,
 )
+from plejd.crypto import dh_generate_shared_key, dh_shared_secret
 
 _KEY = bytes(range(16))
 _ADDR = "AA:BB:CC:DD:EE:FF"
@@ -76,10 +77,37 @@ async def test_set_crypto_key_reads_device_key_then_writes_ours_then_encrypted(m
     first_write = client.write_gatt_char.call_args_list[0]
     assert first_write[0][0] == PLEJD_CHAR_CRYPTO_KEY_UUID
     assert len(first_write[0][1]) == 8
-    # Second write: site key encrypted with shared secret (16 bytes)
+    # Second write: site key encrypted with the derived shared key (16 bytes)
     second_write = client.write_gatt_char.call_args_list[1]
     assert second_write[0][0] == PLEJD_CHAR_CRYPTO_KEY_UUID
     assert len(second_write[0][1]) == 16
+
+
+async def test_set_crypto_key_encrypts_with_reference_shared_key_algorithm(monkeypatch):
+    # Regression test for the SetCryptoKey encryption: it must XOR the site key with
+    # dh_generate_shared_key's derived 16-byte key (BleCrypto.GenerateSharedKey), not
+    # the raw DH secret cycled - fixing the keypair makes the expected bytes computable.
+    client = _mock_client()
+    device_pub_bytes = (0x1122334455667788).to_bytes(8, "little")
+    client.read_gatt_char.return_value = device_pub_bytes
+
+    fixed_private, fixed_public = 999, 0xAABBCCDDEEFF0011
+    monkeypatch.setattr("plejd.commission.dh_generate_keypair", lambda: (fixed_private, fixed_public))
+
+    with patch("plejd.commission.establish_connection", return_value=client):
+        session = PlejdCommissioningSession(_KEY)
+        await session.connect(_device())
+        result = await session.set_crypto_key()
+
+    assert result is True
+    encrypted = client.write_gatt_char.call_args_list[1][0][1]
+
+    remote_pk = int.from_bytes(device_pub_bytes, "little")
+    shared_secret = dh_shared_secret(fixed_private, remote_pk)
+    device_id = bytes.fromhex(_ADDR.replace(":", ""))
+    shared_key = dh_generate_shared_key(shared_secret, remote_pk, fixed_public, device_id)
+    recovered = bytes(a ^ b for a, b in zip(encrypted, shared_key))
+    assert recovered == _KEY
 
 
 async def test_set_crypto_key_retries_on_zero_key():
@@ -381,9 +409,12 @@ async def test_async_commission_device_raises_if_site_has_no_mesh_key(monkeypatc
 
     import plejd.commission as cm
 
-    monkeypatch.setattr(cm, "async_create_device", AsyncMock(return_value=addresses))
+    create_device = AsyncMock(return_value=addresses)
+    monkeypatch.setattr(cm, "async_create_device", create_device)
     with pytest.raises(RuntimeError, match="mesh key"):
         await async_commission_device(MagicMock(), "tok", _site(mesh_key=""), _device(), "X")
+    # Checked before any cloud mutation - no orphaned device registration.
+    create_device.assert_not_awaited()
 
 
 async def test_async_commission_device_raises_if_set_crypto_key_fails(monkeypatch):

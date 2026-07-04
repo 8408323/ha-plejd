@@ -111,6 +111,34 @@ async def test_add_device_commissions_and_reloads(monkeypatch):
     hass.config_entries.async_reload.assert_awaited_once_with("e1")
 
 
+async def test_add_device_refreshes_gateway_metadata(monkeypatch):
+    hass = _hass(ble_devices={_ADDR: _device()})
+    entry = _entry()
+    monkeypatch.setattr("plejd.add_device.async_login", AsyncMock(return_value="tok"))
+    fresh_site = PlejdCloudSite(
+        site_id="S1",
+        title="Home",
+        crypto_key=_KEY,
+        mesh_key="01-02-03-04",
+        devices=[],
+        inputs=[],
+        motion=[],
+        scenes=[],
+        gateways=["gw-new"],
+        resource_set_id="rs-new",
+    )
+    monkeypatch.setattr("plejd.add_device.async_get_site", AsyncMock(return_value=fresh_site))
+    monkeypatch.setattr(
+        "plejd.add_device.async_commission_device",
+        AsyncMock(return_value=NewDeviceAddresses(device_address=5, output_addresses={})),
+    )
+
+    await async_add_device(hass, entry, address=_ADDR, name="X")
+
+    assert entry.data["gateways"] == ["gw-new"]
+    assert entry.data["resource_set_id"] == "rs-new"
+
+
 async def test_add_device_creates_room_from_room_title(monkeypatch):
     hass = _hass(ble_devices={_ADDR: _device()})
     monkeypatch.setattr("plejd.add_device.async_login", AsyncMock(return_value="tok"))

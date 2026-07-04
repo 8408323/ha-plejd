@@ -103,14 +103,31 @@ def dh_shared_secret(private_key: int, remote_public_key: int) -> int:
     return _dh_power_mod(remote_public_key, private_key, _DH_MOD)
 
 
-def dh_encrypt_site_key(site_key: bytes, shared_secret: int) -> bytes:
-    """Encrypt the site crypto key for SetCryptoKey using the DH shared secret.
+def dh_generate_shared_key(
+    shared_secret: int, remote_public_key: int, local_public_key: int, device_id: bytes
+) -> bytes:
+    """BleCrypto.GenerateSharedKey: the key SetCryptoKey actually encrypts with.
 
-    EncryptDecryptDiffieHellmanDataWithSecret: XOR each byte of site_key with the
-    corresponding byte of the shared secret (little-endian uint64), cycling through
-    the 8 secret bytes. site_key must be exactly KEY_LEN (16) bytes.
+    SHA256(secret ++ remotePub ++ localPub ++ reverse(deviceId))[:16], where the
+    three uint64s are little-endian 8-byte encodings and device_id is the BLE MAC
+    in its normal (forward) byte order - this function reverses it internally.
+    """
+    data = (
+        struct.pack("<Q", shared_secret & 0xFFFFFFFFFFFFFFFF)
+        + struct.pack("<Q", remote_public_key & 0xFFFFFFFFFFFFFFFF)
+        + struct.pack("<Q", local_public_key & 0xFFFFFFFFFFFFFFFF)
+        + bytes(reversed(device_id))
+    )
+    return hashlib.sha256(data).digest()[:KEY_LEN]
+
+
+def dh_encrypt_site_key(site_key: bytes, shared_key: bytes) -> bytes:
+    """Encrypt the site crypto key for SetCryptoKey: XOR against the derived shared key.
+
+    Both site_key and shared_key (from dh_generate_shared_key) must be KEY_LEN (16) bytes.
     """
     if len(site_key) != KEY_LEN:
         raise ValueError(f"site_key must be {KEY_LEN} bytes, got {len(site_key)}")
-    secret_bytes = struct.pack("<Q", shared_secret & 0xFFFFFFFFFFFFFFFF)
-    return bytes(b ^ secret_bytes[i % 8] for i, b in enumerate(site_key))
+    if len(shared_key) != KEY_LEN:
+        raise ValueError(f"shared_key must be {KEY_LEN} bytes, got {len(shared_key)}")
+    return bytes(a ^ b for a, b in zip(site_key, shared_key))

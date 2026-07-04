@@ -25,7 +25,15 @@ from .cloud import (
     async_set_input_setting,
 )
 from .commission import async_commission_device
-from .const import CONF_DEVICES, CONF_INPUTS, CONF_MOTION, CONF_SCENES, CONF_SITE_ID
+from .const import (
+    CONF_DEVICES,
+    CONF_GATEWAYS,
+    CONF_INPUTS,
+    CONF_MOTION,
+    CONF_RESOURCE_SET_ID,
+    CONF_SCENES,
+    CONF_SITE_ID,
+)
 from .discovery import _parse_plejd_mfr_data, async_bluetooth_available
 
 
@@ -102,6 +110,8 @@ async def async_add_device(
             CONF_INPUTS: [asdict(i) for i in fresh_site.inputs],
             CONF_MOTION: [asdict(m) for m in fresh_site.motion],
             CONF_SCENES: [asdict(s) for s in fresh_site.scenes],
+            CONF_GATEWAYS: fresh_site.gateways,
+            CONF_RESOURCE_SET_ID: fresh_site.resource_set_id,
         },
     )
     await hass.config_entries.async_reload(entry.entry_id)

@@ -77,8 +77,11 @@ response = fold_32_to_16( SHA256( challenge XOR key ) )
 ```
 
 **Crypto-key delivery** uses a custom 64-bit Diffie–Hellman (base 2, modulus
-`15734018190158744081`) with an 8-byte-repeating XOR; `GenerateSharedKey` =
-`SHA256(secret ++ remotePub ++ localPub ++ reverse(deviceId))[:16]`.
+`15734018190158744081`). `GenerateSharedKey(secret, remotePub, localPub, deviceId)` =
+`SHA256(secret ++ remotePub ++ localPub ++ reverse(deviceId))[:16]`, where the three
+uint64s are little-endian 8-byte encodings and `deviceId` is the BLE MAC in its normal
+(forward) byte order — the function reverses it internally. The site key is then a
+plain 16-byte XOR against this derived key (not the raw DH secret cycled).
 
 ## Login / auth handshake (`CryptableExtension`)
 

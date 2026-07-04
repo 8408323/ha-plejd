@@ -32,7 +32,7 @@ from .const import (
     PLEJD_CHAR_NODE_INDEX_UUID,
     PLEJD_CHAR_PING_UUID,
 )
-from .crypto import dh_encrypt_site_key, dh_generate_keypair, dh_shared_secret
+from .crypto import dh_encrypt_site_key, dh_generate_keypair, dh_generate_shared_key, dh_shared_secret
 from .mesh import PlejdMesh
 from .protocol import (
     access_address_bytes,
@@ -62,11 +62,13 @@ class PlejdCommissioningSession:
         self._key = site_key
         self._client: BleakClientWithServiceCache | None = None
         self._mesh: PlejdMesh | None = None
+        self._device_id: bytes | None = None
 
     async def connect(self, device: BLEDevice) -> None:
         """Connect to the device — no mesh auth needed for unprovisioned devices."""
         self._client = await establish_connection(BleakClientWithServiceCache, device, device.address)
         self._mesh = PlejdMesh(self._key, reversed_mac(device.address))
+        self._device_id = bytes.fromhex(device.address.replace(":", ""))
 
     async def set_crypto_key(self) -> bool:
         """Deliver the site key to the device via Diffie-Hellman exchange.
@@ -74,7 +76,7 @@ class PlejdCommissioningSession:
         Returns False if the device does not supply a valid public key within retries.
         """
         client = self._client
-        if client is None:
+        if client is None or self._device_id is None:
             raise RuntimeError("not connected")
 
         # The device pre-populates CryptoKeyID with its public key; poll until non-zero.
@@ -93,7 +95,8 @@ class PlejdCommissioningSession:
 
         remote_pk = int.from_bytes(device_pk_bytes, "little")
         shared_secret = dh_shared_secret(private_key, remote_pk)
-        encrypted_key = dh_encrypt_site_key(self._key, shared_secret)
+        shared_key = dh_generate_shared_key(shared_secret, remote_pk, public_key, self._device_id)
+        encrypted_key = dh_encrypt_site_key(self._key, shared_key)
         await client.write_gatt_char(PLEJD_CHAR_CRYPTO_KEY_UUID, encrypted_key, response=False)
         return True
 
@@ -144,6 +147,7 @@ class PlejdCommissioningSession:
             await self._client.disconnect()
             self._client = None
             self._mesh = None
+            self._device_id = None
 
 
 async def async_commission_device(
@@ -162,6 +166,9 @@ async def async_commission_device(
     BLE commissioning sequence. The caller must reload the config entry afterwards
     so HA discovers the new device.
     """
+    if not site.mesh_key:
+        raise RuntimeError("site has no mesh key (meshKey); cannot set the device's access address")
+
     device_id = ble_device.address.replace(":", "").lower()
     device_infos = [NewDeviceInfo(title=name, output_index=0, room_id=room_id)]
 
@@ -180,8 +187,6 @@ async def async_commission_device(
     node_index = addresses.device_address
     if node_index is None:
         raise RuntimeError("cloud did not return a node address for the new device")
-    if not site.mesh_key:
-        raise RuntimeError("site has no mesh key (meshKey); cannot set the device's access address")
 
     _LOGGER.debug("commissioning: node index %d, starting BLE setup", node_index)
     session = PlejdCommissioningSession(site.crypto_key)
