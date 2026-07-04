@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import time
 
-from mitmproxy import http, websocket
+from mitmproxy import http
 
 OUT = "tools/capture-plejd.txt"
 
@@ -32,10 +32,11 @@ def response(flow: http.HTTPFlow) -> None:
         fh.write(f"  res: {flow.response.get_text() if flow.response else ''}\n\n")
 
 
-def websocket_message(flow: websocket.WebSocketFlow) -> None:
+def websocket_message(flow: http.HTTPFlow) -> None:
+    """mitmproxy passes the underlying HTTPFlow here; messages live under flow.websocket."""
     if "plejd" not in flow.request.pretty_host:
         return
-    msg = flow.messages[-1]
+    msg = flow.websocket.messages[-1]
     direction = "app->cloud" if msg.from_client else "cloud->app"
     ts = time.strftime("%H:%M:%S", time.localtime(msg.timestamp)) + f".{int(msg.timestamp * 1000) % 1000:03d}"
     with open(OUT, "a", encoding="utf-8") as fh:
