@@ -28,6 +28,15 @@ All notable changes to this project are documented here. The format follows
   LastChanged broadcasts. Validated end-to-end on real hardware (command relayed
   through the cloud, state pushed back).
 
+### Fixed
+- **Reconnect loop could die silently and never recover.** The background
+  reconnect task only caught `ConfigEntryNotReady`; any other failure (e.g. a
+  cloud auth rejection while trying the gateway) escaped uncaught, killing the
+  loop permanently with no retry and no reauth prompt — every light stayed
+  `unavailable` until Home Assistant itself was restarted. Auth failures now
+  start reauth and stop; every other failure is retried with backoff instead of
+  silently ending the loop.
+
 ## [0.5.0] - 2026-05-31
 
 First feature-complete release: local Bluetooth-mesh control of a Plejd site,
