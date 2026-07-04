@@ -181,6 +181,33 @@ async def test_add_device_applies_input_settings(monkeypatch):
     assert args[5] == "Toggle"  # button_type
 
 
+async def test_add_device_refreshes_and_reloads_despite_input_setting_failure(monkeypatch):
+    # The device already joined the mesh by this point - a failed (optional) input
+    # setting must not skip the refresh/reload, or HA never learns about it.
+    hass = _hass(ble_devices={_ADDR: _device()})
+    entry = _entry()
+    monkeypatch.setattr("plejd.add_device.async_login", AsyncMock(return_value="tok"))
+    monkeypatch.setattr("plejd.add_device.async_get_site", AsyncMock(return_value=_site()))
+    monkeypatch.setattr(
+        "plejd.add_device.async_commission_device",
+        AsyncMock(return_value=NewDeviceAddresses(device_address=5, output_addresses={})),
+    )
+    monkeypatch.setattr(
+        "plejd.add_device.async_set_input_setting", AsyncMock(side_effect=RuntimeError("invalid button type"))
+    )
+
+    with pytest.raises(HomeAssistantError, match="input settings failed"):
+        await async_add_device(
+            hass,
+            entry,
+            address=_ADDR,
+            name="Taklampa",
+            input_settings=[{"input": 0, "button_type": "Bogus"}],
+        )
+
+    hass.config_entries.async_reload.assert_awaited_once_with("e1")
+
+
 async def test_add_device_auto_extracts_hw_and_build_time_from_advertisement(monkeypatch):
     # 17-byte mfr data: unprovisioned, hw=22, 6-byte build time 20240701133622
     bt = (20240701133622).to_bytes(6, "big")

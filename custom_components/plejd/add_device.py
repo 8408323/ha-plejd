@@ -8,6 +8,7 @@ add_device service and the "Add a device" options-flow wizard.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import asdict
 
 from homeassistant.components import bluetooth
@@ -35,6 +36,8 @@ from .const import (
     CONF_SITE_ID,
 )
 from .discovery import _parse_plejd_mfr_data, async_bluetooth_available
+
+_LOGGER = logging.getLogger(__name__)
 
 
 async def async_add_device(
@@ -90,12 +93,21 @@ async def async_add_device(
         await async_commission_device(
             http_session, token, site, ble_device, name, hardware_id, firmware_build_time, room_id
         )
-        for cfg in input_settings or []:
+    except Exception as err:
+        raise HomeAssistantError(f"Plejd commissioning failed: {err}") from err
+
+    # The device has joined the mesh at this point - input-setting failures are
+    # reported but must not skip the refresh/reload below, or HA never learns
+    # about a device that's already been commissioned.
+    input_setting_errors: list[str] = []
+    for cfg in input_settings or []:
+        try:
             await async_set_input_setting(
                 http_session, token, site.site_id, device_id, cfg["input"], cfg["button_type"]
             )
-    except Exception as err:
-        raise HomeAssistantError(f"Plejd commissioning failed: {err}") from err
+        except Exception as err:  # noqa: BLE001 - collected below, not fatal to the add
+            _LOGGER.warning("Plejd add_device: failed to set input %s button type", cfg["input"], exc_info=True)
+            input_setting_errors.append(str(err))
 
     # Refresh device list from cloud so the new device is present on reload.
     try:
@@ -115,3 +127,6 @@ async def async_add_device(
         },
     )
     await hass.config_entries.async_reload(entry.entry_id)
+
+    if input_setting_errors:
+        raise HomeAssistantError(f"Device added, but some input settings failed: {'; '.join(input_setting_errors)}")
