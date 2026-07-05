@@ -430,7 +430,12 @@ class PlejdCoordinator:
         return asyncio.ensure_future(coro)
 
     async def _async_reconnect(self) -> None:
-        """Reconnect to the mesh with exponential backoff until it succeeds or we close."""
+        """Reconnect (gateway or BLE) with exponential backoff until it succeeds or we close.
+
+        Any failure to (re)connect must keep this loop alive: a single uncaught
+        exception here silently kills the background task and the transport
+        never reconnects again on its own, even if the underlying issue clears.
+        """
         if self._reconnecting:
             return
         self._reconnecting = True
@@ -442,11 +447,22 @@ class PlejdCoordinator:
                     return
                 try:
                     await self._async_select_and_connect()
-                    _LOGGER.debug("reconnected to Plejd mesh")
+                    _LOGGER.debug("reconnected to Plejd over %s", self._active)
+                    return
+                except ConfigEntryAuthFailed:
+                    # Retrying with the same rejected credentials can't succeed; prompt
+                    # reauth and stop until the entry reloads with fresh ones.
+                    self._entry.async_start_reauth(self.hass)
+                    _LOGGER.warning("Plejd reconnect stopped: cloud credentials rejected, reauth requested")
                     return
                 except ConfigEntryNotReady as err:
+                    # Expected transient condition (device out of range, gateway
+                    # unreachable, ...) — quiet, keeps retrying.
                     delay = min(delay * 2, RECONNECT_MAX_DELAY)
                     _LOGGER.debug("Plejd reconnect failed (retry in %ss): %s", delay, err)
+                except Exception:  # noqa: BLE001 - unexpected bug: keep retrying, but make it visible
+                    delay = min(delay * 2, RECONNECT_MAX_DELAY)
+                    _LOGGER.warning("Plejd reconnect hit an unexpected error (retry in %ss)", delay, exc_info=True)
         finally:
             self._reconnecting = False
 
