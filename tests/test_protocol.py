@@ -297,3 +297,7 @@ def test_notify_events_request_and_decode():
     assert faults == frozenset({"hard_fault", "overtemperature"})
     # non-NotifyEvents command -> None
     assert decode_notify_events(Command(0, 0, CMD_SCENE, b"")) is None
+    # a short/truncated payload (e.g. our own 0-byte read request echoed back by the
+    # gateway) must be rejected, not treated as an all-clear empty bitfield.
+    assert decode_notify_events(Command(11, 0x03, CMD_NOTIFY_EVENTS, b"")) is None
+    assert decode_notify_events(Command(11, 0x03, CMD_NOTIFY_EVENTS, bytes(7))) is None
