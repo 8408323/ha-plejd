@@ -45,22 +45,43 @@
       },
       "transition_time": {
         "name": "Transition time"
+      },
+      "relay_off_time": {
+        "name": "Relay protection time"
+      },
+      "inrush_current_time": {
+        "name": "Inrush current protection"
       }
     },
     "select": {
       "dim_curve": {
         "name": "Dimming curve",
         "state": {
+          "standard": "Standard",
           "linear": "Linear",
           "logarithmic": "Logarithmic",
-          "antilogarithmic": "Anti-logarithmic"
+          "partial": "Partial"
         }
       },
       "phase_dim": {
-        "name": "Phase dimming",
+        "name": "Light source",
         "state": {
-          "trailing_edge": "Trailing edge",
-          "leading_edge": "Leading edge"
+          "trailing_edge": "LED trailing edge",
+          "leading_edge": "LED leading edge"
+        }
+      },
+      "boot_state": {
+        "name": "After power outage",
+        "state": {
+          "previous_state": "Restore previous state",
+          "off": "Turn off"
+        }
+      },
+      "relay_pole_config": {
+        "name": "Relay wiring",
+        "state": {
+          "two_pole": "Two-pole",
+          "one_pole": "One-pole"
         }
       }
     },
