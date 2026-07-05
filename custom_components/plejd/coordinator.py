@@ -290,7 +290,10 @@ class PlejdCoordinator:
             if event is not None:
                 for motion_cb in list(self._motion_listeners):
                     motion_cb(event)
-        elif command.command in _SETTINGS_CMDS:
+        elif command.command in _SETTINGS_CMDS and command.command_type == protocol.TYPE_READ:
+            # Our own writes use TYPE_DONT_RESPOND and echo back on the same feed with a
+            # different payload shape ([output, value...] vs. the reply's value-only bytes) —
+            # only a genuine read reply carries settings data worth caching.
             self._update_output_settings(command)
         elif command.command == CMD_NOTIFY_EVENTS:
             faults = decode_notify_events(command)

@@ -908,6 +908,24 @@ async def test_settings_stored_on_event_and_listener_notified(monkeypatch):
     assert seen == [1]
 
 
+async def test_settings_ignores_write_echo_not_a_read_reply(monkeypatch):
+    """A write (TYPE_DONT_RESPOND) echoed back on the same feed must not be decoded as a
+    reply — it carries [output, value...], not the reply's value-only bytes, and would
+    corrupt the cache with a bogus value."""
+    from plejd.const import CMD_OUTPUT_MIN_LEVEL
+    from plejd.protocol import TYPE_DONT_RESPOND, Command
+
+    client = _FakeClient()
+    _patch_connect(monkeypatch, client)
+    ble = types.SimpleNamespace(address="01:02:03:04:05:a0")
+    hass = _hass([_info("01:02:03:04:05:a0")], {"01:02:03:04:05:a0": ble})
+    c = PlejdCoordinator(hass, _entry(discovered=None))
+    await c.async_start()
+    # Our own set_output_min_level(addr, output=1, 0.0) write payload: [output, lo, hi].
+    c._on_event(Command(address=5, command_type=TYPE_DONT_RESPOND, command=CMD_OUTPUT_MIN_LEVEL, data=bytes([1, 0, 0])))
+    assert c.settings_for(5) is None  # not cached as if it were a read reply
+
+
 async def test_settings_all_commands_stored(monkeypatch):
     """All settings command codes are stored in _output_settings."""
     from plejd.const import (
