@@ -16,6 +16,7 @@ from homeassistant.core import HomeAssistant
 
 from .const import (
     CONF_CRYPTO_KEY,
+    CONF_DEVICE_ADDRESSES,
     CONF_DISCOVERED_ADDRESS,
     CONF_GATEWAYS,
     CONF_INSTALLATION_ID,
@@ -35,6 +36,7 @@ TO_REDACT = {
     CONF_INSTALLATION_ID,
     CONF_DISCOVERED_ADDRESS,
     CONF_GATEWAYS,
+    CONF_DEVICE_ADDRESSES,
     "device_id",
     "deviceId",
     "object_id",
