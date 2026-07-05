@@ -157,7 +157,7 @@ async def test_set_output_writes_and_state_reflects(monkeypatch):
     hass = _hass([_info("01:02:03:04:05:a0")], {"01:02:03:04:05:a0": ble})
     c = PlejdCoordinator(hass, _entry(discovered=None))
     await c.async_start()
-    await c.async_set_output(5, 0, True, 120)
+    await c.async_set_output(5, True, 120)
     # the written command, fed back as a notification, becomes the live state
     _, payload = client.writes[-1]
     client.notify_cb(None, bytearray(payload))
@@ -169,7 +169,7 @@ async def test_set_output_without_connection_raises():
 
     c = PlejdCoordinator(_hass(), _entry())
     with pytest.raises(HomeAssistantError, match="not connected"):
-        await c.async_set_output(5, 0, True, 1)
+        await c.async_set_output(5, True, 1)
 
 
 async def test_execute_scene_broadcasts(monkeypatch):
@@ -460,7 +460,7 @@ def _gateway_entry():
 
 
 async def test_gateway_is_preferred_and_routes_commands(monkeypatch):
-    from plejd.protocol import TYPE_DONT_RESPOND, OutputState, set_output_state_and_level
+    from plejd.protocol import OutputState, set_group_state_and_level
 
     monkeypatch.setattr(coordinator_mod, "PlejdGatewayConnection", _FakeGateway)
     hass = _hass()
@@ -470,8 +470,8 @@ async def test_gateway_is_preferred_and_routes_commands(monkeypatch):
     assert c._active == "gateway" and c.available is True
     c._gateway.state = {11: OutputState(output=11, on=True, level=80)}
     assert c.state_for(11).level == 80
-    await c.async_set_output(11, 0, True, 80)
-    assert c._gateway.writes[-1] == set_output_state_and_level(11, 0, True, 80, command_type=TYPE_DONT_RESPOND)
+    await c.async_set_output(11, True, 80)
+    assert c._gateway.writes[-1] == set_group_state_and_level(11, True, 80)
 
 
 async def test_gateway_connect_starts_fault_polling(monkeypatch):

@@ -558,11 +558,15 @@ class PlejdCoordinator:
         """Delete an on-device time event."""
         await self._write_vector(protocol.remove_time_event(slot))
 
-    async def async_set_output(self, address: int, output: int, on: bool, level: int) -> None:
-        """Send an on/off + level command for an output."""
-        await self._write_vector(
-            protocol.set_output_state_and_level(address, output, on, level, command_type=protocol.TYPE_DONT_RESPOND)
-        )
+    async def async_set_output(self, address: int, on: bool, level: int) -> None:
+        """Send an on/off + level command for an output.
+
+        Uses 0x0098 (`set_group_state_and_level`): the per-output cloud address alone
+        identifies the target output, with no separate output byte — 0x00C8 with the
+        per-output address broke every output past the first on a multi-output
+        device (#71).
+        """
+        await self._write_vector(protocol.set_group_state_and_level(address, on, level))
 
     async def async_set_output_min_level(self, address: int, output: int, fraction: float) -> None:
         """Set an output's minimum dim level (0-1 fraction)."""
