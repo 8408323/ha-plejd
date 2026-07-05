@@ -47,6 +47,7 @@ from .const import (
     CMD_OUTPUT_SET,
     CMD_OUTPUT_STATE_AND_LEVEL,
     CONF_CRYPTO_KEY,
+    CONF_DEVICE_ADDRESSES,
     CONF_DEVICES,
     CONF_DISCOVERED_ADDRESS,
     CONF_GATEWAYS,
@@ -106,6 +107,9 @@ class PlejdCoordinator:
         self.inputs = [PlejdCloudInput(**i) for i in entry.data.get(CONF_INPUTS, [])]
         self.motion = [PlejdCloudMotion(**m) for m in entry.data.get(CONF_MOTION, [])]
         self._motion_addresses = {m.address for m in self.motion}
+        # device_id -> physical mesh address, for fault polling; absent on entries added
+        # before this field existed (resolved via a one-time cloud fetch, see _async_poll_faults).
+        self._device_addresses: dict[str, int] = dict(entry.data.get(CONF_DEVICE_ADDRESSES) or {})
         self.site_id = entry.data.get(CONF_SITE_ID, entry.entry_id)
         self._preferred = entry.data.get(CONF_DISCOVERED_ADDRESS)
         self._transport_pref = (getattr(entry, "options", None) or {}).get(CONF_TRANSPORT, TRANSPORT_AUTO)
@@ -434,15 +438,21 @@ class PlejdCoordinator:
         await self._async_poll_faults(None)
 
     async def _async_poll_faults(self, _now: object) -> None:
-        seen: set[int] = set()
-        for device in self.devices:
-            if device.address is None or device.address in seen:
-                continue
-            seen.add(device.address)
+        # NotifyEvents belongs to the physical device, not any one output — poll the
+        # device's own mesh address (may differ from an output's outputAddress).
+        if not self._device_addresses and self._email and self._password:
             try:
-                await self._write_vector(protocol.request_notify_events(device.address))
+                session = async_get_clientsession(self.hass)
+                token = await async_login(session, self._email, self._password)
+                site = await async_get_site(session, token, self.site_id)
+                self._device_addresses = dict(site.device_addresses)
+            except Exception:  # noqa: BLE001 - fault polling is best-effort; retry next interval
+                _LOGGER.debug("Plejd fault poll: could not resolve device addresses", exc_info=True)
+        for address in set(self._device_addresses.values()):
+            try:
+                await self._write_vector(protocol.request_notify_events(address))
             except Exception:  # noqa: BLE001 - best-effort per device; one failure shouldn't skip the rest
-                _LOGGER.debug("Plejd fault poll failed for device %s", device.address, exc_info=True)
+                _LOGGER.debug("Plejd fault poll failed for device %s", address, exc_info=True)
                 continue
 
     async def _async_get_token(self) -> str:

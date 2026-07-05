@@ -274,3 +274,6 @@ def test_notify_events_request_and_decode():
     assert faults == frozenset({"hard_fault", "overtemperature"})
     # non-NotifyEvents command -> None
     assert decode_notify_events(Command(0, 0, CMD_SCENE, b"")) is None
+    # truncated/malformed payload -> None, never treated as "no faults"
+    assert decode_notify_events(Command(11, 0x03, CMD_NOTIFY_EVENTS, bytes(7))) is None
+    assert decode_notify_events(Command(11, 0x03, CMD_NOTIFY_EVENTS, b"")) is None
