@@ -127,7 +127,7 @@ _SETTINGS_CMDS = frozenset(
 def _settings_from_cloud(raw: dict) -> OutputSettings | None:
     """Best-effort decode of a cloud outputSettings dict.
 
-    NOTE: field names are speculative pending a capture that includes outputSettings.
+    NOTE(8408323): field names are speculative pending a capture that includes outputSettings (#73).
     """
     min_dim = raw.get("minDim")
     max_dim = raw.get("maxDim")
