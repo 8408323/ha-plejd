@@ -8,9 +8,11 @@ from aioresponses import aioresponses
 from plejd.cloud import (
     PlejdAuthError,
     PlejdCloudError,
+    async_get_available_firmware,
     async_get_site,
     async_get_sites,
     async_login,
+    async_set_device_title,
     parse_site,
 )
 from plejd.const import PLEJD_PARSE_URL
@@ -18,6 +20,7 @@ from plejd.const import PLEJD_PARSE_URL
 _LOGIN = PLEJD_PARSE_URL + "login"
 _SITE_LIST = PLEJD_PARSE_URL + "functions/getSiteList"
 _SITE_BY_ID = PLEJD_PARSE_URL + "functions/getSiteById"
+_FIRMWARE = PLEJD_PARSE_URL + "functions/getFirmwaresByHardwareId"
 
 _SITE = {
     "siteId": "S1",
@@ -236,3 +239,119 @@ def test_parse_site_ignores_non_dict_output_settings():
         }
     )
     assert site.devices[0].output_settings is None
+
+
+def test_parse_site_firmware_by_device_covers_all_physical_devices():
+    site = parse_site(
+        {
+            "plejdMesh": {"cryptoKey": "00" * 16},
+            "plejdDevices": [
+                {
+                    "deviceId": "d1",
+                    "hardwareId": "1",
+                    "faceplateId": 7,
+                    "firmware": {"version": "6.43.3", "buildTime": 20260324155701},
+                },
+                {"deviceId": "w1", "hardwareId": "70", "firmware": {"version": "4.41.3", "buildTime": 20240910153670}},
+            ],
+            # A GWY-01 lives in gateways[], not plejdDevices, and carries its firmware
+            # dict under `firmwareObject` (its `firmware` is a bare buildTime int).
+            "gateways": [
+                {
+                    "deviceId": "gw1",
+                    "hardwareId": "4",
+                    "firmware": 20230207104904,
+                    "firmwareObject": {"version": "2.3.1", "buildTime": 20230207104904},
+                }
+            ],
+            "devices": [{"deviceId": "d1", "outputType": "LIGHT"}],  # only d1 is a controllable output
+        }
+    )
+    fw = site.firmware_by_device
+    assert set(fw) == {"d1", "w1", "gw1"}  # outputs + sensors + gateway, not just controllable outputs
+    assert fw["d1"].version == "6.43.3" and fw["d1"].build_time == 20260324155701
+    assert fw["d1"].hardware_id == 1 and fw["d1"].faceplate_id == "7"
+    assert fw["w1"].version == "4.41.3"
+    # gateway firmware comes from firmwareObject, not the bare int `firmware`
+    assert fw["gw1"].version == "2.3.1" and fw["gw1"].build_time == 20230207104904 and fw["gw1"].hardware_id == 4
+
+
+def test_parse_site_firmware_tolerates_missing_or_garbage():
+    site = parse_site(
+        {
+            "plejdMesh": {"cryptoKey": "00" * 16},
+            "plejdDevices": [
+                {"deviceId": "a", "hardwareId": "1"},  # no firmware/faceplate at all
+                {"deviceId": "b", "hardwareId": "1", "firmware": {"version": 5, "buildTime": "nope"}},
+                {"hardwareId": "1"},  # no deviceId -> skipped
+            ],
+            "devices": [],
+        }
+    )
+    fw = site.firmware_by_device
+    assert set(fw) == {"a", "b"}
+    assert fw["a"].version is None and fw["a"].build_time is None and fw["a"].faceplate_id is None
+    assert fw["b"].version is None  # non-str version dropped
+    assert fw["b"].build_time is None  # non-numeric buildTime dropped
+
+
+async def test_available_firmware_returns_newest_offered():
+    with aioresponses() as m:
+        m.post(
+            _FIRMWARE,
+            payload={
+                "result": [
+                    {"version": "6.40.0", "buildTime": 20251201000000},
+                    {"version": "6.43.3", "buildTime": 20260324155701},
+                ]
+            },
+        )
+        async with aiohttp.ClientSession() as s:
+            latest = await async_get_available_firmware(s, "tok", 1, "0")
+    assert latest == ("6.43.3", 20260324155701)
+
+
+async def test_available_firmware_empty_list_means_up_to_date():
+    with aioresponses() as m:
+        m.post(_FIRMWARE, payload={"result": []})
+        async with aiohttp.ClientSession() as s:
+            assert await async_get_available_firmware(s, "tok", 1, None) is None
+
+
+async def test_available_firmware_skips_malformed_entries():
+    with aioresponses() as m:
+        m.post(
+            _FIRMWARE,
+            payload={"result": ["junk", {"version": "x"}, {"buildTime": 1}, {"version": "6.1.0", "buildTime": 42}]},
+        )
+        async with aiohttp.ClientSession() as s:
+            assert await async_get_available_firmware(s, "tok", 9, None) == ("6.1.0", 42)
+
+
+_UPDATE_DEVICE = PLEJD_PARSE_URL + "functions/updateDevice_V2"
+
+
+def test_parse_site_extracts_output_object_id():
+    site = parse_site(
+        {
+            "plejdMesh": {"cryptoKey": "00" * 16},
+            "plejdDevices": [{"deviceId": "F161F68198AF", "hardwareId": "1"}],
+            "devices": [{"deviceId": "F161F68198AF", "outputType": "LIGHT", "objectId": "7MK7dlrcfz"}],
+        }
+    )
+    assert site.devices[0].object_id == "7MK7dlrcfz"
+
+
+async def test_set_device_title_success():
+    with aioresponses() as m:
+        m.post(_UPDATE_DEVICE, payload={"result": True})
+        async with aiohttp.ClientSession() as s:
+            ok = await async_set_device_title(s, "tok", "site-1", "F161F68198AF", "7MK7dlrcfz", "Vardagsrum")
+    assert ok is True
+
+
+async def test_set_device_title_false_when_cloud_rejects():
+    with aioresponses() as m:
+        m.post(_UPDATE_DEVICE, payload={"result": False})
+        async with aiohttp.ClientSession() as s:
+            assert await async_set_device_title(s, "tok", "site-1", "d1", "p1", "X") is False

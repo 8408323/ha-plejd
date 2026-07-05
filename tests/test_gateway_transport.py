@@ -249,6 +249,42 @@ async def test_receive_loop_silent_when_closing():
     assert dropped == []
 
 
+async def test_receive_loop_signals_disconnect_on_unexpected_error():
+    class _RaisingWS(_FakeWS):
+        async def __anext__(self):
+            raise RuntimeError("connection reset")
+
+    dropped = []
+    ws = _RaisingWS()
+    conn = _conn(ws, on_disconnect=lambda: dropped.append(1))
+    conn._ws = ws
+    with pytest.raises(RuntimeError):
+        await conn._receive_loop()
+    assert dropped == [1]  # an unexpected error must still notify the owner, not die silently
+
+
+async def test_ping_loop_treats_send_failure_as_missed_pong(monkeypatch):
+    from plejd import gateway_transport as gt
+
+    ws = _FakeWS()
+    conn = _conn(ws)
+    conn._ws = ws
+
+    async def _fail_send(_s):
+        raise ConnectionResetError("broken pipe")
+
+    ws.send_str = _fail_send
+
+    async def fake_sleep(_delay):
+        pass
+
+    monkeypatch.setattr(gt.asyncio, "sleep", fake_sleep)
+    await conn._ping_loop()
+    # the failed send is caught and treated like a missed pong: close so the owner
+    # reconnects, and the loop ends on its own (no second cycle needed).
+    assert ws.closed
+
+
 @pytest.mark.parametrize(
     "raw",
     [

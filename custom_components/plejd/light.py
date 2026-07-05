@@ -69,10 +69,10 @@ class PlejdLight(LightEntity):
             # No brightness requested: restore the last level, or full if unknown/off.
             current = self.brightness
             level = current if current else 255
-        await self._coordinator.async_set_output(self._device.address, self._device.output_index, True, level)
+        await self._coordinator.async_set_output(self._device.address, True, level)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
-        await self._coordinator.async_set_output(self._device.address, self._device.output_index, False, 0)
+        await self._coordinator.async_set_output(self._device.address, False, 0)
 
     async def async_added_to_hass(self) -> None:
         self.async_on_remove(self._coordinator.async_add_listener(self.async_write_ha_state))

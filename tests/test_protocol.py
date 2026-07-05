@@ -14,6 +14,7 @@ from plejd.protocol import (
     encode_command,
     execute_scene,
     request_output_state_and_level,
+    set_group_state_and_level,
     set_output_state_and_level,
 )
 
@@ -32,6 +33,28 @@ def test_set_output_state_and_level_bytes():
 def test_set_output_off_zeroes_state_byte():
     v = set_output_state_and_level(0, output=1, on=False, level=0)
     assert v[5:] == bytes([0x01, 0x00, 0x00, 0x00])
+
+
+def test_set_group_state_and_level_bytes():
+    # confirmed on a live gateway capture: opcode 0x0098, no output byte, level mirrored twice.
+    v = set_group_state_and_level(40, on=True, level=200)
+    assert v == bytes([40, 0x01, TYPE_DONT_RESPOND, 0x00, 0x98, 0x01, 200, 200])
+
+
+def test_set_group_state_and_level_defaults_to_dont_respond():
+    v = set_group_state_and_level(40, on=True, level=200)
+    assert v[2] == TYPE_DONT_RESPOND
+
+
+def test_set_group_state_off_zeroes_state_byte():
+    v = set_group_state_and_level(0, on=False, level=0)
+    assert v[5:] == bytes([0x00, 0x00, 0x00])
+
+
+def test_set_group_state_and_level_decodes_with_address_as_output():
+    cmd = decode_command(set_group_state_and_level(40, on=True, level=77))
+    state = decode_output_state(cmd)
+    assert (state.output, state.on, state.level) == (40, True, 77)
 
 
 def test_request_uses_read_type_and_single_output_byte():
@@ -257,6 +280,15 @@ def test_dim_level_setting_bytes():
     assert full[5:] == bytes([0x00, 0xFF, 0xFF])
     zero = set_output_min_level(9, 0, 0.0)
     assert zero[5:] == bytes([0x00, 0x00, 0x00])
+
+
+def test_set_output_start_level_bytes():
+    from plejd.const import CMD_OUTPUT_START_LEVEL
+    from plejd.protocol import set_output_start_level
+
+    start = set_output_start_level(9, 1, 0.5)  # 0.5*65535 = 32768 = 0x8000 le
+    assert (start[3] << 8) | start[4] == CMD_OUTPUT_START_LEVEL
+    assert start[5:] == bytes([0x01, 0x00, 0x80])
 
 
 def test_set_output_speed_bytes():

@@ -32,6 +32,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         if device.category == CATEGORY_LIGHT and device.dimmable:
             entities.append(PlejdDimLevelNumber(coordinator, device, "min"))
             entities.append(PlejdDimLevelNumber(coordinator, device, "max"))
+            entities.append(PlejdDimLevelNumber(coordinator, device, "start"))
             entities.append(PlejdTransitionTimeNumber(coordinator, device))
             if device.hardware_id in PHASE_DIM_HARDWARE:
                 entities.append(PlejdInrushCurrentNumber(coordinator, device))
@@ -41,7 +42,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
 
 
 class PlejdDimLevelNumber(RestoreNumber):
-    """A dimmer's minimum or maximum brightness, as a 0-100% setting."""
+    """A dimmer's minimum, maximum, or start brightness, as a 0-100% setting."""
 
     _attr_has_entity_name = True
     _attr_entity_category = EntityCategory.CONFIG
@@ -54,11 +55,14 @@ class PlejdDimLevelNumber(RestoreNumber):
     def __init__(self, coordinator: PlejdCoordinator, device: PlejdCloudDevice, kind: str) -> None:
         self._coordinator = coordinator
         self._device = device
-        self._is_min = kind == "min"
-        self._setter: Callable[[int, int, float], Awaitable[None]] = (
-            coordinator.async_set_output_min_level if self._is_min else coordinator.async_set_output_max_level
-        )
-        self._attr_translation_key = "min_dim_level" if self._is_min else "max_dim_level"
+        setters: dict[str, Callable[[int, int, float], Awaitable[None]]] = {
+            "min": coordinator.async_set_output_min_level,
+            "max": coordinator.async_set_output_max_level,
+            "start": coordinator.async_set_output_start_level,
+        }
+        self._setter = setters[kind]
+        self._kind = kind
+        self._attr_translation_key = {"min": "min_dim_level", "max": "max_dim_level", "start": "start_level"}[kind]
         base = device.device_id if device.output_index == 0 else f"{device.device_id}_{device.output_index}"
         self._attr_unique_id = f"{base}_{kind}_level"
         self._attr_device_info = DeviceInfo(
@@ -76,7 +80,7 @@ class PlejdDimLevelNumber(RestoreNumber):
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
         settings = self._coordinator.settings_for(self._device.address)
-        val = (settings.min_level if self._is_min else settings.max_level) if settings else None
+        val = getattr(settings, f"{self._kind}_level", None) if settings else None
         if val is not None:
             self._attr_native_value = val
         else:
@@ -90,7 +94,7 @@ class PlejdDimLevelNumber(RestoreNumber):
         settings = self._coordinator.settings_for(self._device.address)
         if settings is None:
             return
-        val = settings.min_level if self._is_min else settings.max_level
+        val = getattr(settings, f"{self._kind}_level", None)
         if val is not None and val != getattr(self, "_attr_native_value", None):
             self._attr_native_value = val
             self.async_write_ha_state()

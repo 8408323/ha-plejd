@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable, Coroutine
+from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
 
@@ -21,12 +22,23 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady, HomeAssistantError
+from homeassistant.helpers import device_registry
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers.event import async_call_later, async_track_time_interval
 from homeassistant.util import dt as dt_util
 
 from . import protocol
-from .cloud import PlejdAuthError, PlejdCloudDevice, PlejdCloudInput, PlejdCloudMotion, PlejdCloudScene, async_login
+from .cloud import (
+    PlejdAuthError,
+    PlejdCloudDevice,
+    PlejdCloudInput,
+    PlejdCloudMotion,
+    PlejdCloudScene,
+    async_get_available_firmware,
+    async_get_site,
+    async_login,
+    async_set_device_title,
+)
 from .connection import PlejdConnection
 from .const import (
     CATEGORY_LIGHT,
@@ -55,6 +67,7 @@ from .const import (
     CONF_SCENES,
     CONF_SITE_ID,
     CONF_TRANSPORT,
+    DOMAIN,
     PHASE_DIM_HARDWARE,
     PLEJD_SERVICE_UUID,
     RELAY_CONFIG_HARDWARE,
@@ -78,6 +91,26 @@ _LOGGER = logging.getLogger(__name__)
 
 RECONNECT_INITIAL_DELAY = 1.0
 RECONNECT_MAX_DELAY = 60.0
+FIRMWARE_REFRESH_INTERVAL = timedelta(days=1)
+
+
+@dataclass
+class PlejdFirmwareStatus:
+    """A device's installed firmware vs. the latest the Plejd cloud offers for it."""
+
+    installed_version: str | None
+    installed_build_time: int | None
+    latest_version: str | None
+    latest_build_time: int | None
+
+    @property
+    def update_available(self) -> bool:
+        return (
+            self.latest_build_time is not None
+            and self.installed_build_time is not None
+            and self.latest_build_time > self.installed_build_time
+        )
+
 
 _SETTINGS_CMDS = frozenset(
     {
@@ -117,6 +150,7 @@ class PlejdCoordinator:
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         self.hass = hass
+        self._entry = entry  # for runtime reauth (e.g. a rename hitting expired credentials)
         # Tolerate entries stored before a field existed (e.g. output_index).
         self.devices = [PlejdCloudDevice(**{"output_index": 0, **device}) for device in entry.data[CONF_DEVICES]]
         self.scenes = [PlejdCloudScene(**scene) for scene in entry.data.get(CONF_SCENES, [])]
@@ -126,16 +160,18 @@ class PlejdCoordinator:
         self.site_id = entry.data.get(CONF_SITE_ID, entry.entry_id)
         self._preferred = entry.data.get(CONF_DISCOVERED_ADDRESS)
         self._transport_pref = (getattr(entry, "options", None) or {}).get(CONF_TRANSPORT, TRANSPORT_AUTO)
+        # Cloud credentials are used for the gateway token and the firmware-update check.
+        self._email = entry.data.get(CONF_EMAIL)
+        self._password = entry.data.get(CONF_PASSWORD)
         self._connection = PlejdConnection(
             bytes.fromhex(entry.data[CONF_CRYPTO_KEY]), self._on_event, self._handle_disconnect
         )
         # Gateway (remote/cloud) transport, when the site has one - preferred over BLE.
         self._gateway: PlejdGatewayConnection | None = None
-        gateways = entry.data.get(CONF_GATEWAYS) or []
+        self.gateways = entry.data.get(CONF_GATEWAYS) or []  # GWY-01 device ids (no controllable output)
+        gateways = self.gateways
         resource_set_id = entry.data.get(CONF_RESOURCE_SET_ID)
         if gateways and resource_set_id:
-            self._email = entry.data[CONF_EMAIL]
-            self._password = entry.data[CONF_PASSWORD]
             self._gateway = PlejdGatewayConnection(
                 async_get_clientsession(hass),
                 entry.data[CONF_SITE_ID],
@@ -148,7 +184,10 @@ class PlejdCoordinator:
         self._listeners: list[Callable[[], None]] = []
         self._button_listeners: list[Callable[[int, bool], None]] = []
         self._motion_listeners: list[Callable[[MotionEvent], None]] = []
+        self.firmware: dict[str, PlejdFirmwareStatus] = {}  # device_id -> firmware status
         self._clock_unsub: Callable[[], None] | None = None
+        self._firmware_unsub: Callable[[], None] | None = None
+        self._firmware_now_unsub: Callable[[], None] | None = None
         self._available = False
         self._active: str | None = None  # "gateway" | "ble"
         self._closed = False
@@ -326,6 +365,105 @@ class PlejdCoordinator:
     async def async_start(self) -> None:
         """Connect to the mesh — gateway-first when one exists, else BLE."""
         await self._async_select_and_connect()
+        self._schedule_firmware_checks()
+
+    def _schedule_firmware_checks(self) -> None:
+        """Check firmware shortly after start, then daily; both are best-effort."""
+        if self._firmware_unsub is not None:
+            return  # already scheduled (e.g. a second async_start)
+        self._firmware_now_unsub = async_call_later(self.hass, 0, self._async_firmware_check)
+        self._firmware_unsub = async_track_time_interval(
+            self.hass, self._async_firmware_check, FIRMWARE_REFRESH_INTERVAL
+        )
+
+    async def _async_firmware_check(self, _now: object) -> None:
+        self._firmware_now_unsub = None  # the one-shot has fired
+        try:
+            await self.async_refresh_firmware()
+        except Exception:  # noqa: BLE001 - auxiliary + cloud-dependent; warn (e.g. lapsed credentials) but never disrupt
+            _LOGGER.warning("Plejd firmware check failed", exc_info=True)
+
+    async def async_refresh_firmware(self) -> None:
+        """Refresh installed vs. latest firmware for every physical device from the cloud."""
+        if not self._email or not self._password:
+            return
+        session = async_get_clientsession(self.hass)
+        token = await async_login(session, self._email, self._password)
+        site = await async_get_site(session, token, self.site_id)
+        latest_by_hw: dict[tuple[int, str | None], tuple[str, int] | None] = {}
+        status: dict[str, PlejdFirmwareStatus] = {}
+        for device_id, firmware in site.firmware_by_device.items():
+            key = (firmware.hardware_id, firmware.faceplate_id)
+            if key not in latest_by_hw:
+                try:
+                    latest_by_hw[key] = await async_get_available_firmware(
+                        session, token, firmware.hardware_id, firmware.faceplate_id
+                    )
+                except Exception:  # noqa: BLE001 - one flaky lookup must not discard the whole refresh
+                    _LOGGER.debug("Plejd firmware lookup failed for hardware %s", firmware.hardware_id, exc_info=True)
+                    latest_by_hw[key] = None
+            latest = latest_by_hw[key]
+            status[device_id] = PlejdFirmwareStatus(
+                installed_version=firmware.version,
+                installed_build_time=firmware.build_time,
+                latest_version=latest[0] if latest else None,
+                latest_build_time=latest[1] if latest else None,
+            )
+        self.firmware = status
+        self._notify_outputs()
+
+    @staticmethod
+    def _output_parse_id(devices: list[PlejdCloudDevice], device_id: str) -> str | None:
+        # The title lives on the output; rename targets the primary output's Parse id.
+        # Primary = lowest output_index (consistent with the unique_id base convention).
+        matching = sorted(
+            (d for d in devices if d.device_id == device_id and d.object_id),
+            key=lambda d: d.output_index,
+        )
+        return matching[0].object_id if matching else None
+
+    async def async_rename_device(self, device_id: str, title: str) -> None:
+        """Mirror an HA device rename to the Plejd cloud (so the Plejd app shows it too)."""
+        if not self._email or not self._password:
+            return
+        session = async_get_clientsession(self.hass)
+        token = await async_login(session, self._email, self._password)
+        parse_id = self._output_parse_id(self.devices, device_id)
+        if parse_id is None:
+            # Entries cached before object_id existed lack it — resolve from a fresh site fetch.
+            site = await async_get_site(session, token, self.site_id)
+            parse_id = self._output_parse_id(site.devices, device_id)
+        if parse_id is None:
+            _LOGGER.debug("Plejd rename skipped: no Parse id for device %s", device_id)
+            return
+        if not await async_set_device_title(session, token, self.site_id, device_id, parse_id, title):
+            raise HomeAssistantError(f"Plejd rejected the rename of device {device_id}")
+
+    async def async_handle_device_registry_update(self, event: object) -> None:
+        """When the user renames one of our devices in HA, push the new name to Plejd."""
+        data = getattr(event, "data", {}) or {}
+        if data.get("action") != "update" or "name_by_user" not in (data.get("changes") or {}):
+            return
+        device_id = data.get("device_id")
+        if not device_id:
+            return
+        registry = device_registry.async_get(self.hass)
+        if registry is None:
+            return
+        device = registry.async_get(device_id)
+        if device is None:
+            return
+        plejd_id = next((ident for (domain, ident) in device.identifiers if domain == DOMAIN), None)
+        name = device.name_by_user
+        if plejd_id is None or not name:
+            return
+        try:
+            await self.async_rename_device(plejd_id, name)
+        except PlejdAuthError:
+            # No gateway connect path exists in BLE-only setups, so prompt reauth here.
+            self._entry.async_start_reauth(self.hass)
+        except Exception:  # noqa: BLE001 - mirroring a rename is auxiliary and must never disrupt HA
+            _LOGGER.warning("Plejd: could not mirror the device rename to the Plejd app", exc_info=True)
 
     async def _async_select_and_connect(self) -> None:
         """Connect over the chosen transport.
@@ -451,7 +589,12 @@ class PlejdCoordinator:
         return asyncio.ensure_future(coro)
 
     async def _async_reconnect(self) -> None:
-        """Reconnect to the mesh with exponential backoff until it succeeds or we close."""
+        """Reconnect (gateway or BLE) with exponential backoff until it succeeds or we close.
+
+        Any failure to (re)connect must keep this loop alive: a single uncaught
+        exception here silently kills the background task and the transport
+        never reconnects again on its own, even if the underlying issue clears.
+        """
         if self._reconnecting:
             return
         self._reconnecting = True
@@ -463,11 +606,22 @@ class PlejdCoordinator:
                     return
                 try:
                     await self._async_select_and_connect()
-                    _LOGGER.debug("reconnected to Plejd mesh")
+                    _LOGGER.debug("reconnected to Plejd over %s", self._active)
+                    return
+                except ConfigEntryAuthFailed:
+                    # Retrying with the same rejected credentials can't succeed; prompt
+                    # reauth and stop until the entry reloads with fresh ones.
+                    self._entry.async_start_reauth(self.hass)
+                    _LOGGER.warning("Plejd reconnect stopped: cloud credentials rejected, reauth requested")
                     return
                 except ConfigEntryNotReady as err:
+                    # Expected transient condition (device out of range, gateway
+                    # unreachable, ...) — quiet, keeps retrying.
                     delay = min(delay * 2, RECONNECT_MAX_DELAY)
                     _LOGGER.debug("Plejd reconnect failed (retry in %ss): %s", delay, err)
+                except Exception:  # noqa: BLE001 - unexpected bug: keep retrying, but make it visible
+                    delay = min(delay * 2, RECONNECT_MAX_DELAY)
+                    _LOGGER.warning("Plejd reconnect hit an unexpected error (retry in %ss)", delay, exc_info=True)
         finally:
             self._reconnecting = False
 
@@ -502,11 +656,15 @@ class PlejdCoordinator:
         """Delete an on-device time event."""
         await self._write_vector(protocol.remove_time_event(slot))
 
-    async def async_set_output(self, address: int, output: int, on: bool, level: int) -> None:
-        """Send an on/off + level command for an output."""
-        await self._write_vector(
-            protocol.set_output_state_and_level(address, output, on, level, command_type=protocol.TYPE_DONT_RESPOND)
-        )
+    async def async_set_output(self, address: int, on: bool, level: int) -> None:
+        """Send an on/off + level command for an output.
+
+        Uses 0x0098 (`set_group_state_and_level`): the per-output cloud address alone
+        identifies the target output, with no separate output byte — 0x00C8 with the
+        per-output address broke every output past the first on a multi-output
+        device (#71).
+        """
+        await self._write_vector(protocol.set_group_state_and_level(address, on, level))
 
     async def async_set_output_min_level(self, address: int, output: int, fraction: float) -> None:
         """Set an output's minimum dim level (0-1 fraction)."""
@@ -517,6 +675,10 @@ class PlejdCoordinator:
         """Set an output's maximum dim level (0-1 fraction)."""
         await self._write_vector(protocol.set_output_max_level(address, output, fraction))
         self._cache_output_setting(address, max_level=fraction * 100)
+
+    async def async_set_output_start_level(self, address: int, output: int, fraction: float) -> None:
+        """Set an output's start level (0-1 fraction)."""
+        await self._write_vector(protocol.set_output_start_level(address, output, fraction))
 
     async def async_set_output_speed(self, address: int, output: int, seconds: float) -> None:
         """Set an output's dim transition time (seconds; 0 = instant)."""
@@ -578,6 +740,12 @@ class PlejdCoordinator:
         if self._clock_unsub is not None:
             self._clock_unsub()
             self._clock_unsub = None
+        if self._firmware_unsub is not None:
+            self._firmware_unsub()
+            self._firmware_unsub = None
+        if self._firmware_now_unsub is not None:
+            self._firmware_now_unsub()
+            self._firmware_now_unsub = None
         if self._reconnect_task is not None:
             self._reconnect_task.cancel()
             self._reconnect_task = None

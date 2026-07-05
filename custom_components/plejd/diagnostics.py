@@ -37,6 +37,7 @@ TO_REDACT = {
     CONF_GATEWAYS,
     "device_id",
     "deviceId",
+    "object_id",
     "address",
     "outputs",
     "name",
