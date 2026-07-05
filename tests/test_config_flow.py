@@ -235,6 +235,7 @@ async def test_reconfigure_fetches_and_updates_entry(monkeypatch):
     updates = res["data_updates"]
     assert updates[CONF_DEVICES][0]["model"] == "DIM-01"
     assert updates[CONF_GATEWAYS] == ["gw1"]
+    assert updates[CONF_DEVICE_ADDRESSES] == {"d1": 1, "w1": 33}
     assert updates[CONF_RESOURCE_SET_ID] == "rsABC"
     assert updates[CONF_CRYPTO_KEY] == bytes(16).hex()
 

@@ -26,6 +26,7 @@ from .cloud import (
 )
 from .commission import async_commission_device
 from .const import (
+    CONF_DEVICE_ADDRESSES,
     CONF_DEVICES,
     CONF_GATEWAYS,
     CONF_INPUTS,
@@ -130,6 +131,7 @@ async def async_add_device(
             CONF_SCENES: [asdict(s) for s in fresh_site.scenes],
             CONF_GATEWAYS: fresh_site.gateways,
             CONF_RESOURCE_SET_ID: fresh_site.resource_set_id,
+            CONF_DEVICE_ADDRESSES: fresh_site.device_addresses,
         },
     )
     await hass.config_entries.async_reload(entry.entry_id)

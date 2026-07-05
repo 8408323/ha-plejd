@@ -149,6 +149,7 @@ async def test_add_device_refreshes_gateway_metadata(monkeypatch):
         scenes=[],
         gateways=["gw-new"],
         resource_set_id="rs-new",
+        device_addresses={"new-device": 5},
     )
     monkeypatch.setattr("plejd.add_device.async_get_site", AsyncMock(return_value=fresh_site))
     monkeypatch.setattr(
@@ -160,6 +161,8 @@ async def test_add_device_refreshes_gateway_metadata(monkeypatch):
 
     assert entry.data["gateways"] == ["gw-new"]
     assert entry.data["resource_set_id"] == "rs-new"
+    # the newly-added device's physical address must be present for fault polling/sensors
+    assert entry.data["device_addresses"] == {"new-device": 5}
 
 
 async def test_add_device_passes_room_title_through_to_commission(monkeypatch):

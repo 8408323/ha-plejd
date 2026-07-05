@@ -156,6 +156,7 @@ class PlejdConfigFlow(ConfigFlow, domain=DOMAIN):
                         CONF_SCENES: [asdict(s) for s in site.scenes],
                         CONF_GATEWAYS: site.gateways,
                         CONF_RESOURCE_SET_ID: site.resource_set_id,
+                        CONF_DEVICE_ADDRESSES: site.device_addresses,
                     },
                     reason="reconfigure_successful",
                 )
