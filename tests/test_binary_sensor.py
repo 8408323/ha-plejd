@@ -5,7 +5,7 @@ from __future__ import annotations
 import types
 
 from plejd.binary_sensor import PlejdMotionBinarySensor, PlejdProblemBinarySensor, async_setup_entry
-from plejd.cloud import PlejdCloudDevice, PlejdCloudMotion
+from plejd.cloud import PlejdCloudDevice, PlejdCloudInput, PlejdCloudMotion
 from plejd.protocol import MotionEvent
 
 
@@ -26,10 +26,11 @@ def _device(device_id="d1", address=5, output_index=0):
 
 
 class _Coordinator:
-    def __init__(self, motion, devices=(), gateways=(), device_addresses=None):
+    def __init__(self, motion, devices=(), gateways=(), inputs=(), device_addresses=None):
         self.motion = motion
         self.devices = list(devices)
         self.gateways = list(gateways)
+        self.inputs = list(inputs)
         # default: assume each device's own output address is also its physical address,
         # unless a test explicitly overrides this to exercise a mismatch.
         self._device_addresses = (
@@ -120,6 +121,27 @@ async def test_setup_uses_physical_address_not_output_address():
     await async_setup_entry(None, entry, lambda entities: added.extend(entities))
     assert len(added) == 1
     assert added[0]._address == 5
+
+
+async def test_setup_creates_fault_sensor_for_input_only_device():
+    """A wall-switch/input device with no output still gets a fault sensor, using its
+    physical address (device_address_for), not any single button's own address."""
+    buttons = [PlejdCloudInput("btn1", "Switch", 11), PlejdCloudInput("btn1", "Switch", 12)]  # 2-button WPH-01
+    coord = _Coordinator([], inputs=buttons, device_addresses={"btn1": 20})
+    entry = types.SimpleNamespace(runtime_data=coord)
+    added = []
+    await async_setup_entry(None, entry, lambda entities: added.extend(entities))
+    assert len(added) == 1  # deduped by device_id, not one per button channel
+    assert added[0]._attr_unique_id == "fault_btn1" and added[0]._address == 20
+    assert added[0]._attr_device_info.get("model") is None  # no known hardware model for inputs
+
+
+async def test_setup_skips_input_device_with_unresolved_address():
+    coord = _Coordinator([], inputs=[PlejdCloudInput("btn1", "Switch", 11)], device_addresses={})
+    entry = types.SimpleNamespace(runtime_data=coord)
+    added = []
+    await async_setup_entry(None, entry, lambda entities: added.extend(entities))
+    assert added == []
 
 
 async def test_setup_creates_gateway_fault_sensor():

@@ -41,6 +41,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
                     coordinator, sensor.device_id, sensor.address, sensor.name, HARDWARE_TYPES[HARDWARE_WMS_01]
                 )
             )
+    for button in coordinator.inputs:
+        if button.device_id in seen:
+            continue
+        address = coordinator.device_address_for(button.device_id)
+        if address is not None:
+            seen.add(button.device_id)
+            entities.append(PlejdProblemBinarySensor(coordinator, button.device_id, address, button.name, None))
     for gateway_id in coordinator.gateways:
         if gateway_id in seen:
             continue
@@ -61,16 +68,16 @@ class PlejdProblemBinarySensor(BinarySensorEntity):
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_translation_key = "device_fault"
 
-    def __init__(self, coordinator: PlejdCoordinator, device_id: str, address: int, name: str, model: str) -> None:
+    def __init__(
+        self, coordinator: PlejdCoordinator, device_id: str, address: int, name: str, model: str | None
+    ) -> None:
         self._coordinator = coordinator
         self._address = address
         self._attr_unique_id = f"fault_{device_id}"
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, device_id)},
-            name=name,
-            manufacturer="Plejd",
-            model=model,
-        )
+        info: dict[str, object] = {"identifiers": {(DOMAIN, device_id)}, "name": name, "manufacturer": "Plejd"}
+        if model is not None:
+            info["model"] = model
+        self._attr_device_info = DeviceInfo(**info)
 
     @property
     def is_on(self) -> bool:
