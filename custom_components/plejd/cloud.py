@@ -62,6 +62,10 @@ class PlejdCloudDevice:
     traits: int
     room_id: str | None
     object_id: str | None = None  # the output's Parse objectId (deviceParseId), needed to rename it
+    # The physical device's own mesh address (deviceAddress) - distinct from `address`
+    # (the per-output control address) for multi-output hardware. Whole-device
+    # operations like NotifyEvents must target this, not an output address.
+    device_address: int | None = None
 
 
 @dataclass
@@ -233,8 +237,9 @@ def parse_site(site: dict) -> PlejdCloudSite:
         category = _OUTPUT_TYPE_CATEGORY.get(output_type) or DEFAULT_CATEGORY.get(hardware_id, CATEGORY_NONE)
         out_map = output_address.get(device_id) or {}
         outputs = [int(a) for a in out_map.values()]
+        phys_address = device_address.get(device_id)
         # Control targets the output's own mesh address; fall back to the device address.
-        address = out_map.get(str(output_index), device_address.get(device_id))
+        address = out_map.get(str(output_index), phys_address)
         # Prefer the per-output Dimmable trait; fall back to category when the cloud
         # omits traits (a light-category output can still be on/off only).
         traits = int(info.get("traits") or 0)
@@ -253,6 +258,7 @@ def parse_site(site: dict) -> PlejdCloudSite:
                 traits=traits,
                 room_id=info.get("roomId"),
                 object_id=info.get("objectId"),
+                device_address=int(phys_address) if phys_address is not None else None,
             )
         )
 

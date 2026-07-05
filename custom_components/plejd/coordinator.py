@@ -16,6 +16,7 @@ from collections.abc import Callable, Coroutine
 from dataclasses import asdict, dataclass
 from datetime import timedelta
 from typing import Any
+from uuid import uuid4
 
 from homeassistant.components import bluetooth
 from homeassistant.config_entries import ConfigEntry
@@ -133,6 +134,7 @@ class PlejdCoordinator:
                 self._async_get_token,
                 self._notify_outputs,
                 self._handle_disconnect,
+                on_event=self._on_event,
             )
         self._listeners: list[Callable[[], None]] = []
         self._button_listeners: list[Callable[[int, bool], None]] = []
@@ -142,6 +144,7 @@ class PlejdCoordinator:
         self.firmware: dict[str, PlejdFirmwareStatus] = {}  # device_id -> firmware status
         self._clock_unsub: Callable[[], None] | None = None
         self._faults_unsub: Callable[[], None] | None = None
+        self._fault_poll_now_unsub: Callable[[], None] | None = None
         self._cloud_poll_unsub: Callable[[], None] | None = None
         self._firmware_unsub: Callable[[], None] | None = None
         self._firmware_now_unsub: Callable[[], None] | None = None
@@ -265,6 +268,17 @@ class PlejdCoordinator:
         await self._async_select_and_connect()
         self._cloud_poll_unsub = async_track_time_interval(self.hass, self._async_poll_cloud, CLOUD_POLL_INTERVAL)
         self._schedule_firmware_checks()
+        self._schedule_fault_polling()
+
+    def _schedule_fault_polling(self) -> None:
+        """Poll device health (NotifyEvents) shortly after start, then periodically.
+
+        Runs over whichever transport is active (gateway or BLE) via _write_vector.
+        """
+        if self._faults_unsub is not None:
+            return  # already scheduled (e.g. a second async_start)
+        self._fault_poll_now_unsub = async_call_later(self.hass, 0, self._async_poll_faults)
+        self._faults_unsub = async_track_time_interval(self.hass, self._async_poll_faults, NOTIFY_POLL_INTERVAL)
 
     async def _async_poll_cloud(self, _now: object) -> None:
         """Detect site changes and reload the integration if anything differs."""
@@ -290,6 +304,11 @@ class PlejdCoordinator:
             CONF_GATEWAYS: site.gateways,
             CONF_RESOURCE_SET_ID: site.resource_set_id,
         }
+        # A gateway newly appearing on an entry that predates CONF_INSTALLATION_ID (or
+        # never had one) must seed it now - the gateway transport requires it and the
+        # reload below would otherwise crash with a KeyError instead of applying this.
+        if site.gateways and not entry.data.get(CONF_INSTALLATION_ID):
+            new_data[CONF_INSTALLATION_ID] = str(uuid4())
         changed = [k for k, v in new_data.items() if entry.data.get(k) != v]
         if not changed:
             return
@@ -445,11 +464,6 @@ class PlejdCoordinator:
         self._active = "ble"
         self._available = True
         self._notify_outputs()
-        # Poll device health (NotifyEvents) periodically; replies arrive on LastChanged.
-        if self._faults_unsub is not None:
-            self._faults_unsub()
-        self._faults_unsub = async_track_time_interval(self.hass, self._async_poll_faults, NOTIFY_POLL_INTERVAL)
-        await self._async_poll_faults(None)
         try:
             await self.async_sync_clock()
         except Exception:  # noqa: BLE001 - clock sync is auxiliary, never fail setup over it
@@ -466,13 +480,15 @@ class PlejdCoordinator:
             _LOGGER.warning("Plejd periodic clock sync failed", exc_info=True)
 
     async def _async_poll_faults(self, _now: object) -> None:
+        self._fault_poll_now_unsub = None  # the one-shot has fired
         seen: set[int] = set()
         for device in self.devices:
-            if device.address is None or device.address in seen:
+            address = device.device_address
+            if address is None or address in seen:
                 continue
-            seen.add(device.address)
+            seen.add(address)
             try:
-                await self._write_vector(protocol.request_notify_events(device.address))
+                await self._write_vector(protocol.request_notify_events(address))
             except Exception:  # noqa: BLE001 - best-effort device-health poll
                 _LOGGER.debug("Plejd fault poll failed", exc_info=True)
                 return
@@ -641,6 +657,9 @@ class PlejdCoordinator:
         if self._faults_unsub is not None:
             self._faults_unsub()
             self._faults_unsub = None
+        if self._fault_poll_now_unsub is not None:
+            self._fault_poll_now_unsub()
+            self._fault_poll_now_unsub = None
         if self._firmware_unsub is not None:
             self._firmware_unsub()
             self._firmware_unsub = None

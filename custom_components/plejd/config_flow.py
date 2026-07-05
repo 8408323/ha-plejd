@@ -142,17 +142,22 @@ class PlejdConfigFlow(ConfigFlow, domain=DOMAIN):
             except PlejdCloudError:
                 errors["base"] = "cannot_connect"
             else:
+                data_updates = {
+                    CONF_CRYPTO_KEY: site.crypto_key.hex(),
+                    CONF_DEVICES: [asdict(d) for d in site.devices],
+                    CONF_INPUTS: [asdict(i) for i in site.inputs],
+                    CONF_MOTION: [asdict(m) for m in site.motion],
+                    CONF_SCENES: [asdict(s) for s in site.scenes],
+                    CONF_GATEWAYS: site.gateways,
+                    CONF_RESOURCE_SET_ID: site.resource_set_id,
+                }
+                # A gateway newly appearing on an entry that predates CONF_INSTALLATION_ID
+                # (or never had one) must seed it now - the gateway transport requires it.
+                if site.gateways and not entry.data.get(CONF_INSTALLATION_ID):
+                    data_updates[CONF_INSTALLATION_ID] = str(uuid4())
                 return self.async_update_reload_and_abort(
                     entry,
-                    data_updates={
-                        CONF_CRYPTO_KEY: site.crypto_key.hex(),
-                        CONF_DEVICES: [asdict(d) for d in site.devices],
-                        CONF_INPUTS: [asdict(i) for i in site.inputs],
-                        CONF_MOTION: [asdict(m) for m in site.motion],
-                        CONF_SCENES: [asdict(s) for s in site.scenes],
-                        CONF_GATEWAYS: site.gateways,
-                        CONF_RESOURCE_SET_ID: site.resource_set_id,
-                    },
+                    data_updates=data_updates,
                     reason="reconfigure_successful",
                 )
         return self.async_show_form(step_id="reconfigure", data_schema=vol.Schema({}), errors=errors)

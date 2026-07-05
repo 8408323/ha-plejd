@@ -40,6 +40,7 @@ _DEV = {
     "traits": 3,
     "room_id": "r1",
     "object_id": None,
+    "device_address": 5,
 }
 
 
@@ -780,7 +781,8 @@ async def test_poll_faults_reads_each_device(monkeypatch):
     ble = types.SimpleNamespace(address="01:02:03:04:05:a0")
     hass = _hass([_info("01:02:03:04:05:a0")], {"01:02:03:04:05:a0": ble})
     c = PlejdCoordinator(hass, _entry(discovered=None))
-    await c.async_start()  # sets up the poll and does an initial fault read
+    await c.async_start()  # sets up the poll (the one-shot itself doesn't fire in this test harness)
+    await c._async_poll_faults(None)
     reads = [decode_command(c._connection.mesh.decrypt(w[1])) for w in client.writes if w[0] == PLEJD_CHAR_DATA_UUID]
     notify = [r for r in reads if r.command == CMD_NOTIFY_EVENTS]
     assert notify and notify[0].command_type == TYPE_READ and notify[0].address == 5
@@ -790,6 +792,28 @@ async def test_poll_faults_best_effort_when_not_connected():
     c = PlejdCoordinator(_hass(), _entry())  # never connected -> _write_vector raises
     await c._async_poll_faults(None)  # swallowed, no exception propagates
     assert c.faults_for(5) == frozenset()
+
+
+def test_schedule_fault_polling_is_idempotent():
+    c = PlejdCoordinator(_hass(), _entry())
+    c._schedule_fault_polling()
+    first_unsub = c._faults_unsub
+    c._schedule_fault_polling()  # e.g. a second async_start - must not reschedule
+    assert c._faults_unsub is first_unsub
+
+
+async def test_poll_faults_skips_devices_without_a_physical_address(monkeypatch):
+    from plejd.cloud import PlejdCloudDevice
+
+    client = _FakeClient()
+    _patch_connect(monkeypatch, client)
+    ble = types.SimpleNamespace(address="01:02:03:04:05:a0")
+    hass = _hass([_info("01:02:03:04:05:a0")], {"01:02:03:04:05:a0": ble})
+    c = PlejdCoordinator(hass, _entry(discovered=None))
+    await c.async_start()
+    # A device with no physical address (e.g. a not-yet-fully-parsed entry) is skipped.
+    c.devices.append(PlejdCloudDevice(**{**_DEV, "device_id": "d2", "device_address": None}))
+    await c._async_poll_faults(None)  # must not raise
 
 
 # --- cloud poll tests ---
@@ -815,7 +839,7 @@ def _cloud_poll_entry():
     )
 
 
-def _fake_site(devices=None):
+def _fake_site(devices=None, gateways=None, resource_set_id=None):
     """A PlejdCloudSite-like object matching _DEV by default (no change)."""
     from plejd.cloud import PlejdCloudSite
 
@@ -829,8 +853,8 @@ def _fake_site(devices=None):
         inputs=[],
         motion=[],
         scenes=[],
-        gateways=[],
-        resource_set_id=None,
+        gateways=gateways or [],
+        resource_set_id=resource_set_id,
     )
 
 
@@ -893,6 +917,37 @@ async def test_cloud_poll_device_added_reloads(monkeypatch):
     await c._async_poll_cloud(None)
     assert reloaded == ["e1"]
     assert len(updated[CONF_DEVICES]) == 2
+
+
+async def test_cloud_poll_seeds_installation_id_for_new_gateway(monkeypatch):
+    async def _login(session, email, password):
+        return "TOKEN"
+
+    async def _get_site(session, token, site_id):
+        return _fake_site(gateways=["gw1"], resource_set_id="rs1")
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _login)
+    monkeypatch.setattr(coordinator_mod, "async_get_site", _get_site)
+
+    entry = _cloud_poll_entry()  # no CONF_INSTALLATION_ID - predates the gateway feature
+    updated = {}
+
+    async def _reload(eid):
+        reloaded.append(eid)
+
+    reloaded = []
+    config_entries = types.SimpleNamespace(
+        async_get_entry=lambda eid: entry,
+        async_update_entry=lambda e, data: updated.update(data),
+        async_reload=_reload,
+    )
+    hass = _hass()
+    hass.session = object()
+    hass.config_entries = config_entries
+    c = PlejdCoordinator(hass, entry)
+    await c._async_poll_cloud(None)
+    assert reloaded == ["e1"]
+    assert updated[CONF_INSTALLATION_ID]  # a fresh id was generated, not left missing
 
 
 async def test_cloud_poll_auth_error_logs_warning(monkeypatch):

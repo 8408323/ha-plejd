@@ -24,7 +24,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     entities: list[BinarySensorEntity] = [PlejdMotionBinarySensor(coordinator, sensor) for sensor in coordinator.motion]
     seen: set[str] = set()
     for device in coordinator.devices:
-        if device.address is not None and device.device_id not in seen:
+        if device.device_address is not None and device.device_id not in seen:
             seen.add(device.device_id)
             entities.append(PlejdProblemBinarySensor(coordinator, device))
     async_add_entities(entities)
@@ -51,15 +51,15 @@ class PlejdProblemBinarySensor(BinarySensorEntity):
 
     @property
     def is_on(self) -> bool:
-        return bool(self._coordinator.faults_for(self._device.address))
+        return bool(self._coordinator.faults_for(self._device.device_address))
 
     @property
     def extra_state_attributes(self) -> dict[str, list[str]]:
-        return {"active_faults": sorted(self._coordinator.faults_for(self._device.address))}
+        return {"active_faults": sorted(self._coordinator.faults_for(self._device.device_address))}
 
     @callback
     def _handle(self, address: int, _faults: frozenset[str]) -> None:
-        if address == self._device.address:
+        if address == self._device.device_address:
             self.async_write_ha_state()
 
     async def async_added_to_hass(self) -> None:

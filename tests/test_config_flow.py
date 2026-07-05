@@ -233,6 +233,19 @@ async def test_reconfigure_fetches_and_updates_entry(monkeypatch):
     assert updates[CONF_GATEWAYS] == ["gw1"]
     assert updates[CONF_RESOURCE_SET_ID] == "rsABC"
     assert updates[CONF_CRYPTO_KEY] == bytes(16).hex()
+    # _stored_entry() predates CONF_INSTALLATION_ID; a gateway showing up must seed one
+    # now, or the gateway transport this reload constructs would KeyError on it.
+    assert updates[CONF_INSTALLATION_ID]
+
+
+async def test_reconfigure_does_not_overwrite_existing_installation_id(monkeypatch):
+    new_site = _site()
+    _patch_cloud(monkeypatch, login="tok", site=new_site)
+    entry = _stored_entry()
+    entry.data[CONF_INSTALLATION_ID] = "already-set"
+    flow = _reconfigure_flow(entry)
+    res = await flow.async_step_reconfigure({})
+    assert CONF_INSTALLATION_ID not in res["data_updates"]  # left untouched, not regenerated
 
 
 async def test_reconfigure_invalid_auth(monkeypatch):

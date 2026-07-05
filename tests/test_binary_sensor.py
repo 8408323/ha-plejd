@@ -9,7 +9,7 @@ from plejd.cloud import PlejdCloudDevice, PlejdCloudMotion
 from plejd.protocol import MotionEvent
 
 
-def _device(device_id="d1", address=5, output_index=0):
+def _device(device_id="d1", address=5, output_index=0, device_address=None):
     return PlejdCloudDevice(
         device_id=device_id,
         name="Lamp",
@@ -22,6 +22,7 @@ def _device(device_id="d1", address=5, output_index=0):
         dimmable=True,
         traits=3,
         room_id="r1",
+        device_address=device_address if device_address is not None else address,
     )
 
 

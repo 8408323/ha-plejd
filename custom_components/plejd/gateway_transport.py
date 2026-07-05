@@ -46,6 +46,7 @@ class PlejdGatewayConnection:
         on_state: Callable[[], None],
         on_disconnect: Callable[[], None] | None = None,
         ws_url: str = gateway.GATEWAY_WS_URL,
+        on_event: Callable[[protocol.Command], None] | None = None,
     ) -> None:
         self._session = session
         self._site_id = site_id
@@ -55,6 +56,9 @@ class PlejdGatewayConnection:
         self._on_state = on_state
         self._on_disconnect = on_disconnect
         self._ws_url = ws_url
+        # Non-output-state pushes (NotifyEvents faults, motion, button presses) - same
+        # decoded Command the BLE path routes through PlejdCoordinator._on_event.
+        self._on_event = on_event
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._state: dict[int, OutputState] = {}
         self._recv_task: asyncio.Task | None = None
@@ -151,6 +155,8 @@ class PlejdGatewayConnection:
         if state is not None:
             self._state[command.address] = state
             self._on_state()
+        if self._on_event is not None:
+            self._on_event(command)
 
     async def _ping_loop(self) -> None:
         # Periodic app-level Ping; if the gateway misses a Pong, close to reconnect.
