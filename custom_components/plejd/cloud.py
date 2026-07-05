@@ -9,7 +9,7 @@ capture (#2). See docs/protocol.md.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from aiohttp import ClientSession
 
@@ -19,8 +19,10 @@ from .const import (
     DEFAULT_CATEGORY,
     HARDWARE_TYPES,
     HARDWARE_WMS_01,
+    PLEJD_FN_FIRMWARE_BY_HW,
     PLEJD_FN_SITE_BY_ID,
     PLEJD_FN_SITE_LIST,
+    PLEJD_FN_UPDATE_DEVICE,
     PLEJD_PARSE_APP_ID,
     PLEJD_PARSE_LOGIN,
     PLEJD_PARSE_URL,
@@ -59,6 +61,17 @@ class PlejdCloudDevice:
     dimmable: bool
     traits: int
     room_id: str | None
+    object_id: str | None = None  # the output's Parse objectId (deviceParseId), needed to rename it
+
+
+@dataclass
+class PlejdDeviceFirmware:
+    """The installed firmware of one physical device, keyed for an update lookup."""
+
+    version: str | None  # e.g. "6.43.3"
+    build_time: int | None  # e.g. 20260324155701; monotonic, used to compare builds
+    hardware_id: int
+    faceplate_id: str | None
 
 
 @dataclass
@@ -101,6 +114,8 @@ class PlejdCloudSite:
     scenes: list[PlejdCloudScene]
     gateways: list[str]  # gateway (GWY-01) device ids; empty if none
     resource_set_id: str | None  # for the remote-control WebSocket (Resource-Set-ID)
+    # every physical device's installed firmware (outputs, sensors, gateway)
+    firmware_by_device: dict[str, PlejdDeviceFirmware] = field(default_factory=dict)
 
 
 def _headers(token: str | None = None) -> dict[str, str]:
@@ -136,6 +151,46 @@ async def async_get_sites(session: ClientSession, token: str) -> list[dict]:
     """List the user's sites (each with a `siteId` and `title`)."""
     result = await _call_function(session, token, PLEJD_FN_SITE_LIST, {})
     return result if isinstance(result, list) else []
+
+
+def _as_build_time(value: object) -> int | None:
+    """A firmware buildTime (e.g. 20260324155701) as int, or None if absent/garbage."""
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+async def async_get_available_firmware(
+    session: ClientSession, token: str, hardware_id: int, faceplate_id: str | None
+) -> tuple[str, int] | None:
+    """Latest published firmware (version, buildTime) for a hardware/faceplate, or None when up to date."""
+    body: dict[str, str] = {"hardwareId": str(hardware_id)}
+    if faceplate_id is not None:
+        body["faceplateId"] = faceplate_id
+    result = await _call_function(session, token, PLEJD_FN_FIRMWARE_BY_HW, body)
+    best: tuple[str, int] | None = None
+    for item in result if isinstance(result, list) else []:
+        if not isinstance(item, dict):
+            continue
+        version = item.get("version")
+        build_time = _as_build_time(item.get("buildTime"))
+        if not isinstance(version, str) or build_time is None:
+            continue
+        if best is None or build_time > best[1]:
+            best = (version, build_time)
+    return best
+
+
+async def async_set_device_title(
+    session: ClientSession, token: str, site_id: str, device_id: str, device_parse_id: str, title: str
+) -> bool:
+    """Rename a device in the Plejd cloud (mirrors to the Plejd app). Returns the cloud's ok flag."""
+    body = {"siteId": site_id, "deviceId": device_id, "deviceParseId": device_parse_id, "title": title}
+    result = await _call_function(session, token, PLEJD_FN_UPDATE_DEVICE, body)
+    return result is True
 
 
 async def async_get_site(session: ClientSession, token: str, site_id: str) -> PlejdCloudSite:
@@ -197,6 +252,7 @@ def parse_site(site: dict) -> PlejdCloudSite:
                 dimmable=dimmable,
                 traits=traits,
                 room_id=info.get("roomId"),
+                object_id=info.get("objectId"),
             )
         )
 
@@ -221,6 +277,24 @@ def parse_site(site: dict) -> PlejdCloudSite:
             addr = device_address.get(device_id)
             if addr is not None:
                 motion.append(PlejdCloudMotion(device_id=device_id, name="Motion sensor", address=int(addr)))
+
+    # Installed firmware for every physical device (outputs, sensors, gateway alike),
+    # so the update platform can cover them all — not just controllable outputs.
+    # Gateways live in gateways[], not plejdDevices, and carry the firmware dict under
+    # `firmwareObject` (their `firmware` is a bare buildTime int), so prefer that.
+    firmware_by_device: dict[str, PlejdDeviceFirmware] = {}
+    for phys in (site.get("plejdDevices") or []) + (site.get("gateways") or []):
+        device_id = phys.get("deviceId")
+        if device_id is None:
+            continue
+        firmware = next((v for v in (phys.get("firmwareObject"), phys.get("firmware")) if isinstance(v, dict)), {})
+        faceplate = phys.get("faceplateId")
+        firmware_by_device[device_id] = PlejdDeviceFirmware(
+            version=firmware.get("version") if isinstance(firmware.get("version"), str) else None,
+            build_time=_as_build_time(firmware.get("buildTime")),
+            hardware_id=int(phys.get("hardwareId") or 0),
+            faceplate_id=str(faceplate) if faceplate is not None else None,
+        )
 
     scene_index = site.get("sceneIndex") or {}
     scenes = [
@@ -251,4 +325,5 @@ def parse_site(site: dict) -> PlejdCloudSite:
         scenes=scenes,
         gateways=gateways,
         resource_set_id=resource_set_id,
+        firmware_by_device=firmware_by_device,
     )

@@ -20,6 +20,7 @@ CONF_SCENES = "scenes"  # cached scene list
 CONF_INPUTS = "inputs"  # cached button-input list
 CONF_MOTION = "motion"  # cached motion-sensor list
 HARDWARE_WMS_01 = 70  # motion sensor
+HARDWARE_GWY_01 = 4  # gateway
 CONF_GATEWAYS = "gateways"  # gateway (GWY-01) device ids; remote control is available when non-empty
 CONF_RESOURCE_SET_ID = "resource_set_id"  # Resource-Set-ID for the remote-control WebSocket
 CONF_INSTALLATION_ID = "installation_id"  # stable client GUID (Client-ID header)
@@ -70,6 +71,7 @@ CMD_OUTPUT_MAX_LEVEL = 0x00CA
 CMD_OUTPUT_SPEED = 0x00CB  # set/report dim transition time (output, u16le steps + >0.5s flag)
 CMD_OUTPUT_CURVE_TYPE = 0x00CC  # set/report dimming curve (output, LoadCurve byte)
 CMD_OUTPUT_PHASE_DIM_TYPE = 0x00CE  # set/report phase-dim edge (output, PhaseOutputType byte)
+CMD_OUTPUT_START_LEVEL = 0x00CF  # set/report dim start level (output, u16le of fraction*65535)
 
 # Dimming-curve options (LoadCurve enum subset that applies to dimmable outputs).
 CURVE_OPTIONS: dict[str, int] = {"linear": 0, "logarithmic": 1, "antilogarithmic": 3}
@@ -133,6 +135,8 @@ PLEJD_PARSE_APP_ID = "zHtVqXt8k4yFyk2QGmgp48D9xZr2G94xWYnF4dak"
 PLEJD_PARSE_LOGIN = "login"  # POST {username, password} -> {sessionToken}
 PLEJD_FN_SITE_LIST = "functions/getSiteList"  # -> [{siteId, ...}]
 PLEJD_FN_SITE_BY_ID = "functions/getSiteById"  # {siteId} -> site w/ cryptoKey + devices
+PLEJD_FN_FIRMWARE_BY_HW = "functions/getFirmwaresByHardwareId"  # {hardwareId, faceplateId} -> [] when up to date
+PLEJD_FN_UPDATE_DEVICE = "functions/updateDevice_V2"  # {siteId, deviceId, deviceParseId, title} -> rename in the app
 
 # ── Device types (Plejd.Shared HardwareType enum: id -> product name) ──
 HARDWARE_TYPES: dict[int, str] = {

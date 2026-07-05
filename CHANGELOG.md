@@ -8,6 +8,7 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 - **Device health sensors.** A per-device *Fault* binary_sensor (diagnostic, `problem` class) surfaces the device's `NotifyEvents` flags (overcurrent, overtemperature, overload, …); polled every 10 min, replies on LastChanged. Validated against healthy hardware (clean bitfield → no fault).
+- **Dimmer start level.** A per-output *Start brightness* number — the level a dimmer jumps to when first switched on (`SetOutputStartLevel`, opcode `0x00CF`; same level encoding as min/max).
 - **Dimmer transition time.** A per-output *Transition time* config number (seconds)
   controls how fast a dimmer fades (`SetOutputSpeed`, opcode `0x00CB`). Validated on
   real hardware (an 8-second fade-in was observed). Joins the existing min/max
@@ -19,6 +20,15 @@ All notable changes to this project are documented here. The format follows
   push-based on both paths — the gateway pushes via `mesh.out`, Bluetooth via
   LastChanged broadcasts. Validated end-to-end on real hardware (command relayed
   through the cloud, state pushed back).
+
+### Fixed
+- **Reconnect loop could die silently and never recover.** The background
+  reconnect task only caught `ConfigEntryNotReady`; any other failure (e.g. a
+  cloud auth rejection while trying the gateway) escaped uncaught, killing the
+  loop permanently with no retry and no reauth prompt — every light stayed
+  `unavailable` until Home Assistant itself was restarted. Auth failures now
+  start reauth and stop; every other failure is retried with backoff instead of
+  silently ending the loop.
 
 ## [0.5.0] - 2026-05-31
 

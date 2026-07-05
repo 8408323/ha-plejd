@@ -45,6 +45,9 @@
       "max_dim_level": {
         "name": "Maximum brightness"
       },
+      "start_level": {
+        "name": "Start brightness"
+      },
       "transition_time": {
         "name": "Transition time"
       }
@@ -84,6 +87,11 @@
     "binary_sensor": {
       "device_fault": {
         "name": "Fault"
+      }
+    },
+    "update": {
+      "firmware": {
+        "name": "Firmware"
       }
     }
   },

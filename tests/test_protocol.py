@@ -186,6 +186,15 @@ def test_dim_level_setting_bytes():
     assert zero[5:] == bytes([0x00, 0x00, 0x00])
 
 
+def test_set_output_start_level_bytes():
+    from plejd.const import CMD_OUTPUT_START_LEVEL
+    from plejd.protocol import set_output_start_level
+
+    start = set_output_start_level(9, 1, 0.5)  # 0.5*65535 = 32768 = 0x8000 le
+    assert (start[3] << 8) | start[4] == CMD_OUTPUT_START_LEVEL
+    assert start[5:] == bytes([0x01, 0x00, 0x80])
+
+
 def test_set_output_speed_bytes():
     from plejd.const import CMD_OUTPUT_SPEED
     from plejd.protocol import set_output_speed

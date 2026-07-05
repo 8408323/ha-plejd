@@ -39,6 +39,7 @@ _DEV = {
     "dimmable": True,
     "traits": 3,
     "room_id": "r1",
+    "object_id": None,
 }
 
 
@@ -361,6 +362,44 @@ async def test_reconnect_backs_off_on_failure(monkeypatch):
     assert calls["n"] == 2  # retried after the first failure, then gave up on close
 
 
+async def test_reconnect_stops_and_starts_reauth_on_auth_failure(monkeypatch):
+    from homeassistant.exceptions import ConfigEntryAuthFailed
+
+    c = PlejdCoordinator(_hass(), _entry())
+    started = []
+    c._entry = types.SimpleNamespace(async_start_reauth=lambda h: started.append(h))
+
+    async def _fake_sleep(_delay):
+        pass
+
+    async def _auth_fail():
+        raise ConfigEntryAuthFailed("credentials rejected")
+
+    monkeypatch.setattr(coordinator_mod.asyncio, "sleep", _fake_sleep)
+    monkeypatch.setattr(c, "_async_select_and_connect", _auth_fail)
+    await c._async_reconnect()
+    assert started == [c.hass]  # reauth started, loop didn't retry forever
+    assert c._reconnecting is False
+
+
+async def test_reconnect_retries_on_unexpected_exception(monkeypatch):
+    c = PlejdCoordinator(_hass(), _entry())
+    calls = {"n": 0}
+
+    async def _fake_sleep(_delay):
+        pass
+
+    async def _flaky():
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(coordinator_mod.asyncio, "sleep", _fake_sleep)
+    monkeypatch.setattr(c, "_async_select_and_connect", _flaky)
+    await c._async_reconnect()
+    assert calls["n"] == 3  # two unexpected failures were retried, not fatal
+
+
 async def test_shutdown_cancels_reconnect_task(monkeypatch):
     client = _FakeClient()
     _patch_connect(monkeypatch, client)
@@ -597,7 +636,12 @@ async def test_cover_commands(monkeypatch):
 
 
 async def test_dim_level_settings(monkeypatch):
-    from plejd.const import CMD_OUTPUT_MAX_LEVEL, CMD_OUTPUT_MIN_LEVEL, CMD_OUTPUT_SPEED
+    from plejd.const import (
+        CMD_OUTPUT_MAX_LEVEL,
+        CMD_OUTPUT_MIN_LEVEL,
+        CMD_OUTPUT_SPEED,
+        CMD_OUTPUT_START_LEVEL,
+    )
     from plejd.protocol import decode_command
 
     client = _FakeClient()
@@ -615,6 +659,9 @@ async def test_dim_level_settings(monkeypatch):
     await c.async_set_output_speed(9, 1, 1.0)
     speed = decode_command(c._connection.mesh.decrypt(client.writes[-1][1]))
     assert speed.command == CMD_OUTPUT_SPEED and speed.data == bytes([1, 0x8F, 0x82])
+    await c.async_set_output_start_level(9, 1, 0.5)
+    start = decode_command(c._connection.mesh.decrypt(client.writes[-1][1]))
+    assert start.command == CMD_OUTPUT_START_LEVEL and start.data == bytes([1, 0x00, 0x80])
 
 
 def _expected_clock_bytes():
@@ -903,3 +950,397 @@ async def test_cloud_poll_cloud_error_skips_reload(monkeypatch):
     c = PlejdCoordinator(hass, entry)
     await c._async_poll_cloud(None)  # must not raise
     assert not reloaded
+
+
+def _fw_site(firmware_by_device):
+    from plejd.cloud import PlejdDeviceFirmware
+
+    fw = {
+        device_id: PlejdDeviceFirmware(version=v, build_time=bt, hardware_id=hw, faceplate_id=face)
+        for device_id, (v, bt, hw, face) in firmware_by_device.items()
+    }
+    return types.SimpleNamespace(firmware_by_device=fw)
+
+
+def _cloud_entry():
+    return types.SimpleNamespace(
+        entry_id="e1",
+        data={
+            CONF_CRYPTO_KEY: _KEY_HEX,
+            CONF_DEVICES: [_DEV],
+            CONF_DISCOVERED_ADDRESS: None,
+            CONF_SITE_ID: "S1",
+            CONF_EMAIL: "u@x.se",
+            CONF_PASSWORD: "pw",
+        },
+    )
+
+
+async def test_refresh_firmware_populates_status(monkeypatch):
+    c = PlejdCoordinator(_hass(), _cloud_entry())
+    site = _fw_site({"d1": ("6.40.0", 20251201000000, 1, "0")})
+
+    async def _login(*a):
+        return "tok"
+
+    async def _get_site(*a):
+        return site
+
+    async def _latest(session, token, hw, face):
+        return ("6.43.3", 20260324155701)
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _login)
+    monkeypatch.setattr(coordinator_mod, "async_get_site", _get_site)
+    monkeypatch.setattr(coordinator_mod, "async_get_available_firmware", _latest)
+
+    await c.async_refresh_firmware()
+    status = c.firmware["d1"]
+    assert status.installed_version == "6.40.0" and status.installed_build_time == 20251201000000
+    assert status.latest_version == "6.43.3" and status.update_available is True
+
+
+async def test_refresh_firmware_caches_lookups_per_hardware(monkeypatch):
+    c = PlejdCoordinator(_hass(), _cloud_entry())
+    # two devices sharing one (hardware, faceplate) + a motion sensor on different hardware
+    site = _fw_site(
+        {
+            "d1": ("6.40.0", 20251201000000, 1, "0"),
+            "d2": ("6.40.0", 20251201000000, 1, "0"),
+            "w1": ("4.41.3", 20240910153670, 70, None),
+        }
+    )
+    calls = []
+
+    async def _login(*a):
+        return "tok"
+
+    async def _get_site(*a):
+        return site
+
+    async def _latest(session, token, hw, face):
+        calls.append((hw, face))
+        return None  # up to date
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _login)
+    monkeypatch.setattr(coordinator_mod, "async_get_site", _get_site)
+    monkeypatch.setattr(coordinator_mod, "async_get_available_firmware", _latest)
+
+    await c.async_refresh_firmware()
+    assert sorted(calls) == [(1, "0"), (70, None)]  # one lookup per distinct (hardware, faceplate)
+    assert set(c.firmware) == {"d1", "d2", "w1"}  # sensors covered, not just outputs
+    assert c.firmware["w1"].update_available is False and c.firmware["w1"].latest_version is None
+
+
+async def test_refresh_firmware_tolerates_one_failed_lookup(monkeypatch):
+    c = PlejdCoordinator(_hass(), _cloud_entry())
+    site = _fw_site(
+        {
+            "d1": ("6.40.0", 20251201000000, 1, "0"),  # this hardware's lookup will raise
+            "w1": ("4.41.3", 20240910153670, 70, None),  # this one succeeds
+        }
+    )
+
+    async def _login(*a):
+        return "tok"
+
+    async def _get_site(*a):
+        return site
+
+    async def _latest(session, token, hw, face):
+        if hw == 1:
+            raise coordinator_mod.PlejdAuthError("boom")  # one flaky combo
+        return ("4.42.0", 20260101000000)
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _login)
+    monkeypatch.setattr(coordinator_mod, "async_get_site", _get_site)
+    monkeypatch.setattr(coordinator_mod, "async_get_available_firmware", _latest)
+
+    await c.async_refresh_firmware()
+    # the whole refresh survives: every device still gets a status
+    assert set(c.firmware) == {"d1", "w1"}
+    assert c.firmware["d1"].latest_version is None  # failed lookup -> treated as up to date
+    assert c.firmware["w1"].update_available is True  # the successful one still resolves
+
+
+async def test_refresh_firmware_no_credentials_is_noop(monkeypatch):
+    c = PlejdCoordinator(_hass(), _entry())  # no CONF_EMAIL / CONF_PASSWORD
+
+    async def _boom(*a):
+        raise AssertionError("must not log in without credentials")
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _boom)
+    await c.async_refresh_firmware()
+    assert c.firmware == {}
+
+
+async def test_firmware_check_swallows_errors(monkeypatch):
+    c = PlejdCoordinator(_hass(), _cloud_entry())
+
+    async def _boom(*a):
+        raise RuntimeError("cloud down")
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _boom)
+    await c._async_firmware_check(None)  # best-effort: no exception
+    assert c.firmware == {}
+
+
+def test_schedule_firmware_checks_registers_timers_once():
+    c = PlejdCoordinator(_hass(), _cloud_entry())
+    c._schedule_firmware_checks()
+    daily, one_shot = c._firmware_unsub, c._firmware_now_unsub
+    assert daily is not None and one_shot is not None
+    c._schedule_firmware_checks()  # a second start must not re-register
+    assert c._firmware_unsub is daily and c._firmware_now_unsub is one_shot
+
+
+async def test_one_shot_handle_cleared_after_firing(monkeypatch):
+    c = PlejdCoordinator(_hass(), _cloud_entry())
+    c._firmware_now_unsub = lambda: None
+
+    async def _noop(*a):
+        return None
+
+    monkeypatch.setattr(c, "async_refresh_firmware", _noop)
+    await c._async_firmware_check(None)
+    assert c._firmware_now_unsub is None  # cleared once the one-shot fires
+
+
+async def test_shutdown_cancels_both_firmware_timers():
+    c = PlejdCoordinator(_hass(), _cloud_entry())
+    cancelled = []
+    c._firmware_unsub = lambda: cancelled.append("daily")
+    c._firmware_now_unsub = lambda: cancelled.append("one_shot")
+    await c.async_shutdown()
+    assert sorted(cancelled) == ["daily", "one_shot"]
+    assert c._firmware_unsub is None and c._firmware_now_unsub is None
+
+
+class _FakeDevice:
+    def __init__(self, identifiers, name_by_user):
+        self.identifiers = identifiers
+        self.name_by_user = name_by_user
+
+
+class _FakeRegistry:
+    def __init__(self, device):
+        self._device = device
+
+    def async_get(self, device_id):
+        return self._device
+
+
+def _reg_event(action="update", changes=None, device_id="ha1"):
+    return types.SimpleNamespace(
+        data={"action": action, "changes": changes if changes is not None else {}, "device_id": device_id}
+    )
+
+
+def test_output_parse_id_picks_lowest_output_index():
+    from plejd.cloud import PlejdCloudDevice
+    from plejd.coordinator import PlejdCoordinator
+
+    def _dev(output_index, object_id):
+        return PlejdCloudDevice(
+            device_id="d1",
+            name="Dev",
+            address=1,
+            output_index=output_index,
+            outputs=[1],
+            hardware_id=1,
+            model="DIM-02",
+            category="light",
+            dimmable=True,
+            traits=0,
+            room_id=None,
+            object_id=object_id,
+        )
+
+    # output_index=1 comes first in the list but output_index=0 is the primary
+    devices = [_dev(1, "parse-id-1"), _dev(0, "parse-id-0")]
+    assert PlejdCoordinator._output_parse_id(devices, "d1") == "parse-id-0"
+
+
+async def test_rename_device_calls_cloud(monkeypatch):
+    c = PlejdCoordinator(_hass(), _cloud_entry())
+    c.devices[0].object_id = "p1"  # device_id "d1"
+    captured = {}
+
+    async def _login(*a):
+        return "tok"
+
+    async def _set(session, token, site_id, device_id, parse_id, title):
+        captured.update(site_id=site_id, device_id=device_id, parse_id=parse_id, title=title)
+        return True
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _login)
+    monkeypatch.setattr(coordinator_mod, "async_set_device_title", _set)
+    await c.async_rename_device("d1", "New Name")
+    assert captured == {"site_id": "S1", "device_id": "d1", "parse_id": "p1", "title": "New Name"}
+
+
+async def test_rename_device_falls_back_to_cloud_lookup(monkeypatch):
+    # entries cached before object_id existed (e.g. _DEV) resolve it from a fresh site fetch
+    from plejd.cloud import PlejdCloudDevice
+
+    c = PlejdCoordinator(_hass(), _cloud_entry())  # _DEV has no object_id
+    fresh = PlejdCloudDevice(
+        device_id="d1",
+        name="Kitchen",
+        address=5,
+        output_index=0,
+        outputs=[5],
+        hardware_id=1,
+        model="DIM-01",
+        category="light",
+        dimmable=True,
+        traits=3,
+        room_id="r1",
+        object_id="p2",
+    )
+    captured = {}
+
+    async def _login(*a):
+        return "tok"
+
+    async def _get_site(*a):
+        return types.SimpleNamespace(devices=[fresh])
+
+    async def _set(session, token, site_id, device_id, parse_id, title):
+        captured.update(parse_id=parse_id, title=title)
+        return True
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _login)
+    monkeypatch.setattr(coordinator_mod, "async_get_site", _get_site)
+    monkeypatch.setattr(coordinator_mod, "async_set_device_title", _set)
+    await c.async_rename_device("d1", "X")
+    assert captured == {"parse_id": "p2", "title": "X"}
+
+
+async def test_rename_device_skips_when_not_resolvable(monkeypatch):
+    c = PlejdCoordinator(_hass(), _cloud_entry())  # _DEV has no object_id
+
+    async def _login(*a):
+        return "tok"
+
+    async def _get_site(*a):
+        return types.SimpleNamespace(devices=[])  # device not found in the cloud either
+
+    async def _fail(*a):
+        raise AssertionError("must not call updateDevice when no Parse id is resolvable")
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _login)
+    monkeypatch.setattr(coordinator_mod, "async_get_site", _get_site)
+    monkeypatch.setattr(coordinator_mod, "async_set_device_title", _fail)
+    await c.async_rename_device("d1", "X")  # resolves to nothing -> skip, no write
+
+
+async def test_rename_device_skips_without_credentials(monkeypatch):
+    c = PlejdCoordinator(_hass(), _entry())  # no CONF_EMAIL / CONF_PASSWORD
+
+    async def _boom(*a):
+        raise AssertionError("must not log in without credentials")
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _boom)
+    await c.async_rename_device("d1", "X")
+
+
+async def test_rename_device_raises_when_cloud_rejects(monkeypatch):
+    from homeassistant.exceptions import HomeAssistantError
+
+    c = PlejdCoordinator(_hass(), _cloud_entry())
+    c.devices[0].object_id = "p1"
+
+    async def _login(*a):
+        return "tok"
+
+    async def _set(*a):
+        return False
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _login)
+    monkeypatch.setattr(coordinator_mod, "async_set_device_title", _set)
+    with pytest.raises(HomeAssistantError):
+        await c.async_rename_device("d1", "X")
+
+
+async def test_registry_update_mirrors_rename(monkeypatch):
+    from plejd.const import DOMAIN
+
+    hass = _hass()
+    c = PlejdCoordinator(hass, _cloud_entry())
+    hass.device_registry = _FakeRegistry(_FakeDevice({(DOMAIN, "F1AF")}, "New Name"))
+    called = {}
+
+    async def _rename(device_id, title):
+        called.update(device_id=device_id, title=title)
+
+    monkeypatch.setattr(c, "async_rename_device", _rename)
+    await c.async_handle_device_registry_update(_reg_event(changes={"name_by_user": "Old"}))
+    assert called == {"device_id": "F1AF", "title": "New Name"}
+
+
+async def test_registry_update_ignores_non_rename_events(monkeypatch):
+    c = PlejdCoordinator(_hass(), _cloud_entry())
+
+    async def _fail(*a):
+        raise AssertionError("rename must not be triggered")
+
+    monkeypatch.setattr(c, "async_rename_device", _fail)
+    await c.async_handle_device_registry_update(_reg_event(action="create", changes={"name_by_user": "x"}))
+    await c.async_handle_device_registry_update(_reg_event(action="update", changes={"area_id": None}))
+
+
+async def test_registry_update_ignores_missing_device_and_non_plejd(monkeypatch):
+    from plejd.const import DOMAIN
+
+    hass = _hass()
+    c = PlejdCoordinator(hass, _cloud_entry())
+
+    async def _fail(*a):
+        raise AssertionError("rename must not be triggered")
+
+    monkeypatch.setattr(c, "async_rename_device", _fail)
+    hass.device_registry = _FakeRegistry(None)  # device gone
+    await c.async_handle_device_registry_update(_reg_event(changes={"name_by_user": "x"}))
+    hass.device_registry = _FakeRegistry(_FakeDevice({("other", "z")}, "Name"))  # not a Plejd device
+    await c.async_handle_device_registry_update(_reg_event(changes={"name_by_user": "x"}))
+    hass.device_registry = _FakeRegistry(_FakeDevice({(DOMAIN, "d1")}, None))  # name cleared
+    await c.async_handle_device_registry_update(_reg_event(changes={"name_by_user": "x"}))
+    # no registry set yet (early startup)
+    del hass.device_registry
+    await c.async_handle_device_registry_update(_reg_event(changes={"name_by_user": "x"}))
+    # device_id missing from event data
+    hass.device_registry = _FakeRegistry(None)
+    await c.async_handle_device_registry_update(
+        types.SimpleNamespace(data={"action": "update", "changes": {"name_by_user": "x"}})
+    )
+
+
+async def test_registry_update_swallows_rename_errors(monkeypatch):
+    from plejd.const import DOMAIN
+
+    hass = _hass()
+    c = PlejdCoordinator(hass, _cloud_entry())
+    hass.device_registry = _FakeRegistry(_FakeDevice({(DOMAIN, "d1")}, "Name"))
+
+    async def _boom(*a):
+        raise RuntimeError("cloud down")
+
+    monkeypatch.setattr(c, "async_rename_device", _boom)
+    await c.async_handle_device_registry_update(_reg_event(changes={"name_by_user": "x"}))  # no exception
+
+
+async def test_registry_update_triggers_reauth_on_auth_error(monkeypatch):
+    from plejd.const import DOMAIN
+
+    hass = _hass()
+    c = PlejdCoordinator(hass, _cloud_entry())
+    started = []
+    c._entry = types.SimpleNamespace(async_start_reauth=lambda h: started.append(h))
+    hass.device_registry = _FakeRegistry(_FakeDevice({(DOMAIN, "d1")}, "New"))
+
+    async def _auth_fail(*a):
+        raise coordinator_mod.PlejdAuthError("bad creds")
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _auth_fail)
+    await c.async_handle_device_registry_update(_reg_event(changes={"name_by_user": "x"}))
+    assert started == [hass]  # reauth flow prompted instead of silently swallowed
