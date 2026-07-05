@@ -324,17 +324,17 @@ async def test_settings_short_reply_ignored_for_all_commands(monkeypatch):
     await c.async_start()
 
     # 1-byte payload → decode_output_level_reply returns None → max-level guard line
-    c._on_event(Command(5, 0x02, CMD_OUTPUT_MAX_LEVEL, bytes([0x01])))
+    c._on_event(Command(5, 0x03, CMD_OUTPUT_MAX_LEVEL, bytes([0x01])))
     # 1-byte payload → decode_output_speed_reply returns None → speed guard line
-    c._on_event(Command(5, 0x02, CMD_OUTPUT_SPEED, bytes([0x01])))
+    c._on_event(Command(5, 0x03, CMD_OUTPUT_SPEED, bytes([0x01])))
     # 0-byte payload → decode_output_curve_reply returns None → curve guard line
-    c._on_event(Command(5, 0x02, CMD_OUTPUT_CURVE_TYPE, b""))
+    c._on_event(Command(5, 0x03, CMD_OUTPUT_CURVE_TYPE, b""))
     # 0-byte payload → decode_output_phase_dim_reply returns None → phase guard line
-    c._on_event(Command(5, 0x02, CMD_OUTPUT_PHASE_DIM_TYPE, b""))
+    c._on_event(Command(5, 0x03, CMD_OUTPUT_PHASE_DIM_TYPE, b""))
     # 0-byte payload → decode_output_boot_state_reply returns None → boot-state guard line
-    c._on_event(Command(5, 0x02, CMD_OUTPUT_BOOT_STATE, b""))
+    c._on_event(Command(5, 0x03, CMD_OUTPUT_BOOT_STATE, b""))
     # 1-byte payload → decode_output_relay_off_time_reply returns None → relay-off-time guard
-    c._on_event(Command(5, 0x02, CMD_OUTPUT_RELAY_OFF_TIME, bytes([0x01])))
+    c._on_event(Command(5, 0x03, CMD_OUTPUT_RELAY_OFF_TIME, bytes([0x01])))
 
     # None of the short replies should be stored
     assert c.settings_for(5) is None
@@ -850,7 +850,7 @@ async def test_local_write_cache_survives_unrelated_ble_notification(monkeypatch
     await c.async_set_output_max_level(9, 1, 0.5)
     assert c.settings_for(9).max_level == 50.0
     # An unrelated settings read-back arrives for the same address (e.g. min level).
-    c._on_event(Command(9, 0x02, CMD_OUTPUT_MIN_LEVEL, bytes([0x00, 0x00])))
+    c._on_event(Command(9, 0x03, CMD_OUTPUT_MIN_LEVEL, bytes([0x00, 0x00])))
     assert c.settings_for(9).max_level == 50.0  # untouched by the unrelated reply
 
 
@@ -901,8 +901,9 @@ async def test_settings_stored_on_event_and_listener_notified(monkeypatch):
     await c.async_start()
     seen = []
     c.async_add_listener(lambda: seen.append(1))
-    # Simulate a min-level reply for address 5: [0xFF, 0xFF] = 100%
-    c._on_event(Command(address=5, command_type=0x02, command=CMD_OUTPUT_MIN_LEVEL, data=bytes([0xFF, 0xFF])))
+    # Simulate a min-level reply for address 5: [0xFF, 0xFF] = 100%.
+    # command_type=0x03 (TYPE_READ|TYPE_ACK) — replies carry the Ack bit set (docs/protocol.md).
+    c._on_event(Command(address=5, command_type=0x03, command=CMD_OUTPUT_MIN_LEVEL, data=bytes([0xFF, 0xFF])))
     assert c.settings_for(5) is not None
     assert c.settings_for(5).min_level == 100.0
     assert seen == [1]
@@ -949,23 +950,23 @@ async def test_settings_all_commands_stored(monkeypatch):
     await c.async_start()
 
     # min: 50% = 0x7FFF
-    c._on_event(Command(5, 0x02, CMD_OUTPUT_MIN_LEVEL, bytes([0xFF, 0x7F])))
+    c._on_event(Command(5, 0x03, CMD_OUTPUT_MIN_LEVEL, bytes([0xFF, 0x7F])))
     # max: 100%
-    c._on_event(Command(5, 0x02, CMD_OUTPUT_MAX_LEVEL, bytes([0xFF, 0xFF])))
+    c._on_event(Command(5, 0x03, CMD_OUTPUT_MAX_LEVEL, bytes([0xFF, 0xFF])))
     # speed: instant
-    c._on_event(Command(5, 0x02, CMD_OUTPUT_SPEED, bytes([0xFF, 0xFF])))
+    c._on_event(Command(5, 0x03, CMD_OUTPUT_SPEED, bytes([0xFF, 0xFF])))
     # curve: logarithmic (1)
-    c._on_event(Command(5, 0x02, CMD_OUTPUT_CURVE_TYPE, bytes([1])))
+    c._on_event(Command(5, 0x03, CMD_OUTPUT_CURVE_TYPE, bytes([1])))
     # phase: leading_edge (1)
-    c._on_event(Command(5, 0x02, CMD_OUTPUT_PHASE_DIM_TYPE, bytes([1])))
+    c._on_event(Command(5, 0x03, CMD_OUTPUT_PHASE_DIM_TYPE, bytes([1])))
     # boot state: use_last (1-byte reply)
-    c._on_event(Command(5, 0x02, CMD_OUTPUT_BOOT_STATE, bytes([0x00])))
+    c._on_event(Command(5, 0x03, CMD_OUTPUT_BOOT_STATE, bytes([0x00])))
     # relay off time: 2s = 200 centiseconds = [0xC8, 0x00]
-    c._on_event(Command(5, 0x02, CMD_OUTPUT_RELAY_OFF_TIME, bytes([0xC8, 0x00])))
+    c._on_event(Command(5, 0x03, CMD_OUTPUT_RELAY_OFF_TIME, bytes([0xC8, 0x00])))
     # relay pole config: one_pole (wire byte 1)
-    c._on_event(Command(5, 0x02, CMD_OUTPUT_RELAY_CONFIG, bytes([1])))
+    c._on_event(Command(5, 0x03, CMD_OUTPUT_RELAY_CONFIG, bytes([1])))
     # inrush current: 500ms = 50 centiseconds
-    c._on_event(Command(5, 0x02, CMD_OUTPUT_INRUSH_CURRENT, bytes([50, 0])))
+    c._on_event(Command(5, 0x03, CMD_OUTPUT_INRUSH_CURRENT, bytes([50, 0])))
 
     s = c.settings_for(5)
     assert s.max_level == 100.0
@@ -989,7 +990,7 @@ async def test_settings_short_reply_ignored(monkeypatch):
     hass = _hass([_info("01:02:03:04:05:a0")], {"01:02:03:04:05:a0": ble})
     c = PlejdCoordinator(hass, _entry(discovered=None))
     await c.async_start()
-    c._on_event(Command(5, 0x02, CMD_OUTPUT_MIN_LEVEL, bytes([0x01])))  # only 1 byte, too short
+    c._on_event(Command(5, 0x03, CMD_OUTPUT_MIN_LEVEL, bytes([0x01])))  # only 1 byte, too short
     assert c.settings_for(5) is None  # not stored
 
 
@@ -1127,7 +1128,7 @@ async def test_relay_config_short_reply_ignored(monkeypatch):
     hass = _hass([_info("01:02:03:04:05:a0")], {"01:02:03:04:05:a0": ble})
     c = PlejdCoordinator(hass, _entry(discovered=None))
     await c.async_start()
-    c._on_event(Command(5, 0x02, CMD_OUTPUT_RELAY_CONFIG, b""))
+    c._on_event(Command(5, 0x03, CMD_OUTPUT_RELAY_CONFIG, b""))
     assert c.settings_for(5) is None
 
 
@@ -1142,7 +1143,7 @@ async def test_inrush_current_short_reply_ignored(monkeypatch):
     hass = _hass([_info("01:02:03:04:05:a0")], {"01:02:03:04:05:a0": ble})
     c = PlejdCoordinator(hass, _entry(discovered=None))
     await c.async_start()
-    c._on_event(Command(5, 0x02, CMD_OUTPUT_INRUSH_CURRENT, bytes([50])))  # only 1 byte
+    c._on_event(Command(5, 0x03, CMD_OUTPUT_INRUSH_CURRENT, bytes([50])))  # only 1 byte
     assert c.settings_for(5) is None
 
 

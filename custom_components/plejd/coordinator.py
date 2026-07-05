@@ -290,10 +290,11 @@ class PlejdCoordinator:
             if event is not None:
                 for motion_cb in list(self._motion_listeners):
                     motion_cb(event)
-        elif command.command in _SETTINGS_CMDS and command.command_type == protocol.TYPE_READ:
-            # Our own writes use TYPE_DONT_RESPOND and echo back on the same feed with a
-            # different payload shape ([output, value...] vs. the reply's value-only bytes) —
-            # only a genuine read reply carries settings data worth caching.
+        elif command.command in _SETTINGS_CMDS and command.command_type & protocol.TYPE_ACK:
+            # Replies carry the Ack bit set (command_type = TYPE_READ|TYPE_ACK = 0x03, per
+            # docs/protocol.md). Our own writes use TYPE_WRITE/TYPE_DONT_RESPOND (Ack unset)
+            # and echo back on the same feed with a different payload shape ([output,
+            # value...] vs. the reply's value-only bytes) — only a genuine reply is cacheable.
             self._update_output_settings(command)
         elif command.command == CMD_NOTIFY_EVENTS:
             faults = decode_notify_events(command)
