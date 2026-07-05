@@ -128,6 +128,8 @@ async def test_get_site_parses_devices():
     assert [(s.name, s.index) for s in site.scenes] == [("Movie", 3)]
     # inputs: deduped by address; named from devices[]
     assert sorted((i.address, i.name) for i in site.inputs) == [(11, "Kitchen"), (31, "Blind")]
+    # physical device addresses (for fault polling), keyed by device_id, incl. sensor w1
+    assert site.device_addresses == {"d1": 1, "d2": 2, "d3": 3, "w1": 33}
     assert [(m.address, m.name) for m in site.motion] == [(33, "Motion sensor")]
 
 
@@ -231,6 +233,31 @@ def test_parse_site_handles_missing_address_and_hardware():
     assert site.title == "Plejd"  # default
 
 
+def test_parse_site_captures_output_settings():
+    site = parse_site(
+        {
+            "plejdMesh": {"cryptoKey": "00" * 16},
+            "devices": [
+                {"deviceId": "a", "outputType": "LIGHT", "outputSettings": {"minDim": 100, "dimCurve": 1}},
+                {"deviceId": "b", "outputType": "LIGHT"},  # no outputSettings
+            ],
+        }
+    )
+    by_id = {d.device_id: d for d in site.devices}
+    assert by_id["a"].output_settings == {"minDim": 100, "dimCurve": 1}
+    assert by_id["b"].output_settings is None
+
+
+def test_parse_site_ignores_non_dict_output_settings():
+    site = parse_site(
+        {
+            "plejdMesh": {"cryptoKey": "00" * 16},
+            "devices": [{"deviceId": "a", "outputType": "LIGHT", "outputSettings": "bad"}],
+        }
+    )
+    assert site.devices[0].output_settings is None
+
+
 def test_parse_site_firmware_by_device_covers_all_physical_devices():
     site = parse_site(
         {
@@ -283,6 +310,17 @@ def test_parse_site_firmware_tolerates_missing_or_garbage():
     assert fw["a"].version is None and fw["a"].build_time is None and fw["a"].faceplate_id is None
     assert fw["b"].version is None  # non-str version dropped
     assert fw["b"].build_time is None  # non-numeric buildTime dropped
+
+
+def test_parse_site_device_addresses_drops_garbage_values():
+    site = parse_site(
+        {
+            "plejdMesh": {"cryptoKey": "00" * 16},
+            "deviceAddress": {"d1": 5, "d2": "not-a-number", "d3": None},
+            "devices": [],
+        }
+    )
+    assert site.device_addresses == {"d1": 5}
 
 
 async def test_available_firmware_returns_newest_offered():

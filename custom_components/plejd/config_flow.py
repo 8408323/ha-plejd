@@ -24,6 +24,7 @@ from .cloud import (
 )
 from .const import (
     CONF_CRYPTO_KEY,
+    CONF_DEVICE_ADDRESSES,
     CONF_DEVICES,
     CONF_DISCOVERED_ADDRESS,
     CONF_GATEWAYS,
@@ -209,6 +210,7 @@ class PlejdConfigFlow(ConfigFlow, domain=DOMAIN):
                 CONF_SCENES: [asdict(s) for s in site.scenes],
                 CONF_GATEWAYS: site.gateways,
                 CONF_RESOURCE_SET_ID: site.resource_set_id,
+                CONF_DEVICE_ADDRESSES: site.device_addresses,
                 CONF_INSTALLATION_ID: str(uuid4()),
             },
         )

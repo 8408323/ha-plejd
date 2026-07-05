@@ -41,11 +41,24 @@ from .cloud import (
 )
 from .connection import PlejdConnection
 from .const import (
+    CATEGORY_LIGHT,
+    CATEGORY_SWITCH,
     CMD_GROUP_STATE_AND_LEVEL,
     CMD_INPUT_BUTTON,
+    CMD_NOTIFY_EVENTS,
+    CMD_OUTPUT_BOOT_STATE,
+    CMD_OUTPUT_CURVE_TYPE,
+    CMD_OUTPUT_INRUSH_CURRENT,
+    CMD_OUTPUT_MAX_LEVEL,
+    CMD_OUTPUT_MIN_LEVEL,
+    CMD_OUTPUT_PHASE_DIM_TYPE,
+    CMD_OUTPUT_RELAY_CONFIG,
+    CMD_OUTPUT_RELAY_OFF_TIME,
     CMD_OUTPUT_SET,
+    CMD_OUTPUT_SPEED,
     CMD_OUTPUT_STATE_AND_LEVEL,
     CONF_CRYPTO_KEY,
+    CONF_DEVICE_ADDRESSES,
     CONF_DEVICES,
     CONF_DISCOVERED_ADDRESS,
     CONF_GATEWAYS,
@@ -57,7 +70,10 @@ from .const import (
     CONF_SITE_ID,
     CONF_TRANSPORT,
     DOMAIN,
+    PHASE_DIM_HARDWARE,
     PLEJD_SERVICE_UUID,
+    RELAY_CONFIG_HARDWARE,
+    RELAY_HARDWARE,
     TIME_EVENT_REP_FOREVER,
     TIME_EVENT_RESULT_SCENE,
     TRANSPORT_AUTO,
@@ -65,13 +81,14 @@ from .const import (
     TRANSPORT_GATEWAY,
 )
 from .gateway_transport import PlejdGatewayConnection
-from .protocol import Command, MotionEvent, OutputState, decode_motion
+from .protocol import Command, MotionEvent, OutputSettings, OutputState, decode_motion, decode_notify_events
 
 _LOGGER = logging.getLogger(__name__)
 
 RECONNECT_INITIAL_DELAY = 1.0
 RECONNECT_MAX_DELAY = 60.0
 FIRMWARE_REFRESH_INTERVAL = timedelta(days=1)
+NOTIFY_POLL_INTERVAL = timedelta(minutes=10)  # device-health (NotifyEvents) poll cadence
 
 
 @dataclass
@@ -92,6 +109,39 @@ class PlejdFirmwareStatus:
         )
 
 
+_SETTINGS_CMDS = frozenset(
+    {
+        CMD_OUTPUT_MIN_LEVEL,
+        CMD_OUTPUT_MAX_LEVEL,
+        CMD_OUTPUT_SPEED,
+        CMD_OUTPUT_CURVE_TYPE,
+        CMD_OUTPUT_PHASE_DIM_TYPE,
+        CMD_OUTPUT_BOOT_STATE,
+        CMD_OUTPUT_RELAY_OFF_TIME,
+        CMD_OUTPUT_RELAY_CONFIG,
+        CMD_OUTPUT_INRUSH_CURRENT,
+    }
+)
+
+
+def _settings_from_cloud(raw: dict) -> OutputSettings | None:
+    """Best-effort decode of a cloud outputSettings dict.
+
+    NOTE(8408323): field names are speculative pending a capture that includes outputSettings (#73).
+    """
+    min_dim = raw.get("minDim")
+    max_dim = raw.get("maxDim")
+    curve = raw.get("dimCurve")
+    s = OutputSettings(
+        min_level=round(int(min_dim) / 0xFFFF * 100, 1) if isinstance(min_dim, (int, float)) else None,
+        max_level=round(int(max_dim) / 0xFFFF * 100, 1) if isinstance(max_dim, (int, float)) else None,
+        curve=int(curve) if isinstance(curve, (int, float)) else None,
+    )
+    if s.min_level is None and s.max_level is None and s.curve is None:
+        return None
+    return s
+
+
 class PlejdCoordinator:
     """Holds the BLE connection and the site's devices; notifies HA entities."""
 
@@ -104,6 +154,9 @@ class PlejdCoordinator:
         self.inputs = [PlejdCloudInput(**i) for i in entry.data.get(CONF_INPUTS, [])]
         self.motion = [PlejdCloudMotion(**m) for m in entry.data.get(CONF_MOTION, [])]
         self._motion_addresses = {m.address for m in self.motion}
+        # device_id -> physical mesh address, for fault polling; absent on entries added
+        # before this field existed (resolved via a one-time cloud fetch, see _async_poll_faults).
+        self._device_addresses: dict[str, int] = dict(entry.data.get(CONF_DEVICE_ADDRESSES) or {})
         self.site_id = entry.data.get(CONF_SITE_ID, entry.entry_id)
         self._preferred = entry.data.get(CONF_DISCOVERED_ADDRESS)
         self._transport_pref = (getattr(entry, "options", None) or {}).get(CONF_TRANSPORT, TRANSPORT_AUTO)
@@ -127,19 +180,30 @@ class PlejdCoordinator:
                 self._async_get_token,
                 self._notify_outputs,
                 self._handle_disconnect,
+                on_event=self._on_event,
             )
         self._listeners: list[Callable[[], None]] = []
         self._button_listeners: list[Callable[[int, bool], None]] = []
         self._motion_listeners: list[Callable[[MotionEvent], None]] = []
         self.firmware: dict[str, PlejdFirmwareStatus] = {}  # device_id -> firmware status
+        self._fault_listeners: list[Callable[[int, frozenset[str]], None]] = []
+        self._faults: dict[int, frozenset[str]] = {}
         self._clock_unsub: Callable[[], None] | None = None
         self._firmware_unsub: Callable[[], None] | None = None
         self._firmware_now_unsub: Callable[[], None] | None = None
+        self._faults_unsub: Callable[[], None] | None = None
         self._available = False
         self._active: str | None = None  # "gateway" | "ble"
         self._closed = False
         self._reconnecting = False
         self._reconnect_task: asyncio.Task | None = None
+        self._output_settings: dict[int, OutputSettings] = {}
+        # Pre-populate from cloud so entities have a value before BLE reads return.
+        for _device in self.devices:
+            if _device.address is not None and _device.output_settings:
+                _cloud_s = _settings_from_cloud(_device.output_settings)
+                if _cloud_s is not None:
+                    self._output_settings[_device.address] = _cloud_s
 
     def _active_transport(self) -> PlejdConnection | PlejdGatewayConnection | None:
         if self._active == "gateway":
@@ -195,6 +259,24 @@ class PlejdCoordinator:
         return _remove
 
     @callback
+    def async_add_fault_listener(self, cb: Callable[[int, frozenset[str]], None]) -> Callable[[], None]:
+        """Register a device-health callback cb(address, fault_names); returns an unsubscribe."""
+        self._fault_listeners.append(cb)
+
+        def _remove() -> None:
+            self._fault_listeners.remove(cb)
+
+        return _remove
+
+    def faults_for(self, address: int) -> frozenset[str]:
+        """Active fault-flag names last reported by a device (empty if none/unknown)."""
+        return self._faults.get(address, frozenset())
+
+    def device_address_for(self, device_id: str) -> int | None:
+        """A physical device's own mesh address (for fault entities), or None if unresolved."""
+        return self._device_addresses.get(device_id)
+
+    @callback
     def _on_event(self, command: Command) -> None:
         if command.command in (CMD_GROUP_STATE_AND_LEVEL, CMD_OUTPUT_STATE_AND_LEVEL):
             for update in list(self._listeners):
@@ -208,6 +290,88 @@ class PlejdCoordinator:
             if event is not None:
                 for motion_cb in list(self._motion_listeners):
                     motion_cb(event)
+        elif command.command in _SETTINGS_CMDS and command.command_type & protocol.TYPE_ACK:
+            # Replies carry the Ack bit set (command_type = TYPE_READ|TYPE_ACK = 0x03, per
+            # docs/protocol.md). Our own writes use TYPE_WRITE/TYPE_DONT_RESPOND (Ack unset)
+            # and echo back on the same feed with a different payload shape ([output,
+            # value...] vs. the reply's value-only bytes) — only a genuine reply is cacheable.
+            self._update_output_settings(command)
+        elif command.command == CMD_NOTIFY_EVENTS:
+            faults = decode_notify_events(command)
+            if faults is not None:
+                self._faults[command.address] = faults
+                for fault_cb in list(self._fault_listeners):
+                    fault_cb(command.address, faults)
+
+    def _update_output_settings(self, command: Command) -> None:
+        """Store a settings read-reply and notify listeners."""
+        cmd = command.command
+        addr = command.address
+        s = self._output_settings.get(addr) or OutputSettings()
+        if cmd == CMD_OUTPUT_MIN_LEVEL:
+            val = protocol.decode_output_level_reply(command)
+            if val is None:
+                return
+            s.min_level = val
+        elif cmd == CMD_OUTPUT_MAX_LEVEL:
+            val = protocol.decode_output_level_reply(command)
+            if val is None:
+                return
+            s.max_level = val
+        elif cmd == CMD_OUTPUT_SPEED:
+            val = protocol.decode_output_speed_reply(command)
+            if val is None:
+                return
+            s.speed = val
+        elif cmd == CMD_OUTPUT_CURVE_TYPE:
+            val = protocol.decode_output_curve_reply(command)
+            if val is None:
+                return
+            s.curve = val
+        elif cmd == CMD_OUTPUT_PHASE_DIM_TYPE:
+            val = protocol.decode_output_phase_dim_reply(command)
+            if val is None:
+                return
+            s.phase_dim = val
+        elif cmd == CMD_OUTPUT_BOOT_STATE:
+            val = protocol.decode_output_boot_state_reply(command)
+            if val is None:
+                return
+            s.boot_state = val
+        elif cmd == CMD_OUTPUT_RELAY_OFF_TIME:
+            val = protocol.decode_output_relay_off_time_reply(command)
+            if val is None:
+                return
+            s.relay_off_time = val
+        elif cmd == CMD_OUTPUT_RELAY_CONFIG:
+            val = protocol.decode_output_relay_config_reply(command)
+            if val is None:
+                return
+            s.relay_pole_config = val
+        else:  # CMD_OUTPUT_INRUSH_CURRENT
+            val = protocol.decode_output_inrush_current_reply(command)
+            if val is None:
+                return
+            s.inrush_current_ms = val
+        self._output_settings[addr] = s
+        self._notify_outputs()
+
+    def settings_for(self, address: int) -> OutputSettings | None:
+        """Last-known per-output settings for a mesh address, if read."""
+        return self._output_settings.get(address)
+
+    def _cache_output_setting(self, address: int, **fields: object) -> None:
+        """Optimistically update the settings cache after a local write.
+
+        Without this, a BLE notification for an unrelated field arriving right after
+        a local write would re-read the old cached value and overwrite the entity's
+        new state until the next full settings read.
+        """
+        s = self._output_settings.get(address) or OutputSettings()
+        for name, value in fields.items():
+            setattr(s, name, value)
+        self._output_settings[address] = s
+        self._notify_outputs()
 
     def state_for(self, address: int) -> OutputState | None:
         """Last-known output state for a mesh address, if seen."""
@@ -366,6 +530,7 @@ class PlejdCoordinator:
         self._active = "gateway"
         self._available = True
         self._notify_outputs()
+        await self._start_fault_polling()
 
     async def _async_connect_ble(self) -> None:
         info = self._pick_device()
@@ -380,9 +545,11 @@ class PlejdCoordinator:
         except Exception as err:  # noqa: BLE001 - surface any BLE failure as a setup retry
             raise ConfigEntryNotReady(f"failed to connect: {err}") from err
         await self._async_read_all_states()
+        await self._async_read_all_settings()
         self._active = "ble"
         self._available = True
         self._notify_outputs()
+        await self._start_fault_polling()
         try:
             await self.async_sync_clock()
         except Exception:  # noqa: BLE001 - clock sync is auxiliary, never fail setup over it
@@ -397,6 +564,31 @@ class PlejdCoordinator:
             await self.async_sync_clock()
         except Exception:  # noqa: BLE001 - best-effort; a missed daily sync is not fatal
             _LOGGER.warning("Plejd periodic clock sync failed", exc_info=True)
+
+    async def _start_fault_polling(self) -> None:
+        """Poll device health (NotifyEvents) periodically; replies arrive push-side."""
+        if self._faults_unsub is not None:
+            self._faults_unsub()
+        self._faults_unsub = async_track_time_interval(self.hass, self._async_poll_faults, NOTIFY_POLL_INTERVAL)
+        await self._async_poll_faults(None)
+
+    async def _async_poll_faults(self, _now: object) -> None:
+        # NotifyEvents belongs to the physical device, not any one output — poll the
+        # device's own mesh address (may differ from an output's outputAddress).
+        if not self._device_addresses and self._email and self._password:
+            try:
+                session = async_get_clientsession(self.hass)
+                token = await async_login(session, self._email, self._password)
+                site = await async_get_site(session, token, self.site_id)
+                self._device_addresses = dict(site.device_addresses)
+            except Exception:  # noqa: BLE001 - fault polling is best-effort; retry next interval
+                _LOGGER.debug("Plejd fault poll: could not resolve device addresses", exc_info=True)
+        for address in set(self._device_addresses.values()):
+            try:
+                await self._write_vector(protocol.request_notify_events(address))
+            except Exception:  # noqa: BLE001 - best-effort per device; one failure shouldn't skip the rest
+                _LOGGER.debug("Plejd fault poll failed for device %s", address, exc_info=True)
+                continue
 
     async def _async_get_token(self) -> str:
         """Fetch a fresh Parse session token for the gateway WebSocket (login each time)."""
@@ -413,6 +605,32 @@ class PlejdCoordinator:
                 continue
             seen.add(device.address)
             await self._connection.write(mesh.request_output(device.address, device.output_index))
+
+    async def _async_read_all_settings(self) -> None:
+        """Read per-output settings from each addressable device after BLE connect."""
+        mesh = self._connection.mesh
+        if mesh is None:
+            return
+        seen: set[int] = set()
+        for device in self.devices:
+            if device.address is None or device.address in seen:
+                continue
+            seen.add(device.address)
+            addr, out = device.address, device.output_index
+            if device.dimmable:
+                await self._connection.write(mesh.encrypt(protocol.request_output_min_level(addr, out)))
+                await self._connection.write(mesh.encrypt(protocol.request_output_max_level(addr, out)))
+                await self._connection.write(mesh.encrypt(protocol.request_output_speed(addr, out)))
+                await self._connection.write(mesh.encrypt(protocol.request_output_curve(addr, out)))
+                await self._connection.write(mesh.encrypt(protocol.request_output_phase_dim(addr, out)))
+                if device.hardware_id in PHASE_DIM_HARDWARE:
+                    await self._connection.write(mesh.encrypt(protocol.request_output_inrush_current(addr, out)))
+            if device.category in (CATEGORY_LIGHT, CATEGORY_SWITCH):
+                await self._connection.write(mesh.encrypt(protocol.request_output_boot_state(addr, out)))
+            if device.hardware_id in RELAY_HARDWARE:
+                await self._connection.write(mesh.encrypt(protocol.request_output_relay_off_time(addr, out)))
+            if device.hardware_id in RELAY_CONFIG_HARDWARE:
+                await self._connection.write(mesh.encrypt(protocol.request_output_relay_config(addr, out)))
 
     @callback
     def _handle_disconnect(self) -> None:
@@ -497,19 +715,25 @@ class PlejdCoordinator:
         """Delete an on-device time event."""
         await self._write_vector(protocol.remove_time_event(slot))
 
-    async def async_set_output(self, address: int, output: int, on: bool, level: int) -> None:
-        """Send an on/off + level command for an output."""
-        await self._write_vector(
-            protocol.set_output_state_and_level(address, output, on, level, command_type=protocol.TYPE_DONT_RESPOND)
-        )
+    async def async_set_output(self, address: int, on: bool, level: int) -> None:
+        """Send an on/off + level command for an output.
+
+        Uses 0x0098 (`set_group_state_and_level`): the per-output cloud address alone
+        identifies the target output, with no separate output byte — 0x00C8 with the
+        per-output address broke every output past the first on a multi-output
+        device (#71).
+        """
+        await self._write_vector(protocol.set_group_state_and_level(address, on, level))
 
     async def async_set_output_min_level(self, address: int, output: int, fraction: float) -> None:
         """Set an output's minimum dim level (0-1 fraction)."""
         await self._write_vector(protocol.set_output_min_level(address, output, fraction))
+        self._cache_output_setting(address, min_level=fraction * 100)
 
     async def async_set_output_max_level(self, address: int, output: int, fraction: float) -> None:
         """Set an output's maximum dim level (0-1 fraction)."""
         await self._write_vector(protocol.set_output_max_level(address, output, fraction))
+        self._cache_output_setting(address, max_level=fraction * 100)
 
     async def async_set_output_start_level(self, address: int, output: int, fraction: float) -> None:
         """Set an output's start level (0-1 fraction)."""
@@ -518,14 +742,37 @@ class PlejdCoordinator:
     async def async_set_output_speed(self, address: int, output: int, seconds: float) -> None:
         """Set an output's dim transition time (seconds; 0 = instant)."""
         await self._write_vector(protocol.set_output_speed(address, output, seconds))
+        self._cache_output_setting(address, speed=seconds)
 
     async def async_set_output_curve(self, address: int, output: int, curve: int) -> None:
         """Set an output's dimming curve (LoadCurve byte)."""
         await self._write_vector(protocol.set_output_curve(address, output, curve))
+        self._cache_output_setting(address, curve=curve)
 
     async def async_set_output_phase_dim(self, address: int, output: int, phase: int) -> None:
         """Set an output's phase-dim edge (PhaseOutputType byte)."""
         await self._write_vector(protocol.set_output_phase_dim(address, output, phase))
+        self._cache_output_setting(address, phase_dim=phase)
+
+    async def async_set_output_boot_state(self, address: int, output: int, use_last: bool) -> None:
+        """Set an output's after-power-outage boot state (True=restore, False=off)."""
+        await self._write_vector(protocol.set_output_boot_state(address, output, use_last))
+        self._cache_output_setting(address, boot_state=use_last)
+
+    async def async_set_output_relay_off_time(self, address: int, output: int, seconds: float) -> None:
+        """Set minimum relay off time in seconds (relay devices only)."""
+        await self._write_vector(protocol.set_output_relay_off_time(address, output, seconds))
+        self._cache_output_setting(address, relay_off_time=seconds)
+
+    async def async_set_output_relay_config(self, address: int, output: int, config: int) -> None:
+        """Set relay pole configuration (0=TwoPole, 1=OnePole)."""
+        await self._write_vector(protocol.set_output_relay_config(address, output, config))
+        self._cache_output_setting(address, relay_pole_config=config)
+
+    async def async_set_output_inrush_current(self, address: int, output: int, time_ms: int) -> None:
+        """Set inrush current protection time in milliseconds (0=disabled)."""
+        await self._write_vector(protocol.set_output_inrush_current(address, output, time_ms))
+        self._cache_output_setting(address, inrush_current_ms=time_ms)
 
     async def async_execute_scene(self, index: int) -> None:
         """Trigger a Plejd scene (broadcast to address 0)."""
@@ -558,6 +805,9 @@ class PlejdCoordinator:
         if self._firmware_now_unsub is not None:
             self._firmware_now_unsub()
             self._firmware_now_unsub = None
+        if self._faults_unsub is not None:
+            self._faults_unsub()
+            self._faults_unsub = None
         if self._reconnect_task is not None:
             self._reconnect_task.cancel()
             self._reconnect_task = None

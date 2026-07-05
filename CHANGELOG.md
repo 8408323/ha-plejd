@@ -16,6 +16,7 @@ All notable changes to this project are documented here. The format follows
   lives on the integration entry itself rather than any specific device, so it
   works the same with or without a gateway.
 - **Dimmer start level.** A per-output *Start brightness* number — the level a dimmer jumps to when first switched on (`SetOutputStartLevel`, opcode `0x00CF`; same level encoding as min/max).
+- **Device health sensors.** A per-device *Fault* binary_sensor (diagnostic, `problem` class) surfaces the device's `NotifyEvents` flags (overcurrent, overtemperature, overload, …); polled every 10 min, replies on LastChanged. Validated against healthy hardware (clean bitfield → no fault).
 - **Dimmer transition time.** A per-output *Transition time* config number (seconds)
   controls how fast a dimmer fades (`SetOutputSpeed`, opcode `0x00CB`). Validated on
   real hardware (an 8-second fade-in was observed). Joins the existing min/max
@@ -36,6 +37,18 @@ All notable changes to this project are documented here. The format follows
   `unavailable` until Home Assistant itself was restarted. Auth failures now
   start reauth and stop; every other failure is retried with backoff instead of
   silently ending the loop.
+- **Every output past the first on a multi-output device (e.g. `DIM-02-LC2`)
+  silently ignored commands.** `async_set_output` sent `0x00C8`
+  (`OUTPUT_STATE_AND_LEVEL`) using the per-output cloud address with an
+  `output` byte in the payload — but `0x00C8`'s own decode semantics treat
+  `output` as a device-level channel selector (`output=cmd.data[0]`), not the
+  per-output address. That only happened to work for output 0, where the
+  per-output address coincides with the device's base address. Confirmed on a
+  live gateway capture that the app always sends `0x0098`
+  (`GROUP_STATE_AND_LEVEL`) instead, with no output byte at all — the
+  per-output cloud address alone identifies the target, matching this
+  opcode's own decode side (`output=cmd.address`). Switched to a new
+  `set_group_state_and_level` (`0x0098`) for all on/off + level commands.
 
 ## [0.5.0] - 2026-05-31
 

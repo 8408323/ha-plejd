@@ -44,8 +44,8 @@ class _Coordinator:
         self.listeners.append(cb)
         return lambda: self.listeners.remove(cb)
 
-    async def async_set_output(self, address, output, on, level):
-        self.commands.append((address, output, on, level))
+    async def async_set_output(self, address, on, level):
+        self.commands.append((address, on, level))
 
     async def async_program_time_event(self, slot, mask, hour, minute, second, scene, fade):
         self.programmed.append((slot, mask, hour, minute, second, scene, fade))
@@ -136,7 +136,7 @@ async def test_turn_on_off():
     sw = PlejdSwitch(coord, _device())
     await sw.async_turn_on()
     await sw.async_turn_off()
-    assert coord.commands == [(7, 0, True, 255), (7, 0, False, 0)]
+    assert coord.commands == [(7, True, 255), (7, False, 0)]
 
 
 async def test_added_to_hass_subscribes():
