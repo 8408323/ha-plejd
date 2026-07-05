@@ -16,6 +16,9 @@ site_*.json
 tools/*.jsonl
 tools/*.bin
 
+# Android bug report dumps (device logs / BT state — live secrets)
+tools/bugreport*.zip
+
 # Python
 __pycache__/
 *.py[cod]

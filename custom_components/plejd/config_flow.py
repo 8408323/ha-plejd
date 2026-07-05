@@ -10,9 +10,11 @@ from uuid import uuid4
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlow
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.selector import SelectSelector, SelectSelectorConfig
 
+from .add_device import async_add_device
 from .cloud import (
     PlejdAuthError,
     PlejdCloudError,
@@ -41,6 +43,7 @@ from .const import (
     TRANSPORT_GATEWAY,
     WEEKDAYS,
 )
+from .discovery import async_bluetooth_available, async_scan_unprovisioned
 
 if TYPE_CHECKING:
     from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
@@ -84,7 +87,7 @@ class PlejdConfigFlow(ConfigFlow, domain=DOMAIN):
 
     @staticmethod
     def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
-        """Return the options flow for managing on-device schedules."""
+        """Return the options flow: manage schedules, or add a new device."""
         return PlejdOptionsFlow(config_entry)
 
     def __init__(self) -> None:
@@ -128,6 +131,36 @@ class PlejdConfigFlow(ConfigFlow, domain=DOMAIN):
         options = [{"value": _site_id(s), "label": _site_title(s)} for s in self._sites]
         schema = vol.Schema({vol.Required(CONF_SITE_ID): SelectSelector(SelectSelectorConfig(options=options))})
         return self.async_show_form(step_id="site", data_schema=schema)
+
+    async def async_step_reconfigure(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """Re-fetch the site's device list from the Plejd cloud."""
+        entry = self._get_reconfigure_entry()
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            session = async_get_clientsession(self.hass)
+            try:
+                token = await async_login(session, entry.data[CONF_EMAIL], entry.data[CONF_PASSWORD])
+                site = await async_get_site(session, token, entry.data[CONF_SITE_ID])
+            except PlejdAuthError:
+                errors["base"] = "invalid_auth"
+            except PlejdCloudError:
+                errors["base"] = "cannot_connect"
+            else:
+                return self.async_update_reload_and_abort(
+                    entry,
+                    data_updates={
+                        CONF_CRYPTO_KEY: site.crypto_key.hex(),
+                        CONF_DEVICES: [asdict(d) for d in site.devices],
+                        CONF_INPUTS: [asdict(i) for i in site.inputs],
+                        CONF_MOTION: [asdict(m) for m in site.motion],
+                        CONF_SCENES: [asdict(s) for s in site.scenes],
+                        CONF_GATEWAYS: site.gateways,
+                        CONF_RESOURCE_SET_ID: site.resource_set_id,
+                        CONF_DEVICE_ADDRESSES: site.device_addresses,
+                    },
+                    reason="reconfigure_successful",
+                )
+        return self.async_show_form(step_id="reconfigure", data_schema=vol.Schema({}), errors=errors)
 
     async def async_step_reauth(self, entry_data: dict[str, Any]) -> ConfigFlowResult:
         """Re-authentication started (e.g. the gateway rejected stored credentials)."""
@@ -185,12 +218,17 @@ class PlejdConfigFlow(ConfigFlow, domain=DOMAIN):
 
 
 class PlejdOptionsFlow(OptionsFlow):
-    """Manage on-device weekly schedules (time event -> scene)."""
+    """Configure Plejd: manage on-device schedules, or add a new device to the mesh."""
 
     def __init__(self, config_entry: ConfigEntry) -> None:
         self._entry = config_entry
+        self._new_device_address: str | None = None
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """Entry point: a menu, not tied to any particular device (works with or without a gateway)."""
+        return self.async_show_menu(step_id="init", menu_options=["schedules", "add_device"])
+
+    async def async_step_schedules(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         schedules: list[dict] = list(self._entry.options.get(CONF_SCHEDULES, []))
         next_id: int = self._entry.options.get("next_schedule_id", 0)
         transport: str = self._entry.options.get(CONF_TRANSPORT, TRANSPORT_AUTO)
@@ -267,7 +305,7 @@ class PlejdOptionsFlow(OptionsFlow):
             fields[vol.Optional("transport", default=transport)] = SelectSelector(
                 SelectSelectorConfig(options=transport_options)
             )
-        return self.async_show_form(step_id="init", data_schema=vol.Schema(fields), errors=errors)
+        return self.async_show_form(step_id="schedules", data_schema=vol.Schema(fields), errors=errors)
 
     async def _clear_deleted(self, removed: list[dict]) -> None:
         """Delete the device-side event for each removed schedule (best-effort)."""
@@ -277,3 +315,46 @@ class PlejdOptionsFlow(OptionsFlow):
                 await coordinator.async_remove_time_event(schedule["slot"])
             except Exception:  # noqa: BLE001 - best-effort; persist the deletion whatever the mesh does
                 _LOGGER.warning("Could not clear Plejd schedule slot %s from the mesh", schedule["slot"])
+
+    async def async_step_add_device(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """Pick an unprovisioned device from what's currently visible over Bluetooth."""
+        if not async_bluetooth_available(self.hass):
+            return self.async_show_form(step_id="add_device", data_schema=None, errors={"base": "no_bluetooth"})
+        devices = async_scan_unprovisioned(self.hass)
+        if not devices:
+            return self.async_show_form(step_id="add_device", data_schema=None, errors={"base": "no_devices_found"})
+        if user_input is not None and (address := user_input.get("device_address")):
+            self._new_device_address = address
+            return await self.async_step_add_device_details()
+        options = [
+            {"value": d["address"], "label": f"{d['address']} — {d['model']} (RSSI {d['rssi']})"} for d in devices
+        ]
+        schema = vol.Schema({vol.Required("device_address"): SelectSelector(SelectSelectorConfig(options=options))})
+        return self.async_show_form(step_id="add_device", data_schema=schema)
+
+    async def async_step_add_device_details(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """Name the device (and optionally its room), then commission it."""
+        errors: dict[str, str] = {}
+        description_placeholders = {"address": self._new_device_address or ""}
+        if user_input is not None:
+            name = (user_input.get("name") or "").strip()
+            room_title = (user_input.get("room_title") or "").strip() or None
+            if not name:
+                errors["name"] = "name_required"
+            else:
+                try:
+                    await async_add_device(
+                        self.hass, self._entry, address=self._new_device_address, name=name, room_title=room_title
+                    )
+                except HomeAssistantError as err:
+                    errors["base"] = "add_device_failed"
+                    description_placeholders["error"] = str(err)
+                else:
+                    return self.async_create_entry(title="", data=dict(self._entry.options))
+        schema = vol.Schema({vol.Required("name"): str, vol.Optional("room_title", default=""): str})
+        return self.async_show_form(
+            step_id="add_device_details",
+            data_schema=schema,
+            errors=errors,
+            description_placeholders=description_placeholders,
+        )

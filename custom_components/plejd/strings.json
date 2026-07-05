@@ -20,6 +20,10 @@
         "data": {
           "password": "Password"
         }
+      },
+      "reconfigure": {
+        "title": "Update Plejd device list",
+        "description": "Re-fetch all devices and scenes for this site from the Plejd cloud. Use this after adding new Plejd devices in the Plejd app."
       }
     },
     "error": {
@@ -29,7 +33,8 @@
     },
     "abort": {
       "already_configured": "[%key:common::config_flow::abort::already_configured%]",
-      "reauth_successful": "[%key:common::config_flow::abort::reauth_successful%]"
+      "reauth_successful": "[%key:common::config_flow::abort::reauth_successful%]",
+      "reconfigure_successful": "[%key:common::config_flow::abort::reconfigure_successful%]"
     }
   },
   "entity": {
@@ -114,6 +119,12 @@
   "options": {
     "step": {
       "init": {
+        "menu_options": {
+          "schedules": "Manage schedules",
+          "add_device": "Add a device"
+        }
+      },
+      "schedules": {
         "title": "Plejd schedules",
         "description": "Add a weekly on-device schedule that runs a scene, or remove existing ones. These run on the Plejd devices themselves, so they work even when Home Assistant is offline.",
         "data": {
@@ -125,13 +136,32 @@
           "fade": "Fade (seconds)",
           "transport": "Communication"
         }
+      },
+      "add_device": {
+        "title": "Add a device",
+        "description": "Pick a Plejd device that's currently broadcasting as unprovisioned nearby.",
+        "data": {
+          "device_address": "Device"
+        }
+      },
+      "add_device_details": {
+        "title": "Add a device",
+        "description": "Name the device found at {address}, and optionally put it in a new room.",
+        "data": {
+          "name": "Name",
+          "room_title": "New room (optional)"
+        }
       }
     },
     "error": {
       "no_free_slots": "All 20 schedule slots are in use.",
       "scene_required": "Pick a scene for the new schedule.",
       "days_required": "Pick at least one weekday for the new schedule.",
-      "invalid_time": "Enter the time as HH:MM (24-hour)."
+      "invalid_time": "Enter the time as HH:MM (24-hour).",
+      "no_devices_found": "No unprovisioned Plejd devices found nearby. Make sure the device is powered and in Bluetooth range, then try again.",
+      "name_required": "Enter a name for the device.",
+      "add_device_failed": "Failed to add the device: {error}",
+      "no_bluetooth": "Bluetooth is not available on this Home Assistant instance. Add a local Bluetooth adapter or an ESPHome Bluetooth proxy (in active mode), then try again."
     }
   }
 }

@@ -7,6 +7,14 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Add a device, from Home Assistant.** A new `plejd.add_device` service
+  commissions an unprovisioned Plejd device into the mesh directly from HA — cloud
+  registration, Diffie-Hellman key exchange, mesh access address, and node index —
+  no Plejd app needed. `plejd.scan_new_devices` finds candidates over Bluetooth.
+  Both are also wrapped in a guided **Add a device** wizard under the integration's
+  **Configure** menu (Settings → Devices & Services → Plejd → Configure), which
+  lives on the integration entry itself rather than any specific device, so it
+  works the same with or without a gateway.
 - **Dimmer start level.** A per-output *Start brightness* number — the level a dimmer jumps to when first switched on (`SetOutputStartLevel`, opcode `0x00CF`; same level encoding as min/max).
 - **Device health sensors.** A per-device *Fault* binary_sensor (diagnostic, `problem` class) surfaces the device's `NotifyEvents` flags (overcurrent, overtemperature, overload, …); polled every 10 min, replies on LastChanged. Validated against healthy hardware (clean bitfield → no fault).
 - **Dimmer transition time.** A per-output *Transition time* config number (seconds)

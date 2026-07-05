@@ -357,6 +357,66 @@ def test_dimmer_tuning_setting_bytes():
     assert phase[5:] == bytes([0x00, 0x01])
 
 
+# ── Commissioning helpers ─────────────────────────────────────────────────────
+
+
+def test_public_key_bytes_packs_little_endian():
+    from plejd.protocol import public_key_bytes
+
+    key = 0x0102030405060708
+    b = public_key_bytes(key)
+    assert len(b) == 8
+    assert b == bytes([0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01])
+
+
+def test_public_key_bytes_truncates_to_uint64():
+    from plejd.protocol import public_key_bytes
+
+    # High bits beyond 64 should be masked out.
+    assert public_key_bytes((1 << 64) | 1) == public_key_bytes(1)
+
+
+def test_access_address_bytes_parses_dash_hex():
+    from plejd.protocol import access_address_bytes
+
+    assert access_address_bytes("AA-BB-CC-DD") == bytes([0xAA, 0xBB, 0xCC, 0xDD])
+
+
+def test_access_address_bytes_empty_string():
+    from plejd.protocol import access_address_bytes
+
+    assert access_address_bytes("") == b""
+
+
+def test_node_index_bytes_single_byte():
+    from plejd.protocol import node_index_bytes
+
+    assert node_index_bytes(5) == bytes([5])
+    assert node_index_bytes(255) == bytes([255])
+
+
+def test_node_index_bytes_masks_to_one_byte():
+    from plejd.protocol import node_index_bytes
+
+    assert node_index_bytes(256) == bytes([0])
+    assert node_index_bytes(257) == bytes([1])
+
+
+def test_replace_last_mesh_command_uses_dont_respond_and_cmd_device_type():
+    from plejd.const import CMD_DEVICE_TYPE
+    from plejd.protocol import TYPE_DONT_RESPOND, replace_last_mesh_command
+
+    v = replace_last_mesh_command(7)
+    # Byte 0: address low byte
+    assert v[0] == 7
+    # Byte 2: command_type
+    assert v[2] == TYPE_DONT_RESPOND
+    # Bytes 3-4: command opcode big-endian
+    assert (v[3] << 8) | v[4] == CMD_DEVICE_TYPE
+    # No payload beyond the header (DontRespond, no data)
+    assert len(v) == 5
+
+
 def test_settings_read_requests_use_read_type():
     from plejd.const import (
         CMD_OUTPUT_CURVE_TYPE,

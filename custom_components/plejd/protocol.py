@@ -12,9 +12,11 @@ state changes. See docs/reverse_engineering.md.
 
 from __future__ import annotations
 
+import struct
 from dataclasses import dataclass
 
 from .const import (
+    CMD_DEVICE_TYPE,
     CMD_GROUP_STATE_AND_LEVEL,
     CMD_NOTIFY_EVENTS,
     CMD_OUTPUT_BOOT_STATE,
@@ -534,3 +536,34 @@ def decode_output_state(cmd: Command) -> OutputState | None:
         level = cmd.data[2]
         return OutputState(output=cmd.data[0], on=level > 0 or cmd.data[1] != 0, level=level)
     return None
+
+
+# ── Commissioning GATT helpers ──────────────────────────────────────────────
+# These produce raw bytes for direct GATT characteristic writes (not mesh commands).
+# They are used during device provisioning, which writes to individual GATT chars
+# on the new device (not to the DataVector characteristic).
+
+
+def public_key_bytes(public_key: int) -> bytes:
+    """Encode a DH public key (uint64) as 8 bytes little-endian for CryptoKeyID write."""
+
+    return struct.pack("<Q", public_key & 0xFFFFFFFFFFFFFFFF)
+
+
+def access_address_bytes(mesh_key: str) -> bytes:
+    """Convert a mesh key (dash-separated hex "AA-BB-CC-DD") to raw bytes for AccessAddressID write."""
+    return bytes(int(h, 16) for h in mesh_key.split("-") if h)
+
+
+def node_index_bytes(index: int) -> bytes:
+    """Build the NodeIndex payload for SetNodeIndex: a single byte for the node address."""
+    return bytes([index & 0xFF])
+
+
+def replace_last_mesh_command(node_index: int) -> bytes:
+    """Build the GetDeviceTypeNumber (cmd 0x0000 DontRespond) Datavector vector.
+
+    ReplaceLastMeshCommand sends this command twice (100 ms apart) to the mesh to
+    replace whatever the last pending command was for the newly added device's address.
+    """
+    return encode_command(node_index, CMD_DEVICE_TYPE, b"", command_type=TYPE_DONT_RESPOND)
