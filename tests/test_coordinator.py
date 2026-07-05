@@ -278,8 +278,9 @@ async def test_initial_state_read_one_per_address(monkeypatch):
     )
     c = PlejdCoordinator(hass, entry)
     await c.async_start()
-    # one output-state read written per unique non-None address (addr 5); None + duplicate skipped.
-    # (Other DATA reads after connect — e.g. the NotifyEvents health poll — use a different opcode.)
+    # one output-state read per unique non-None address (addr 5); None address + duplicate skipped.
+    # (Other DATA reads after connect — dimmable-settings, boot-state, the NotifyEvents health
+    # poll — use different opcodes and are filtered out below.)
     from plejd.const import CMD_OUTPUT_STATE_AND_LEVEL
     from plejd.protocol import TYPE_READ, decode_command
 
@@ -290,12 +291,53 @@ async def test_initial_state_read_one_per_address(monkeypatch):
         for cmd in [decode_command(c._connection.mesh.decrypt(w[1]))]
         if cmd.command_type == TYPE_READ and cmd.command == CMD_OUTPUT_STATE_AND_LEVEL
     ]
-    assert len(reads) == 1
+    assert len(reads) == 1  # exactly one state read per unique address
 
 
 async def test_read_all_states_noop_without_mesh():
     c = PlejdCoordinator(_hass(), _entry())
     await c._async_read_all_states()  # mesh is None — returns without writing
+
+
+async def test_read_all_settings_noop_without_mesh():
+    c = PlejdCoordinator(_hass(), _entry())
+    await c._async_read_all_settings()  # mesh is None — returns without writing
+
+
+async def test_settings_short_reply_ignored_for_all_commands(monkeypatch):
+    """val-is-None guard returns early for every settings command on short data."""
+    from plejd.const import (
+        CMD_OUTPUT_BOOT_STATE,
+        CMD_OUTPUT_CURVE_TYPE,
+        CMD_OUTPUT_MAX_LEVEL,
+        CMD_OUTPUT_PHASE_DIM_TYPE,
+        CMD_OUTPUT_RELAY_OFF_TIME,
+        CMD_OUTPUT_SPEED,
+    )
+    from plejd.protocol import Command
+
+    client = _FakeClient()
+    _patch_connect(monkeypatch, client)
+    ble = types.SimpleNamespace(address="01:02:03:04:05:a0")
+    hass = _hass([_info("01:02:03:04:05:a0")], {"01:02:03:04:05:a0": ble})
+    c = PlejdCoordinator(hass, _entry(discovered=None))
+    await c.async_start()
+
+    # 1-byte payload → decode_output_level_reply returns None → max-level guard line
+    c._on_event(Command(5, 0x03, CMD_OUTPUT_MAX_LEVEL, bytes([0x01])))
+    # 1-byte payload → decode_output_speed_reply returns None → speed guard line
+    c._on_event(Command(5, 0x03, CMD_OUTPUT_SPEED, bytes([0x01])))
+    # 0-byte payload → decode_output_curve_reply returns None → curve guard line
+    c._on_event(Command(5, 0x03, CMD_OUTPUT_CURVE_TYPE, b""))
+    # 0-byte payload → decode_output_phase_dim_reply returns None → phase guard line
+    c._on_event(Command(5, 0x03, CMD_OUTPUT_PHASE_DIM_TYPE, b""))
+    # 0-byte payload → decode_output_boot_state_reply returns None → boot-state guard line
+    c._on_event(Command(5, 0x03, CMD_OUTPUT_BOOT_STATE, b""))
+    # 1-byte payload → decode_output_relay_off_time_reply returns None → relay-off-time guard
+    c._on_event(Command(5, 0x03, CMD_OUTPUT_RELAY_OFF_TIME, bytes([0x01])))
+
+    # None of the short replies should be stored
+    assert c.settings_for(5) is None
 
 
 async def test_disconnect_marks_unavailable_and_reconnects(monkeypatch):
@@ -691,6 +733,11 @@ async def test_dim_level_settings(monkeypatch):
     await c.async_set_output_start_level(9, 1, 0.5)
     start = decode_command(c._connection.mesh.decrypt(client.writes[-1][1]))
     assert start.command == CMD_OUTPUT_START_LEVEL and start.data == bytes([1, 0x00, 0x80])
+    # Local writes update the settings cache immediately, without waiting for a BLE read-back.
+    settings = c.settings_for(9)
+    assert settings.min_level == 0.0
+    assert settings.max_level == 100.0
+    assert settings.speed == 1.0
 
 
 def _expected_clock_bytes():
@@ -784,6 +831,320 @@ async def test_dimmer_tuning_settings(monkeypatch):
     await c.async_set_output_phase_dim(9, 1, 1)
     ph = decode_command(c._connection.mesh.decrypt(client.writes[-1][1]))
     assert ph.command == CMD_OUTPUT_PHASE_DIM_TYPE and ph.data == bytes([1, 1])
+    settings = c.settings_for(9)
+    assert settings.curve == 3
+    assert settings.phase_dim == 1
+
+
+async def test_local_write_cache_survives_unrelated_ble_notification(monkeypatch):
+    """A stale BLE reply for a different field must not clobber a just-written setting."""
+    from plejd.const import CMD_OUTPUT_MIN_LEVEL
+    from plejd.protocol import Command
+
+    client = _FakeClient()
+    _patch_connect(monkeypatch, client)
+    ble = types.SimpleNamespace(address="01:02:03:04:05:a0")
+    hass = _hass([_info("01:02:03:04:05:a0")], {"01:02:03:04:05:a0": ble})
+    c = PlejdCoordinator(hass, _entry(discovered=None))
+    await c.async_start()
+    await c.async_set_output_max_level(9, 1, 0.5)
+    assert c.settings_for(9).max_level == 50.0
+    # An unrelated settings read-back arrives for the same address (e.g. min level).
+    c._on_event(Command(9, 0x03, CMD_OUTPUT_MIN_LEVEL, bytes([0x00, 0x00])))
+    assert c.settings_for(9).max_level == 50.0  # untouched by the unrelated reply
+
+
+def test_settings_for_returns_none_before_connect():
+    c = PlejdCoordinator(_hass(), _entry())
+    assert c.settings_for(5) is None
+
+
+async def test_settings_read_on_ble_connect(monkeypatch):
+    """Connect issues READ requests for each dimmable output's settings."""
+    from plejd.const import CMD_OUTPUT_CURVE_TYPE, CMD_OUTPUT_MAX_LEVEL, CMD_OUTPUT_MIN_LEVEL, CMD_OUTPUT_SPEED
+    from plejd.protocol import TYPE_READ, decode_command
+
+    client = _FakeClient()
+    _patch_connect(monkeypatch, client)
+    ble = types.SimpleNamespace(address="01:02:03:04:05:a0")
+    hass = _hass([_info("01:02:03:04:05:a0")], {"01:02:03:04:05:a0": ble})
+    c = PlejdCoordinator(hass, _entry(discovered=None))
+    await c.async_start()
+
+    # Only DATA characteristic writes are valid commands; filter and ignore decode errors.
+    def _try_decode(payload):
+        try:
+            return decode_command(c._connection.mesh.decrypt(payload))
+        except ValueError:
+            return None
+
+    cmds = [_try_decode(w[1]) for w in client.writes if w[0] == PLEJD_CHAR_DATA_UUID]
+    read_cmds = [cmd for cmd in cmds if cmd is not None and cmd.command_type == TYPE_READ]
+    # Expect state read + 5 settings reads (min, max, speed, curve, phase) for the dimmable device.
+    settings_codes = {cmd.command for cmd in read_cmds}
+    assert CMD_OUTPUT_MIN_LEVEL in settings_codes
+    assert CMD_OUTPUT_MAX_LEVEL in settings_codes
+    assert CMD_OUTPUT_SPEED in settings_codes
+    assert CMD_OUTPUT_CURVE_TYPE in settings_codes
+
+
+async def test_settings_stored_on_event_and_listener_notified(monkeypatch):
+    """_on_event for a settings reply stores the value and fires listeners."""
+    from plejd.const import CMD_OUTPUT_MIN_LEVEL
+    from plejd.protocol import Command
+
+    client = _FakeClient()
+    _patch_connect(monkeypatch, client)
+    ble = types.SimpleNamespace(address="01:02:03:04:05:a0")
+    hass = _hass([_info("01:02:03:04:05:a0")], {"01:02:03:04:05:a0": ble})
+    c = PlejdCoordinator(hass, _entry(discovered=None))
+    await c.async_start()
+    seen = []
+    c.async_add_listener(lambda: seen.append(1))
+    # Simulate a min-level reply for address 5: [0xFF, 0xFF] = 100%.
+    # command_type=0x03 (TYPE_READ|TYPE_ACK) — replies carry the Ack bit set (docs/protocol.md).
+    c._on_event(Command(address=5, command_type=0x03, command=CMD_OUTPUT_MIN_LEVEL, data=bytes([0xFF, 0xFF])))
+    assert c.settings_for(5) is not None
+    assert c.settings_for(5).min_level == 100.0
+    assert seen == [1]
+
+
+async def test_settings_ignores_write_echo_not_a_read_reply(monkeypatch):
+    """A write (TYPE_DONT_RESPOND) echoed back on the same feed must not be decoded as a
+    reply — it carries [output, value...], not the reply's value-only bytes, and would
+    corrupt the cache with a bogus value."""
+    from plejd.const import CMD_OUTPUT_MIN_LEVEL
+    from plejd.protocol import TYPE_DONT_RESPOND, Command
+
+    client = _FakeClient()
+    _patch_connect(monkeypatch, client)
+    ble = types.SimpleNamespace(address="01:02:03:04:05:a0")
+    hass = _hass([_info("01:02:03:04:05:a0")], {"01:02:03:04:05:a0": ble})
+    c = PlejdCoordinator(hass, _entry(discovered=None))
+    await c.async_start()
+    # Our own set_output_min_level(addr, output=1, 0.0) write payload: [output, lo, hi].
+    c._on_event(Command(address=5, command_type=TYPE_DONT_RESPOND, command=CMD_OUTPUT_MIN_LEVEL, data=bytes([1, 0, 0])))
+    assert c.settings_for(5) is None  # not cached as if it were a read reply
+
+
+async def test_settings_all_commands_stored(monkeypatch):
+    """All settings command codes are stored in _output_settings."""
+    from plejd.const import (
+        CMD_OUTPUT_BOOT_STATE,
+        CMD_OUTPUT_CURVE_TYPE,
+        CMD_OUTPUT_INRUSH_CURRENT,
+        CMD_OUTPUT_MAX_LEVEL,
+        CMD_OUTPUT_MIN_LEVEL,
+        CMD_OUTPUT_PHASE_DIM_TYPE,
+        CMD_OUTPUT_RELAY_CONFIG,
+        CMD_OUTPUT_RELAY_OFF_TIME,
+        CMD_OUTPUT_SPEED,
+    )
+    from plejd.protocol import Command
+
+    client = _FakeClient()
+    _patch_connect(monkeypatch, client)
+    ble = types.SimpleNamespace(address="01:02:03:04:05:a0")
+    hass = _hass([_info("01:02:03:04:05:a0")], {"01:02:03:04:05:a0": ble})
+    c = PlejdCoordinator(hass, _entry(discovered=None))
+    await c.async_start()
+
+    # min: 50% = 0x7FFF
+    c._on_event(Command(5, 0x03, CMD_OUTPUT_MIN_LEVEL, bytes([0xFF, 0x7F])))
+    # max: 100%
+    c._on_event(Command(5, 0x03, CMD_OUTPUT_MAX_LEVEL, bytes([0xFF, 0xFF])))
+    # speed: instant
+    c._on_event(Command(5, 0x03, CMD_OUTPUT_SPEED, bytes([0xFF, 0xFF])))
+    # curve: logarithmic (1)
+    c._on_event(Command(5, 0x03, CMD_OUTPUT_CURVE_TYPE, bytes([1])))
+    # phase: leading_edge (1)
+    c._on_event(Command(5, 0x03, CMD_OUTPUT_PHASE_DIM_TYPE, bytes([1])))
+    # boot state: use_last (1-byte reply)
+    c._on_event(Command(5, 0x03, CMD_OUTPUT_BOOT_STATE, bytes([0x00])))
+    # relay off time: 2s = 200 centiseconds = [0xC8, 0x00]
+    c._on_event(Command(5, 0x03, CMD_OUTPUT_RELAY_OFF_TIME, bytes([0xC8, 0x00])))
+    # relay pole config: one_pole (wire byte 1)
+    c._on_event(Command(5, 0x03, CMD_OUTPUT_RELAY_CONFIG, bytes([1])))
+    # inrush current: 500ms = 50 centiseconds
+    c._on_event(Command(5, 0x03, CMD_OUTPUT_INRUSH_CURRENT, bytes([50, 0])))
+
+    s = c.settings_for(5)
+    assert s.max_level == 100.0
+    assert s.speed == 0.0
+    assert s.curve == 1
+    assert s.phase_dim == 1
+    assert s.boot_state is True  # 1-byte reply → use_last
+    assert s.relay_off_time == 2.0
+    assert s.relay_pole_config == 1
+    assert s.inrush_current_ms == 500
+
+
+async def test_settings_short_reply_ignored(monkeypatch):
+    """A too-short settings reply is silently dropped."""
+    from plejd.const import CMD_OUTPUT_MIN_LEVEL
+    from plejd.protocol import Command
+
+    client = _FakeClient()
+    _patch_connect(monkeypatch, client)
+    ble = types.SimpleNamespace(address="01:02:03:04:05:a0")
+    hass = _hass([_info("01:02:03:04:05:a0")], {"01:02:03:04:05:a0": ble})
+    c = PlejdCoordinator(hass, _entry(discovered=None))
+    await c.async_start()
+    c._on_event(Command(5, 0x03, CMD_OUTPUT_MIN_LEVEL, bytes([0x01])))  # only 1 byte, too short
+    assert c.settings_for(5) is None  # not stored
+
+
+def test_settings_from_cloud_with_values():
+    from plejd.coordinator import _settings_from_cloud
+
+    s = _settings_from_cloud({"minDim": 32767, "maxDim": 65535, "dimCurve": 1})
+    assert s is not None
+    assert s.curve == 1
+    assert s.min_level == pytest.approx(50.0, abs=0.1)
+    assert s.max_level == 100.0
+
+
+def test_settings_from_cloud_empty_returns_none():
+    from plejd.coordinator import _settings_from_cloud
+
+    assert _settings_from_cloud({}) is None
+
+
+def test_coordinator_pre_populates_from_cloud_output_settings():
+    """Cloud outputSettings pre-populate _output_settings on init."""
+    dev = {**_DEV, "output_settings": {"minDim": 32767, "maxDim": 65535, "dimCurve": 1}}
+    entry = types.SimpleNamespace(
+        entry_id="e1",
+        data={CONF_CRYPTO_KEY: _KEY_HEX, CONF_DEVICES: [dev], CONF_DISCOVERED_ADDRESS: None},
+    )
+    c = PlejdCoordinator(_hass(), entry)
+    s = c.settings_for(_DEV["address"])
+    assert s is not None
+    assert s.curve == 1
+
+
+async def test_relay_off_time_read_on_ble_connect(monkeypatch):
+    """Devices in RELAY_HARDWARE get a relay-off-time READ issued during connect."""
+    from plejd.const import CMD_OUTPUT_RELAY_OFF_TIME
+    from plejd.protocol import TYPE_READ, decode_command
+
+    relay_dev = {**_DEV, "hardware_id": 3, "model": "CTR-01", "dimmable": False}
+    client = _FakeClient()
+    _patch_connect(monkeypatch, client)
+    ble = types.SimpleNamespace(address="01:02:03:04:05:a0")
+    hass = _hass([_info("01:02:03:04:05:a0")], {"01:02:03:04:05:a0": ble})
+    entry = types.SimpleNamespace(
+        entry_id="e1",
+        data={CONF_CRYPTO_KEY: _KEY_HEX, CONF_DEVICES: [relay_dev], CONF_DISCOVERED_ADDRESS: None},
+    )
+    c = PlejdCoordinator(hass, entry)
+    await c.async_start()
+
+    cmds = [decode_command(c._connection.mesh.decrypt(w[1])) for w in client.writes if w[0] == PLEJD_CHAR_DATA_UUID]
+    read_cmds = {cmd.command for cmd in cmds if cmd.command_type == TYPE_READ}
+    assert CMD_OUTPUT_RELAY_OFF_TIME in read_cmds
+
+
+async def test_boot_state_and_relay_off_time_setters(monkeypatch):
+    """async_set_output_boot_state and async_set_output_relay_off_time write correct vectors."""
+    from plejd.const import CMD_OUTPUT_BOOT_STATE, CMD_OUTPUT_RELAY_OFF_TIME
+    from plejd.protocol import decode_command
+
+    client = _FakeClient()
+    _patch_connect(monkeypatch, client)
+    ble = types.SimpleNamespace(address="01:02:03:04:05:a0")
+    hass = _hass([_info("01:02:03:04:05:a0")], {"01:02:03:04:05:a0": ble})
+    c = PlejdCoordinator(hass, _entry(discovered=None))
+    await c.async_start()
+
+    await c.async_set_output_boot_state(9, 0, True)
+    bs = decode_command(c._connection.mesh.decrypt(client.writes[-1][1]))
+    assert bs.command == CMD_OUTPUT_BOOT_STATE and bs.data == bytes([0x00])
+
+    await c.async_set_output_relay_off_time(9, 0, 2.0)
+    rt = decode_command(c._connection.mesh.decrypt(client.writes[-1][1]))
+    assert rt.command == CMD_OUTPUT_RELAY_OFF_TIME and rt.data == bytes([0x00, 0xC8, 0x00])
+
+    settings = c.settings_for(9)
+    assert settings.boot_state is True
+    assert settings.relay_off_time == 2.0
+
+
+async def test_relay_config_and_inrush_setters(monkeypatch):
+    """async_set_output_relay_config and async_set_output_inrush_current write correct vectors."""
+    from plejd.const import CMD_OUTPUT_INRUSH_CURRENT, CMD_OUTPUT_RELAY_CONFIG
+    from plejd.protocol import decode_command
+
+    client = _FakeClient()
+    _patch_connect(monkeypatch, client)
+    ble = types.SimpleNamespace(address="01:02:03:04:05:a0")
+    hass = _hass([_info("01:02:03:04:05:a0")], {"01:02:03:04:05:a0": ble})
+    c = PlejdCoordinator(hass, _entry(discovered=None))
+    await c.async_start()
+
+    await c.async_set_output_relay_config(9, 0, 1)  # one_pole
+    rc = decode_command(c._connection.mesh.decrypt(client.writes[-1][1]))
+    assert rc.command == CMD_OUTPUT_RELAY_CONFIG and rc.data == bytes([0x00, 0x01])
+
+    await c.async_set_output_inrush_current(9, 0, 500)  # 500ms = 50 cs
+    ic = decode_command(c._connection.mesh.decrypt(client.writes[-1][1]))
+    assert ic.command == CMD_OUTPUT_INRUSH_CURRENT and ic.data == bytes([0x00, 50, 0x00])
+
+    settings = c.settings_for(9)
+    assert settings.relay_pole_config == 1
+    assert settings.inrush_current_ms == 500
+
+
+async def test_relay_config_hardware_read_during_connect(monkeypatch):
+    """Devices in RELAY_CONFIG_HARDWARE get a relay-config READ issued during connect."""
+    from plejd.const import CMD_OUTPUT_RELAY_CONFIG
+    from plejd.protocol import TYPE_READ, decode_command
+
+    relay_config_dev = {**_DEV, "hardware_id": 11, "model": "DIM-01-2P"}
+    client = _FakeClient()
+    _patch_connect(monkeypatch, client)
+    ble = types.SimpleNamespace(address="01:02:03:04:05:a0")
+    hass = _hass([_info("01:02:03:04:05:a0")], {"01:02:03:04:05:a0": ble})
+    entry = types.SimpleNamespace(
+        entry_id="e1",
+        data={CONF_CRYPTO_KEY: _KEY_HEX, CONF_DEVICES: [relay_config_dev], CONF_DISCOVERED_ADDRESS: None},
+    )
+    c = PlejdCoordinator(hass, entry)
+    await c.async_start()
+
+    cmds = [decode_command(c._connection.mesh.decrypt(w[1])) for w in client.writes if w[0] == PLEJD_CHAR_DATA_UUID]
+    read_cmds = {cmd.command for cmd in cmds if cmd.command_type == TYPE_READ}
+    assert CMD_OUTPUT_RELAY_CONFIG in read_cmds
+
+
+async def test_relay_config_short_reply_ignored(monkeypatch):
+    """An empty relay config reply is silently dropped."""
+    from plejd.const import CMD_OUTPUT_RELAY_CONFIG
+    from plejd.protocol import Command
+
+    client = _FakeClient()
+    _patch_connect(monkeypatch, client)
+    ble = types.SimpleNamespace(address="01:02:03:04:05:a0")
+    hass = _hass([_info("01:02:03:04:05:a0")], {"01:02:03:04:05:a0": ble})
+    c = PlejdCoordinator(hass, _entry(discovered=None))
+    await c.async_start()
+    c._on_event(Command(5, 0x03, CMD_OUTPUT_RELAY_CONFIG, b""))
+    assert c.settings_for(5) is None
+
+
+async def test_inrush_current_short_reply_ignored(monkeypatch):
+    """A too-short inrush current reply is silently dropped."""
+    from plejd.const import CMD_OUTPUT_INRUSH_CURRENT
+    from plejd.protocol import Command
+
+    client = _FakeClient()
+    _patch_connect(monkeypatch, client)
+    ble = types.SimpleNamespace(address="01:02:03:04:05:a0")
+    hass = _hass([_info("01:02:03:04:05:a0")], {"01:02:03:04:05:a0": ble})
+    c = PlejdCoordinator(hass, _entry(discovered=None))
+    await c.async_start()
+    c._on_event(Command(5, 0x03, CMD_OUTPUT_INRUSH_CURRENT, bytes([50])))  # only 1 byte
+    assert c.settings_for(5) is None
 
 
 def _fw_site(firmware_by_device):

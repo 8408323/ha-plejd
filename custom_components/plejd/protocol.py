@@ -17,10 +17,14 @@ from dataclasses import dataclass
 from .const import (
     CMD_GROUP_STATE_AND_LEVEL,
     CMD_NOTIFY_EVENTS,
+    CMD_OUTPUT_BOOT_STATE,
     CMD_OUTPUT_CURVE_TYPE,
+    CMD_OUTPUT_INRUSH_CURRENT,
     CMD_OUTPUT_MAX_LEVEL,
     CMD_OUTPUT_MIN_LEVEL,
     CMD_OUTPUT_PHASE_DIM_TYPE,
+    CMD_OUTPUT_RELAY_CONFIG,
+    CMD_OUTPUT_RELAY_OFF_TIME,
     CMD_OUTPUT_SET,
     CMD_OUTPUT_SPEED,
     CMD_OUTPUT_START_LEVEL,
@@ -352,6 +356,167 @@ class OutputState:
     output: int
     on: bool
     level: int
+
+
+@dataclass
+class OutputSettings:
+    """Per-output dimmer settings from BLE read-back or cloud pre-load."""
+
+    min_level: float | None = None  # 0-100 percent
+    max_level: float | None = None  # 0-100 percent
+    speed: float | None = None  # seconds (0 = instant)
+    curve: int | None = None  # LoadCurve byte
+    phase_dim: int | None = None  # PhaseOutputType byte
+    boot_state: bool | None = None  # True=use_last, False=off (0x00D7)
+    relay_off_time: float | None = None  # seconds, relay devices only (0x00D4)
+    relay_pole_config: int | None = None  # RelayConfig wire byte (0=TwoPole, 1=OnePole); 0x022A
+    inrush_current_ms: int | None = None  # milliseconds (0=disabled, wire=centiseconds); 0x00A2
+
+
+def request_output_min_level(address: int, output: int) -> bytes:
+    """Read an output's minimum dim level (0x00C9, Read)."""
+    return encode_command(address, CMD_OUTPUT_MIN_LEVEL, bytes([output & 0xFF]), command_type=TYPE_READ)
+
+
+def request_output_max_level(address: int, output: int) -> bytes:
+    """Read an output's maximum dim level (0x00CA, Read)."""
+    return encode_command(address, CMD_OUTPUT_MAX_LEVEL, bytes([output & 0xFF]), command_type=TYPE_READ)
+
+
+def request_output_speed(address: int, output: int) -> bytes:
+    """Read an output's dim transition time (0x00CB, Read)."""
+    return encode_command(address, CMD_OUTPUT_SPEED, bytes([output & 0xFF]), command_type=TYPE_READ)
+
+
+def request_output_curve(address: int, output: int) -> bytes:
+    """Read an output's dimming curve (0x00CC, Read)."""
+    return encode_command(address, CMD_OUTPUT_CURVE_TYPE, bytes([output & 0xFF]), command_type=TYPE_READ)
+
+
+def request_output_phase_dim(address: int, output: int) -> bytes:
+    """Read an output's phase-dim edge (0x00CE, Read)."""
+    return encode_command(address, CMD_OUTPUT_PHASE_DIM_TYPE, bytes([output & 0xFF]), command_type=TYPE_READ)
+
+
+def decode_output_level_reply(cmd: Command) -> float | None:
+    """Decode a min/max level read reply: [lo, hi] → 0-100 percent."""
+    if len(cmd.data) < 2:
+        return None
+    return round((cmd.data[0] | (cmd.data[1] << 8)) / 0xFFFF * 100, 1)
+
+
+def decode_output_speed_reply(cmd: Command) -> float | None:
+    """Decode a speed read reply: [lo, hi] → seconds (inverse of set_output_speed)."""
+    if len(cmd.data) < 2:
+        return None
+    lo, raw_hi = cmd.data[0], cmd.data[1]
+    if lo == 0xFF and raw_hi == 0xFF:  # instant sentinel (see set_output_speed)
+        return 0.0
+    steps = lo | ((raw_hi & 0x7F) << 8)  # strip the >0.5s flag from the high byte
+    return round(0xFFFF / steps / 100, 2) if steps else 0.0
+
+
+def decode_output_curve_reply(cmd: Command) -> int | None:
+    """Decode a curve type read reply: [curve_byte] → LoadCurve int."""
+    return int(cmd.data[0]) if cmd.data else None
+
+
+def decode_output_phase_dim_reply(cmd: Command) -> int | None:
+    """Decode a phase-dim edge read reply: [phase_byte] → PhaseOutputType int."""
+    return int(cmd.data[0]) if cmd.data else None
+
+
+def set_output_boot_state(address: int, output: int, use_last: bool) -> bytes:
+    """Set after-power-outage boot state (0x00D7).
+
+    use_last=True → [output] (restore last state); False → [output, 0x00] (boot off).
+    """
+    payload = bytes([output & 0xFF]) + (b"" if use_last else b"\x00")
+    return encode_command(address, CMD_OUTPUT_BOOT_STATE, payload, command_type=TYPE_DONT_RESPOND)
+
+
+def request_output_boot_state(address: int, output: int) -> bytes:
+    """Read an output's boot state (0x00D7, Read)."""
+    return encode_command(address, CMD_OUTPUT_BOOT_STATE, bytes([output & 0xFF]), command_type=TYPE_READ)
+
+
+def decode_output_boot_state_reply(cmd: Command) -> bool | None:
+    """Decode a boot-state reply → True=use_last, False=off, None=unrecognised format."""
+    if not cmd.data:
+        return None
+    if len(cmd.data) == 1:
+        return True
+    if cmd.data[1] == 0:
+        return False
+    return None
+
+
+def set_output_relay_off_time(address: int, output: int, seconds: float) -> bytes:
+    """Set minimum relay off time (0x00D4): [output, u16le centiseconds]."""
+    cs = max(0, min(0xFFFF, round(seconds * 100)))
+    return encode_command(
+        address,
+        CMD_OUTPUT_RELAY_OFF_TIME,
+        bytes([output & 0xFF, cs & 0xFF, (cs >> 8) & 0xFF]),
+        command_type=TYPE_DONT_RESPOND,
+    )
+
+
+def request_output_relay_off_time(address: int, output: int) -> bytes:
+    """Read an output's minimum relay off time (0x00D4, Read)."""
+    return encode_command(address, CMD_OUTPUT_RELAY_OFF_TIME, bytes([output & 0xFF]), command_type=TYPE_READ)
+
+
+def decode_output_relay_off_time_reply(cmd: Command) -> float | None:
+    """Decode a relay off-time reply: [u16le centiseconds] → seconds."""
+    if len(cmd.data) < 2:
+        return None
+    return round((cmd.data[0] | (cmd.data[1] << 8)) / 100, 2)
+
+
+def set_output_relay_config(address: int, output: int, config: int) -> bytes:
+    """Set relay pole configuration (0x022A): [output, RelayConfig wire byte].
+
+    Wire byte 0=TwoPole, 1=OnePole (from app GetBytes; NOT the raw enum index).
+    """
+    payload = bytes([output & 0xFF, config & 0xFF])
+    return encode_command(address, CMD_OUTPUT_RELAY_CONFIG, payload, command_type=TYPE_DONT_RESPOND)
+
+
+def request_output_relay_config(address: int, output: int) -> bytes:
+    """Read an output's relay pole configuration (0x022A, Read)."""
+    return encode_command(address, CMD_OUTPUT_RELAY_CONFIG, bytes([output & 0xFF]), command_type=TYPE_READ)
+
+
+def decode_output_relay_config_reply(cmd: Command) -> int | None:
+    """Decode a relay config reply: [config_byte] → RelayConfig wire int (0=TwoPole, 1=OnePole)."""
+    return int(cmd.data[0]) if cmd.data else None
+
+
+def set_output_inrush_current(address: int, output: int, time_ms: int) -> bytes:
+    """Set inrush current protection time (0x00A2): [output, u16le centiseconds].
+
+    time_ms=0 disables protection; the wire unit is centiseconds (ms // 10).
+    """
+    cs = max(0, min(0xFFFF, time_ms // 10))
+    return encode_command(
+        address,
+        CMD_OUTPUT_INRUSH_CURRENT,
+        bytes([output & 0xFF, cs & 0xFF, (cs >> 8) & 0xFF]),
+        command_type=TYPE_DONT_RESPOND,
+    )
+
+
+def request_output_inrush_current(address: int, output: int) -> bytes:
+    """Read an output's inrush current protection time (0x00A2, Read)."""
+    return encode_command(address, CMD_OUTPUT_INRUSH_CURRENT, bytes([output & 0xFF]), command_type=TYPE_READ)
+
+
+def decode_output_inrush_current_reply(cmd: Command) -> int | None:
+    """Decode an inrush current reply: [u16le centiseconds] → milliseconds."""
+    if len(cmd.data) < 2:
+        return None
+    return (cmd.data[0] | (cmd.data[1] << 8)) * 10
 
 
 def decode_output_state(cmd: Command) -> OutputState | None:
