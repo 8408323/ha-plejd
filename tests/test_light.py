@@ -41,8 +41,8 @@ class _Coordinator:
         self.listeners.append(cb)
         return lambda: self.listeners.remove(cb)
 
-    async def async_set_output(self, address, output, on, level):
-        self.commands.append((address, output, on, level))
+    async def async_set_output(self, address, on, level):
+        self.commands.append((address, on, level))
 
 
 async def test_setup_entry_creates_lights_only_for_light_devices():
@@ -97,28 +97,28 @@ async def test_turn_on_with_brightness():
     coord = _Coordinator([])
     light = PlejdLight(coord, _device())
     await light.async_turn_on(**{ATTR_BRIGHTNESS: 77})
-    assert coord.commands == [(5, 0, True, 77)]
+    assert coord.commands == [(5, True, 77)]
 
 
 async def test_turn_on_without_brightness_defaults_full():
     coord = _Coordinator([], state=None)
     light = PlejdLight(coord, _device())
     await light.async_turn_on()
-    assert coord.commands == [(5, 0, True, 255)]
+    assert coord.commands == [(5, True, 255)]
 
 
 async def test_turn_on_without_brightness_restores_last_level():
     coord = _Coordinator([], state=OutputState(output=0, on=False, level=140))
     light = PlejdLight(coord, _device())
     await light.async_turn_on()
-    assert coord.commands == [(5, 0, True, 140)]
+    assert coord.commands == [(5, True, 140)]
 
 
 async def test_turn_off():
     coord = _Coordinator([])
     light = PlejdLight(coord, _device())
     await light.async_turn_off()
-    assert coord.commands == [(5, 0, False, 0)]
+    assert coord.commands == [(5, False, 0)]
 
 
 async def test_added_to_hass_subscribes():

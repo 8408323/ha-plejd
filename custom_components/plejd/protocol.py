@@ -95,6 +95,21 @@ def set_output_state_and_level(
     return encode_command(address, CMD_OUTPUT_STATE_AND_LEVEL, payload, command_type=command_type)
 
 
+def set_group_state_and_level(address: int, on: bool, level: int, command_type: int = TYPE_DONT_RESPOND) -> bytes:
+    """Set an output on/off and dim level (0x0098). `level` is the 8-bit dim value.
+
+    This is the command the app actually sends for live control (confirmed on a live
+    gateway capture): the per-output cloud address alone identifies the target — unlike
+    0x00C8, there's no separate output byte, matching this opcode's own decode side
+    (`decode_output_state`, which reads `output=cmd.address`). Using 0x00C8 with the
+    per-output address instead of a device-level address broke every output past the
+    first on a multi-output device (#71).
+    """
+    lvl = level & 0xFF
+    payload = bytes([1 if on else 0, lvl, lvl])
+    return encode_command(address, CMD_GROUP_STATE_AND_LEVEL, payload, command_type=command_type)
+
+
 def request_output_state_and_level(address: int, output: int) -> bytes:
     """Read an output's current state and level (0x00C8, Read)."""
     return encode_command(address, CMD_OUTPUT_STATE_AND_LEVEL, bytes([output & 0xFF]), command_type=TYPE_READ)
