@@ -119,15 +119,21 @@ except ImportError:
         def _get_reauth_entry(self):
             return getattr(self, "_reauth_entry", None)
 
-        def async_update_reload_and_abort(self, entry, *, data_updates=None, **kwargs):
-            return {"type": "abort", "reason": "reauth_successful", "data_updates": data_updates}
+        def _get_reconfigure_entry(self):
+            return getattr(self, "_reconfigure_entry", None)
+
+        def async_update_reload_and_abort(self, entry, *, data_updates=None, reason="reauth_successful", **kwargs):
+            return {"type": "abort", "reason": reason, "data_updates": data_updates}
 
     class _OptionsFlow:
         def async_create_entry(self, *, title, data):
             return {"type": "create_entry", "title": title, "data": data}
 
-        def async_show_form(self, *, step_id, data_schema=None, errors=None):
-            return {"type": "form", "step_id": step_id, "data_schema": data_schema, "errors": errors}
+        def async_show_form(self, *, step_id, data_schema=None, errors=None, **kwargs):
+            return {"type": "form", "step_id": step_id, "data_schema": data_schema, "errors": errors, **kwargs}
+
+        def async_show_menu(self, *, step_id, menu_options):
+            return {"type": "menu", "step_id": step_id, "menu_options": menu_options}
 
     _ce.ConfigEntry = _ConfigEntry  # type: ignore[attr-defined]
     _ce.ConfigFlow = _ConfigFlow  # type: ignore[attr-defined]
@@ -191,9 +197,13 @@ except ImportError:
     def _async_ble_device_from_address(hass, address, connectable=True):
         return getattr(hass, "ble_devices", {}).get(address)
 
+    def _async_scanner_count(hass, connectable=True):
+        return getattr(hass, "scanner_count", 1)
+
     _bt.BluetoothServiceInfoBleak = _BluetoothServiceInfoBleak  # type: ignore[attr-defined]
     _bt.async_discovered_service_info = _async_discovered_service_info  # type: ignore[attr-defined]
     _bt.async_ble_device_from_address = _async_ble_device_from_address  # type: ignore[attr-defined]
+    _bt.async_scanner_count = _async_scanner_count  # type: ignore[attr-defined]
     sys.modules.setdefault("homeassistant.components.bluetooth", _bt)
 
     _light = types.ModuleType("homeassistant.components.light")

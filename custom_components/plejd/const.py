@@ -37,6 +37,10 @@ TRANSPORT_BLE = "ble"  # local Bluetooth only
 # (the "0001") swapped for the role suffix below.
 PLEJD_SERVICE_UUID = "31ba0001-6085-4726-be45-040c957391b5"
 
+# Bluetooth SIG company identifier Plejd uses in advertisement manufacturer data
+# (Plejd.Shared PlejdManufacturerId; confirmed against a live capture).
+PLEJD_BLE_COMPANY_ID = 887
+
 
 def _char(suffix: str) -> str:
     return PLEJD_SERVICE_UUID.replace("0001", suffix, 1)
@@ -164,6 +168,10 @@ PLEJD_FN_SITE_LIST = "functions/getSiteList"  # -> [{siteId, ...}]
 PLEJD_FN_SITE_BY_ID = "functions/getSiteById"  # {siteId} -> site w/ cryptoKey + devices
 PLEJD_FN_FIRMWARE_BY_HW = "functions/getFirmwaresByHardwareId"  # {hardwareId, faceplateId} -> [] when up to date
 PLEJD_FN_UPDATE_DEVICE = "functions/updateDevice_V2"  # {siteId, deviceId, deviceParseId, title} -> rename in the app
+PLEJD_FN_CREATE_DEVICE = "functions/createPlejdDevice_V2"  # register new device to site
+PLEJD_FN_COMPATIBLE_DEVICES = "functions/getCompatibleDevices"  # {devices:[{hardwareId,...}]} -> neededAddresses
+PLEJD_FN_CREATE_ROOM = "functions/createRoom"  # {siteId, roomId, title, category, imageHash} -> int
+PLEJD_FN_SET_INPUT = "functions/setPlejdDeviceInputSetting"  # {siteId, deviceId, input, buttonType, ...} -> bool
 
 # ── Device types (Plejd.Shared HardwareType enum: id -> product name) ──
 HARDWARE_TYPES: dict[int, str] = {
