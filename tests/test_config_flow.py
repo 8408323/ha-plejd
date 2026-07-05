@@ -19,6 +19,7 @@ from plejd.cloud import (
 from plejd.config_flow import PlejdConfigFlow
 from plejd.const import (
     CONF_CRYPTO_KEY,
+    CONF_DEVICE_ADDRESSES,
     CONF_DEVICES,
     CONF_GATEWAYS,
     CONF_INSTALLATION_ID,
@@ -61,6 +62,7 @@ def _site(site_id="S1"):
         scenes=[scene],
         gateways=["gw1"],
         resource_set_id="rsABC",
+        device_addresses={"d1": 1, "w1": 33},
     )
 
 
@@ -118,6 +120,7 @@ async def test_single_site_creates_entry(monkeypatch):
     assert result["data"][CONF_DEVICES][0]["model"] == "DIM-01"
     assert result["data"][CONF_GATEWAYS] == ["gw1"]
     assert result["data"][CONF_RESOURCE_SET_ID] == "rsABC"
+    assert result["data"][CONF_DEVICE_ADDRESSES] == {"d1": 1, "w1": 33}
     assert len(result["data"][CONF_INSTALLATION_ID]) == 36  # a generated uuid4
 
 

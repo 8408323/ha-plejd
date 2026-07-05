@@ -279,6 +279,7 @@ except ImportError:
 
     class _BinarySensorDeviceClass(str, enum.Enum):
         MOTION = "motion"
+        PROBLEM = "problem"
 
     class _BinarySensorEntity:
         def async_on_remove(self, func):
