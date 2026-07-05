@@ -505,3 +505,21 @@ def test_request_boot_state_and_relay_off_time_use_read_type():
         assert v[2] == TYPE_READ
         assert (v[3] << 8) | v[4] == expected_cmd
         assert v[5:] == bytes([0x01])  # output index
+
+
+def test_notify_events_request_and_decode():
+    from plejd.const import CMD_NOTIFY_EVENTS, CMD_SCENE
+    from plejd.protocol import TYPE_READ, Command, decode_notify_events, request_notify_events
+
+    req = request_notify_events(11)
+    assert req[2] == TYPE_READ and (req[3] << 8) | req[4] == CMD_NOTIFY_EVENTS and req[5:] == b""
+    # healthy device: all-zero bitfield -> no faults
+    assert decode_notify_events(Command(11, 0x03, CMD_NOTIFY_EVENTS, bytes(8))) == frozenset()
+    # 0x8 = overtemperature, 0x1 = hard_fault (little-endian uint64)
+    faults = decode_notify_events(Command(11, 0x03, CMD_NOTIFY_EVENTS, (0x9).to_bytes(8, "little")))
+    assert faults == frozenset({"hard_fault", "overtemperature"})
+    # non-NotifyEvents command -> None
+    assert decode_notify_events(Command(0, 0, CMD_SCENE, b"")) is None
+    # truncated/malformed payload -> None, never treated as "no faults"
+    assert decode_notify_events(Command(11, 0x03, CMD_NOTIFY_EVENTS, bytes(7))) is None
+    assert decode_notify_events(Command(11, 0x03, CMD_NOTIFY_EVENTS, b"")) is None

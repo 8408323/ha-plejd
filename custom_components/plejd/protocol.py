@@ -16,6 +16,7 @@ from dataclasses import dataclass
 
 from .const import (
     CMD_GROUP_STATE_AND_LEVEL,
+    CMD_NOTIFY_EVENTS,
     CMD_OUTPUT_BOOT_STATE,
     CMD_OUTPUT_CURVE_TYPE,
     CMD_OUTPUT_INRUSH_CURRENT,
@@ -35,6 +36,7 @@ from .const import (
     CMD_TIME_EVENT_TYPE,
     CMD_TRM_MODE,
     CMD_TRM_SETPOINT,
+    NOTIFY_EVENT_FLAGS,
     SOURCE_APP,
     SOURCE_MOTION,
     SUBPKG_LUX,
@@ -117,6 +119,24 @@ def set_group_state_and_level(address: int, on: bool, level: int, command_type: 
 def request_output_state_and_level(address: int, output: int) -> bytes:
     """Read an output's current state and level (0x00C8, Read)."""
     return encode_command(address, CMD_OUTPUT_STATE_AND_LEVEL, bytes([output & 0xFF]), command_type=TYPE_READ)
+
+
+def request_notify_events(address: int) -> bytes:
+    """Read a device's NotifyEvents fault bitfield (0x002B, Read). Reply lands on LastChanged."""
+    return encode_command(address, CMD_NOTIFY_EVENTS, b"", command_type=TYPE_READ)
+
+
+def decode_notify_events(cmd: Command) -> frozenset[str] | None:
+    """Decode a NotifyEvents report (0x002B) into the set of active fault-flag names.
+
+    Data is a little-endian uint64 bitfield (validated as 0 against healthy hardware);
+    returns None for non-0x002B commands or a truncated/malformed payload (never treat
+    a short frame as "no faults" — that would mask a real active fault).
+    """
+    if cmd.command != CMD_NOTIFY_EVENTS or len(cmd.data) < 8:
+        return None
+    bits = int.from_bytes(cmd.data[:8], "little")
+    return frozenset(name for mask, name in NOTIFY_EVENT_FLAGS.items() if bits & mask)
 
 
 def _level_fraction_to_u16le(fraction: float) -> bytes:

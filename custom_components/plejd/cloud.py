@@ -117,6 +117,9 @@ class PlejdCloudSite:
     resource_set_id: str | None  # for the remote-control WebSocket (Resource-Set-ID)
     # every physical device's installed firmware (outputs, sensors, gateway)
     firmware_by_device: dict[str, PlejdDeviceFirmware] = field(default_factory=dict)
+    # every physical device's own mesh address (outputs, sensors, gateway) — distinct from
+    # an output's address; this is what NotifyEvents/fault polling must target.
+    device_addresses: dict[str, int] = field(default_factory=dict)
 
 
 def _headers(token: str | None = None) -> dict[str, str]:
@@ -318,6 +321,13 @@ def parse_site(site: dict) -> PlejdCloudSite:
         resource_set_id = resource_sets[0].get("objectId")
 
     meta = site.get("site") or site  # id/title are nested under "site" in the real payload
+    device_addresses: dict[str, int] = {}
+    for device_id, addr in device_address.items():
+        try:
+            device_addresses[device_id] = int(addr)
+        except (TypeError, ValueError):
+            continue
+
     return PlejdCloudSite(
         site_id=meta.get("siteId") or "",
         title=meta.get("title") or "Plejd",
@@ -329,4 +339,5 @@ def parse_site(site: dict) -> PlejdCloudSite:
         gateways=gateways,
         resource_set_id=resource_set_id,
         firmware_by_device=firmware_by_device,
+        device_addresses=device_addresses,
     )
