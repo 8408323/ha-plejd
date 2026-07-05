@@ -218,6 +218,10 @@ class PlejdCoordinator:
         """Active fault-flag names last reported by a device (empty if none/unknown)."""
         return self._faults.get(address, frozenset())
 
+    def device_address_for(self, device_id: str) -> int | None:
+        """A physical device's own mesh address (for fault entities), or None if unresolved."""
+        return self._device_addresses.get(device_id)
+
     @callback
     def _on_event(self, command: Command) -> None:
         if command.command in (CMD_GROUP_STATE_AND_LEVEL, CMD_OUTPUT_STATE_AND_LEVEL):

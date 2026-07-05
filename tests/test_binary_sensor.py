@@ -26,9 +26,15 @@ def _device(device_id="d1", address=5, output_index=0):
 
 
 class _Coordinator:
-    def __init__(self, motion, devices=()):
+    def __init__(self, motion, devices=(), gateways=(), device_addresses=None):
         self.motion = motion
         self.devices = list(devices)
+        self.gateways = list(gateways)
+        # default: assume each device's own output address is also its physical address,
+        # unless a test explicitly overrides this to exercise a mismatch.
+        self._device_addresses = (
+            device_addresses if device_addresses is not None else {d.device_id: d.address for d in self.devices}
+        )
         self.motion_listeners = []
         self.fault_listeners = []
         self._faults = {}
@@ -44,6 +50,9 @@ class _Coordinator:
     def faults_for(self, address):
         return self._faults.get(address, frozenset())
 
+    def device_address_for(self, device_id):
+        return self._device_addresses.get(device_id)
+
 
 def _sensor():
     s = PlejdMotionBinarySensor(_Coordinator([]), PlejdCloudMotion("w1", "Motion", 33))
@@ -56,7 +65,10 @@ async def test_setup_creates_motion_sensor():
     entry = types.SimpleNamespace(runtime_data=coord)
     added = []
     await async_setup_entry(None, entry, lambda entities: added.extend(entities))
-    assert len(added) == 1
+    # a motion sensor also gets its own fault (problem) sensor — it has no output,
+    # but is still a physical device that reports NotifyEvents.
+    assert len(added) == 2
+    assert {type(e) for e in added} == {PlejdMotionBinarySensor, PlejdProblemBinarySensor}
 
 
 def test_motion_on_then_clear():
@@ -94,13 +106,53 @@ async def test_setup_creates_one_problem_sensor_per_device():
     added = []
     await async_setup_entry(None, entry, lambda entities: added.extend(entities))
     problems = [e for e in added if isinstance(e, PlejdProblemBinarySensor)]
-    assert len(problems) == 2  # one per physical device (d1, d2), not per output
-    assert {p._attr_unique_id for p in problems} == {"fault_d1", "fault_d2"}
+    # one per physical device (d1, d2), not per output, plus the motion sensor (w1)
+    assert len(problems) == 3
+    assert {p._attr_unique_id for p in problems} == {"fault_d1", "fault_d2", "fault_w1"}
+
+
+async def test_setup_uses_physical_address_not_output_address():
+    """A multi-output device's fault sensor must poll/listen on its physical address."""
+    device = _device("d1", address=11)  # output address 11 ...
+    coord = _Coordinator([], devices=[device], device_addresses={"d1": 5})  # ... but physical address is 5
+    entry = types.SimpleNamespace(runtime_data=coord)
+    added = []
+    await async_setup_entry(None, entry, lambda entities: added.extend(entities))
+    assert len(added) == 1
+    assert added[0]._address == 5
+
+
+async def test_setup_creates_gateway_fault_sensor():
+    coord = _Coordinator([], gateways=["gw1"], device_addresses={"gw1": 9})
+    entry = types.SimpleNamespace(runtime_data=coord)
+    added = []
+    await async_setup_entry(None, entry, lambda entities: added.extend(entities))
+    assert len(added) == 1
+    assert added[0]._attr_unique_id == "fault_gw1" and added[0]._address == 9
+
+
+async def test_setup_skips_a_gateway_id_already_covered():
+    # defensive: a gateway_id that coincides with an already-seen device_id/sensor
+    # (shouldn't happen in real Plejd data, but must not double-add an entity).
+    coord = _Coordinator([PlejdCloudMotion("w1", "M", 33)], gateways=["w1"], device_addresses={"w1": 33})
+    entry = types.SimpleNamespace(runtime_data=coord)
+    added = []
+    await async_setup_entry(None, entry, lambda entities: added.extend(entities))
+    problems = [e for e in added if isinstance(e, PlejdProblemBinarySensor)]
+    assert len(problems) == 1  # not duplicated for the gateway pass
+
+
+async def test_setup_skips_devices_with_unresolved_address():
+    coord = _Coordinator([], devices=[_device("d1", 5)], gateways=["gw1"], device_addresses={})
+    entry = types.SimpleNamespace(runtime_data=coord)
+    added = []
+    await async_setup_entry(None, entry, lambda entities: added.extend(entities))
+    assert added == []  # neither d1 nor gw1 has a resolvable physical address
 
 
 def test_problem_sensor_reflects_faults():
     coord = _Coordinator([], devices=[_device("d1", 5)])
-    s = PlejdProblemBinarySensor(coord, coord.devices[0])
+    s = PlejdProblemBinarySensor(coord, "d1", 5, "Lamp", "DIM-01")
     assert s.is_on is False and s.extra_state_attributes == {"active_faults": []}
     coord._faults[5] = frozenset({"overtemperature", "hard_fault"})
     assert s.is_on is True
@@ -109,7 +161,7 @@ def test_problem_sensor_reflects_faults():
 
 async def test_problem_sensor_subscribes_and_updates_on_match():
     coord = _Coordinator([], devices=[_device("d1", 5)])
-    s = PlejdProblemBinarySensor(coord, coord.devices[0])
+    s = PlejdProblemBinarySensor(coord, "d1", 5, "Lamp", "DIM-01")
     writes = []
     s.async_write_ha_state = lambda: writes.append(1)
     await s.async_added_to_hass()

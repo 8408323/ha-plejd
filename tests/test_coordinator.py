@@ -1244,6 +1244,22 @@ async def test_poll_faults_one_device_failure_does_not_skip_the_rest(monkeypatch
     assert sorted(attempted) == [5, 6]  # device 6 was still polled despite device 5 failing
 
 
+def test_device_address_for_resolves_cached_physical_addresses():
+    entry = types.SimpleNamespace(
+        entry_id="e1",
+        data={
+            CONF_CRYPTO_KEY: _KEY_HEX,
+            CONF_DEVICES: [_DEV],
+            CONF_DISCOVERED_ADDRESS: None,
+            CONF_DEVICE_ADDRESSES: {"d1": 5, "w1": 33},
+        },
+    )
+    c = PlejdCoordinator(_hass(), entry)
+    assert c.device_address_for("d1") == 5
+    assert c.device_address_for("w1") == 33
+    assert c.device_address_for("unknown") is None
+
+
 async def test_poll_faults_resolves_addresses_from_cloud_when_not_cached(monkeypatch):
     """Entries added before CONF_DEVICE_ADDRESSES existed resolve it via one cloud fetch."""
     c = PlejdCoordinator(_hass(), _cloud_entry())  # has credentials, no cached device_addresses
