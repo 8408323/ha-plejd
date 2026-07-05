@@ -79,15 +79,19 @@ class PlejdDimLevelNumber(RestoreNumber):
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
+        # Subscribe before the restore await: a read reply arriving during it must not be
+        # missed, and must win over the (possibly stale) restored value once it lands.
+        self.async_on_remove(self._coordinator.async_add_listener(self._handle_coordinator_update))
         settings = self._coordinator.settings_for(self._device.address)
         val = getattr(settings, f"{self._kind}_level", None) if settings else None
-        if val is not None:
-            self._attr_native_value = val
-        else:
+        if val is None:
             last = await self.async_get_last_number_data()
             if last is not None and last.native_value is not None:
                 self._attr_native_value = last.native_value
-        self.async_on_remove(self._coordinator.async_add_listener(self._handle_coordinator_update))
+            settings = self._coordinator.settings_for(self._device.address)
+            val = getattr(settings, f"{self._kind}_level", None) if settings else None
+        if val is not None:
+            self._attr_native_value = val
 
     @callback
     def _handle_coordinator_update(self) -> None:
@@ -131,14 +135,15 @@ class PlejdTransitionTimeNumber(RestoreNumber):
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
+        self.async_on_remove(self._coordinator.async_add_listener(self._handle_coordinator_update))
         settings = self._coordinator.settings_for(self._device.address)
-        if settings is not None and settings.speed is not None:
-            self._attr_native_value = settings.speed
-        else:
+        if settings is None or settings.speed is None:
             last = await self.async_get_last_number_data()
             if last is not None and last.native_value is not None:
                 self._attr_native_value = last.native_value
-        self.async_on_remove(self._coordinator.async_add_listener(self._handle_coordinator_update))
+            settings = self._coordinator.settings_for(self._device.address)
+        if settings is not None and settings.speed is not None:
+            self._attr_native_value = settings.speed
 
     @callback
     def _handle_coordinator_update(self) -> None:
@@ -181,14 +186,15 @@ class PlejdRelayOffTimeNumber(RestoreNumber):
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
+        self.async_on_remove(self._coordinator.async_add_listener(self._handle_coordinator_update))
         settings = self._coordinator.settings_for(self._device.address)
-        if settings is not None and settings.relay_off_time is not None:
-            self._attr_native_value = settings.relay_off_time
-        else:
+        if settings is None or settings.relay_off_time is None:
             last = await self.async_get_last_number_data()
             if last is not None and last.native_value is not None:
                 self._attr_native_value = last.native_value
-        self.async_on_remove(self._coordinator.async_add_listener(self._handle_coordinator_update))
+            settings = self._coordinator.settings_for(self._device.address)
+        if settings is not None and settings.relay_off_time is not None:
+            self._attr_native_value = settings.relay_off_time
 
     @callback
     def _handle_coordinator_update(self) -> None:
@@ -233,14 +239,15 @@ class PlejdInrushCurrentNumber(RestoreNumber):
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
+        self.async_on_remove(self._coordinator.async_add_listener(self._handle_coordinator_update))
         settings = self._coordinator.settings_for(self._device.address)
-        if settings is not None and settings.inrush_current_ms is not None:
-            self._attr_native_value = settings.inrush_current_ms
-        else:
+        if settings is None or settings.inrush_current_ms is None:
             last = await self.async_get_last_number_data()
             if last is not None and last.native_value is not None:
                 self._attr_native_value = last.native_value
-        self.async_on_remove(self._coordinator.async_add_listener(self._handle_coordinator_update))
+            settings = self._coordinator.settings_for(self._device.address)
+        if settings is not None and settings.inrush_current_ms is not None:
+            self._attr_native_value = settings.inrush_current_ms
 
     @callback
     def _handle_coordinator_update(self) -> None:

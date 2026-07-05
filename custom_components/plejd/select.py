@@ -86,17 +86,19 @@ class PlejdOutputSettingSelect(SelectEntity, RestoreEntity):
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
+        self.async_on_remove(self._coordinator.async_add_listener(self._handle_coordinator_update))
         settings = self._coordinator.settings_for(self._device.address)
         raw = (settings.curve if self._kind == "curve" else settings.phase_dim) if settings else None
+        if raw is None:
+            last = await self.async_get_last_state()
+            if last is not None and last.state in self._options_map:
+                self._attr_current_option = last.state
+            settings = self._coordinator.settings_for(self._device.address)
+            raw = (settings.curve if self._kind == "curve" else settings.phase_dim) if settings else None
         # Reverse-map the raw byte to the option key.
         inv = {v: k for k, v in self._options_map.items()}
         if raw is not None and raw in inv:
             self._attr_current_option = inv[raw]
-        else:
-            last = await self.async_get_last_state()
-            if last is not None and last.state in self._options_map:
-                self._attr_current_option = last.state
-        self.async_on_remove(self._coordinator.async_add_listener(self._handle_coordinator_update))
 
     @callback
     def _handle_coordinator_update(self) -> None:
@@ -141,16 +143,18 @@ class PlejdBootStateSelect(SelectEntity, RestoreEntity):
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
+        self.async_on_remove(self._coordinator.async_add_listener(self._handle_coordinator_update))
         settings = self._coordinator.settings_for(self._device.address)
         raw = settings.boot_state if settings else None
-        inv = {v: k for k, v in BOOT_STATE_OPTIONS.items()}
-        if raw is not None and raw in inv:
-            self._attr_current_option = inv[raw]
-        else:
+        if raw is None:
             last = await self.async_get_last_state()
             if last is not None and last.state in BOOT_STATE_OPTIONS:
                 self._attr_current_option = last.state
-        self.async_on_remove(self._coordinator.async_add_listener(self._handle_coordinator_update))
+            settings = self._coordinator.settings_for(self._device.address)
+            raw = settings.boot_state if settings else None
+        inv = {v: k for k, v in BOOT_STATE_OPTIONS.items()}
+        if raw is not None and raw in inv:
+            self._attr_current_option = inv[raw]
 
     @callback
     def _handle_coordinator_update(self) -> None:
@@ -194,16 +198,18 @@ class PlejdRelayPoleSelect(SelectEntity, RestoreEntity):
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
+        self.async_on_remove(self._coordinator.async_add_listener(self._handle_coordinator_update))
         settings = self._coordinator.settings_for(self._device.address)
         raw = settings.relay_pole_config if settings else None
-        inv = {v: k for k, v in RELAY_POLE_OPTIONS.items()}
-        if raw is not None and raw in inv:
-            self._attr_current_option = inv[raw]
-        else:
+        if raw is None:
             last = await self.async_get_last_state()
             if last is not None and last.state in RELAY_POLE_OPTIONS:
                 self._attr_current_option = last.state
-        self.async_on_remove(self._coordinator.async_add_listener(self._handle_coordinator_update))
+            settings = self._coordinator.settings_for(self._device.address)
+            raw = settings.relay_pole_config if settings else None
+        inv = {v: k for k, v in RELAY_POLE_OPTIONS.items()}
+        if raw is not None and raw in inv:
+            self._attr_current_option = inv[raw]
 
     @callback
     def _handle_coordinator_update(self) -> None:

@@ -152,6 +152,23 @@ async def test_init_falls_back_to_restore_when_settings_none():
     assert entity._attr_current_option == "partial"
 
 
+async def test_live_read_arriving_during_restore_wins_over_stale_state():
+    """A read reply landing while awaiting restore must win — the listener is subscribed
+    first, and the settings cache is re-checked after the await."""
+    from plejd.protocol import OutputSettings
+
+    coord = _Coordinator([])
+    entity = PlejdOutputSettingSelect(coord, _device(), "curve")
+
+    async def _last():
+        coord._settings = OutputSettings(curve=1)  # the "live" read arrives mid-await -> linear
+        return types.SimpleNamespace(state="partial")  # stale restored value
+
+    entity.async_get_last_state = _last
+    await entity.async_added_to_hass()
+    assert entity._attr_current_option == "linear"  # live value wins, not the stale "partial"
+
+
 async def test_listener_updates_curve_option():
     from plejd.protocol import OutputSettings
 
@@ -236,6 +253,21 @@ async def test_boot_state_falls_back_to_restore():
     entity.async_get_last_state = _last
     await entity.async_added_to_hass()
     assert entity._attr_current_option == "off"
+
+
+async def test_boot_state_live_read_during_restore_wins():
+    from plejd.protocol import OutputSettings
+
+    coord = _Coordinator([])
+    entity = PlejdBootStateSelect(coord, _device())
+
+    async def _last():
+        coord._settings = OutputSettings(boot_state=True)
+        return types.SimpleNamespace(state="off")
+
+    entity.async_get_last_state = _last
+    await entity.async_added_to_hass()
+    assert entity._attr_current_option == "previous_state"
 
 
 async def test_boot_state_ignores_unknown_restored_state():
@@ -343,6 +375,21 @@ async def test_relay_pole_falls_back_to_restore():
     entity.async_get_last_state = _last
     await entity.async_added_to_hass()
     assert entity._attr_current_option == "two_pole"
+
+
+async def test_relay_pole_live_read_during_restore_wins():
+    from plejd.protocol import OutputSettings
+
+    coord = _Coordinator([])
+    entity = PlejdRelayPoleSelect(coord, _device(hardware_id=11))
+
+    async def _last():
+        coord._settings = OutputSettings(relay_pole_config=1)
+        return types.SimpleNamespace(state="two_pole")
+
+    entity.async_get_last_state = _last
+    await entity.async_added_to_hass()
+    assert entity._attr_current_option == "one_pole"
 
 
 async def test_relay_pole_ignores_unknown_restored_state():

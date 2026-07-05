@@ -143,6 +143,23 @@ async def test_no_restore_when_no_prior_state():
     assert getattr(entity, "_attr_native_value", None) is None
 
 
+async def test_live_read_arriving_during_restore_wins_over_stale_state():
+    """A read reply landing while awaiting restore must win — the listener is subscribed
+    first, and the settings cache is re-checked after the await."""
+    from plejd.protocol import OutputSettings
+
+    coord = _Coordinator([])
+    entity = PlejdDimLevelNumber(coord, _device(), "min")
+
+    async def _last():
+        coord._settings = OutputSettings(min_level=15.0)  # the "live" read arrives mid-await
+        return types.SimpleNamespace(native_value=35)  # stale restored value
+
+    entity.async_get_last_number_data = _last
+    await entity.async_added_to_hass()
+    assert entity._attr_native_value == 15.0  # live value wins, not the stale 35
+
+
 async def test_init_uses_coordinator_settings_min():
     from plejd.protocol import OutputSettings
 
@@ -230,6 +247,21 @@ async def test_transition_time_listener_no_update_when_settings_none():
     assert getattr(t, "_attr_native_value", None) is None
 
 
+async def test_transition_time_live_read_during_restore_wins():
+    from plejd.protocol import OutputSettings
+
+    coord = _Coordinator([])
+    t = PlejdTransitionTimeNumber(coord, _device())
+
+    async def _last():
+        coord._settings = OutputSettings(speed=2.0)
+        return types.SimpleNamespace(native_value=1.0)
+
+    t.async_get_last_number_data = _last
+    await t.async_added_to_hass()
+    assert t._attr_native_value == 2.0
+
+
 # ── PlejdRelayOffTimeNumber ───────────────────────────────────────────────────
 
 
@@ -293,6 +325,21 @@ async def test_relay_off_time_listener_no_update_when_settings_none():
     await t.async_added_to_hass()
     coord._listener()
     assert getattr(t, "_attr_native_value", None) is None
+
+
+async def test_relay_off_time_live_read_during_restore_wins():
+    from plejd.protocol import OutputSettings
+
+    coord = _Coordinator([])
+    t = PlejdRelayOffTimeNumber(coord, _device(hardware_id=3))
+
+    async def _last():
+        coord._settings = OutputSettings(relay_off_time=4.0)
+        return types.SimpleNamespace(native_value=3.0)
+
+    t.async_get_last_number_data = _last
+    await t.async_added_to_hass()
+    assert t._attr_native_value == 4.0
 
 
 # ── PlejdInrushCurrentNumber ──────────────────────────────────────────────────
@@ -383,6 +430,21 @@ async def test_inrush_listener_no_update_when_settings_none():
     await t.async_added_to_hass()
     coord._listener()
     assert getattr(t, "_attr_native_value", None) is None
+
+
+async def test_inrush_live_read_during_restore_wins():
+    from plejd.protocol import OutputSettings
+
+    coord = _Coordinator([])
+    t = PlejdInrushCurrentNumber(coord, _device(hardware_id=1))
+
+    async def _last():
+        coord._settings = OutputSettings(inrush_current_ms=400)
+        return types.SimpleNamespace(native_value=200)
+
+    t.async_get_last_number_data = _last
+    await t.async_added_to_hass()
+    assert t._attr_native_value == 400
 
 
 async def test_inrush_disabled_value_zero_accepted():
