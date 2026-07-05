@@ -43,9 +43,11 @@ from .connection import PlejdConnection
 from .const import (
     CMD_GROUP_STATE_AND_LEVEL,
     CMD_INPUT_BUTTON,
+    CMD_NOTIFY_EVENTS,
     CMD_OUTPUT_SET,
     CMD_OUTPUT_STATE_AND_LEVEL,
     CONF_CRYPTO_KEY,
+    CONF_DEVICE_ADDRESSES,
     CONF_DEVICES,
     CONF_DISCOVERED_ADDRESS,
     CONF_GATEWAYS,
@@ -65,13 +67,14 @@ from .const import (
     TRANSPORT_GATEWAY,
 )
 from .gateway_transport import PlejdGatewayConnection
-from .protocol import Command, MotionEvent, OutputState, decode_motion
+from .protocol import Command, MotionEvent, OutputState, decode_motion, decode_notify_events
 
 _LOGGER = logging.getLogger(__name__)
 
 RECONNECT_INITIAL_DELAY = 1.0
 RECONNECT_MAX_DELAY = 60.0
 FIRMWARE_REFRESH_INTERVAL = timedelta(days=1)
+NOTIFY_POLL_INTERVAL = timedelta(minutes=10)  # device-health (NotifyEvents) poll cadence
 
 
 @dataclass
@@ -104,6 +107,9 @@ class PlejdCoordinator:
         self.inputs = [PlejdCloudInput(**i) for i in entry.data.get(CONF_INPUTS, [])]
         self.motion = [PlejdCloudMotion(**m) for m in entry.data.get(CONF_MOTION, [])]
         self._motion_addresses = {m.address for m in self.motion}
+        # device_id -> physical mesh address, for fault polling; absent on entries added
+        # before this field existed (resolved via a one-time cloud fetch, see _async_poll_faults).
+        self._device_addresses: dict[str, int] = dict(entry.data.get(CONF_DEVICE_ADDRESSES) or {})
         self.site_id = entry.data.get(CONF_SITE_ID, entry.entry_id)
         self._preferred = entry.data.get(CONF_DISCOVERED_ADDRESS)
         self._transport_pref = (getattr(entry, "options", None) or {}).get(CONF_TRANSPORT, TRANSPORT_AUTO)
@@ -127,14 +133,18 @@ class PlejdCoordinator:
                 self._async_get_token,
                 self._notify_outputs,
                 self._handle_disconnect,
+                on_event=self._on_event,
             )
         self._listeners: list[Callable[[], None]] = []
         self._button_listeners: list[Callable[[int, bool], None]] = []
         self._motion_listeners: list[Callable[[MotionEvent], None]] = []
         self.firmware: dict[str, PlejdFirmwareStatus] = {}  # device_id -> firmware status
+        self._fault_listeners: list[Callable[[int, frozenset[str]], None]] = []
+        self._faults: dict[int, frozenset[str]] = {}
         self._clock_unsub: Callable[[], None] | None = None
         self._firmware_unsub: Callable[[], None] | None = None
         self._firmware_now_unsub: Callable[[], None] | None = None
+        self._faults_unsub: Callable[[], None] | None = None
         self._available = False
         self._active: str | None = None  # "gateway" | "ble"
         self._closed = False
@@ -195,6 +205,24 @@ class PlejdCoordinator:
         return _remove
 
     @callback
+    def async_add_fault_listener(self, cb: Callable[[int, frozenset[str]], None]) -> Callable[[], None]:
+        """Register a device-health callback cb(address, fault_names); returns an unsubscribe."""
+        self._fault_listeners.append(cb)
+
+        def _remove() -> None:
+            self._fault_listeners.remove(cb)
+
+        return _remove
+
+    def faults_for(self, address: int) -> frozenset[str]:
+        """Active fault-flag names last reported by a device (empty if none/unknown)."""
+        return self._faults.get(address, frozenset())
+
+    def device_address_for(self, device_id: str) -> int | None:
+        """A physical device's own mesh address (for fault entities), or None if unresolved."""
+        return self._device_addresses.get(device_id)
+
+    @callback
     def _on_event(self, command: Command) -> None:
         if command.command in (CMD_GROUP_STATE_AND_LEVEL, CMD_OUTPUT_STATE_AND_LEVEL):
             for update in list(self._listeners):
@@ -208,6 +236,12 @@ class PlejdCoordinator:
             if event is not None:
                 for motion_cb in list(self._motion_listeners):
                     motion_cb(event)
+        elif command.command == CMD_NOTIFY_EVENTS:
+            faults = decode_notify_events(command)
+            if faults is not None:
+                self._faults[command.address] = faults
+                for fault_cb in list(self._fault_listeners):
+                    fault_cb(command.address, faults)
 
     def state_for(self, address: int) -> OutputState | None:
         """Last-known output state for a mesh address, if seen."""
@@ -366,6 +400,7 @@ class PlejdCoordinator:
         self._active = "gateway"
         self._available = True
         self._notify_outputs()
+        await self._start_fault_polling()
 
     async def _async_connect_ble(self) -> None:
         info = self._pick_device()
@@ -383,6 +418,7 @@ class PlejdCoordinator:
         self._active = "ble"
         self._available = True
         self._notify_outputs()
+        await self._start_fault_polling()
         try:
             await self.async_sync_clock()
         except Exception:  # noqa: BLE001 - clock sync is auxiliary, never fail setup over it
@@ -397,6 +433,31 @@ class PlejdCoordinator:
             await self.async_sync_clock()
         except Exception:  # noqa: BLE001 - best-effort; a missed daily sync is not fatal
             _LOGGER.warning("Plejd periodic clock sync failed", exc_info=True)
+
+    async def _start_fault_polling(self) -> None:
+        """Poll device health (NotifyEvents) periodically; replies arrive push-side."""
+        if self._faults_unsub is not None:
+            self._faults_unsub()
+        self._faults_unsub = async_track_time_interval(self.hass, self._async_poll_faults, NOTIFY_POLL_INTERVAL)
+        await self._async_poll_faults(None)
+
+    async def _async_poll_faults(self, _now: object) -> None:
+        # NotifyEvents belongs to the physical device, not any one output — poll the
+        # device's own mesh address (may differ from an output's outputAddress).
+        if not self._device_addresses and self._email and self._password:
+            try:
+                session = async_get_clientsession(self.hass)
+                token = await async_login(session, self._email, self._password)
+                site = await async_get_site(session, token, self.site_id)
+                self._device_addresses = dict(site.device_addresses)
+            except Exception:  # noqa: BLE001 - fault polling is best-effort; retry next interval
+                _LOGGER.debug("Plejd fault poll: could not resolve device addresses", exc_info=True)
+        for address in set(self._device_addresses.values()):
+            try:
+                await self._write_vector(protocol.request_notify_events(address))
+            except Exception:  # noqa: BLE001 - best-effort per device; one failure shouldn't skip the rest
+                _LOGGER.debug("Plejd fault poll failed for device %s", address, exc_info=True)
+                continue
 
     async def _async_get_token(self) -> str:
         """Fetch a fresh Parse session token for the gateway WebSocket (login each time)."""
@@ -562,6 +623,9 @@ class PlejdCoordinator:
         if self._firmware_now_unsub is not None:
             self._firmware_now_unsub()
             self._firmware_now_unsub = None
+        if self._faults_unsub is not None:
+            self._faults_unsub()
+            self._faults_unsub = None
         if self._reconnect_task is not None:
             self._reconnect_task.cancel()
             self._reconnect_task = None

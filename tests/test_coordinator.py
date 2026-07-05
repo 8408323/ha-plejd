@@ -11,6 +11,7 @@ from plejd import connection as conn
 from plejd import coordinator as coordinator_mod
 from plejd.const import (
     CONF_CRYPTO_KEY,
+    CONF_DEVICE_ADDRESSES,
     CONF_DEVICES,
     CONF_DISCOVERED_ADDRESS,
     CONF_GATEWAYS,
@@ -277,14 +278,17 @@ async def test_initial_state_read_one_per_address(monkeypatch):
     )
     c = PlejdCoordinator(hass, entry)
     await c.async_start()
-    # one state-read written per unique non-None address (addr 5); None + duplicate skipped.
-    # (Other DATA writes after connect — e.g. clock sync — are not reads.)
+    # one output-state read written per unique non-None address (addr 5); None + duplicate skipped.
+    # (Other DATA reads after connect — e.g. the NotifyEvents health poll — use a different opcode.)
+    from plejd.const import CMD_OUTPUT_STATE_AND_LEVEL
     from plejd.protocol import TYPE_READ, decode_command
 
     reads = [
-        w
+        cmd
         for w in client.writes
-        if w[0] == PLEJD_CHAR_DATA_UUID and decode_command(c._connection.mesh.decrypt(w[1])).command_type == TYPE_READ
+        if w[0] == PLEJD_CHAR_DATA_UUID
+        for cmd in [decode_command(c._connection.mesh.decrypt(w[1]))]
+        if cmd.command_type == TYPE_READ and cmd.command == CMD_OUTPUT_STATE_AND_LEVEL
     ]
     assert len(reads) == 1
 
@@ -419,6 +423,7 @@ class _FakeGateway:
         self.state: dict = {}
         self.fail = False
         self.disconnected = False
+        self.on_event = kwargs.get("on_event")
 
     async def connect(self):
         if self.fail:
@@ -449,6 +454,7 @@ def _gateway_entry():
             CONF_SITE_ID: "S1",
             CONF_EMAIL: "u@x.se",
             CONF_PASSWORD: "pw",
+            CONF_DEVICE_ADDRESSES: {"d1": 5},
         },
     )
 
@@ -466,6 +472,36 @@ async def test_gateway_is_preferred_and_routes_commands(monkeypatch):
     assert c.state_for(11).level == 80
     await c.async_set_output(11, True, 80)
     assert c._gateway.writes[-1] == set_group_state_and_level(11, True, 80)
+
+
+async def test_gateway_connect_starts_fault_polling(monkeypatch):
+    from plejd.const import CMD_NOTIFY_EVENTS
+    from plejd.protocol import decode_command
+
+    monkeypatch.setattr(coordinator_mod, "PlejdGatewayConnection", _FakeGateway)
+    hass = _hass()
+    hass.session = object()
+    c = PlejdCoordinator(hass, _gateway_entry())
+    await c.async_start()
+    assert c._faults_unsub is not None
+    reads = [decode_command(w) for w in c._gateway.writes]
+    assert any(r.command == CMD_NOTIFY_EVENTS for r in reads)
+
+
+async def test_gateway_pushes_route_notify_events_to_faults(monkeypatch):
+    from plejd.const import CMD_NOTIFY_EVENTS
+    from plejd.protocol import Command
+
+    monkeypatch.setattr(coordinator_mod, "PlejdGatewayConnection", _FakeGateway)
+    hass = _hass()
+    hass.session = object()
+    c = PlejdCoordinator(hass, _gateway_entry())
+    await c.async_start()
+    # The gateway forwards every decoded mesh.out command through on_event, same as BLE.
+    c._gateway.on_event(
+        Command(address=5, command_type=0x03, command=CMD_NOTIFY_EVENTS, data=(0x8).to_bytes(8, "little"))
+    )
+    assert c.faults_for(5) == frozenset({"overtemperature"})
 
 
 async def test_gateway_failure_falls_back_to_ble(monkeypatch):
@@ -1142,3 +1178,147 @@ async def test_registry_update_triggers_reauth_on_auth_error(monkeypatch):
     monkeypatch.setattr(coordinator_mod, "async_login", _auth_fail)
     await c.async_handle_device_registry_update(_reg_event(changes={"name_by_user": "x"}))
     assert started == [hass]  # reauth flow prompted instead of silently swallowed
+
+
+def test_fault_event_routes_to_listeners():
+    from plejd.const import CMD_NOTIFY_EVENTS
+    from plejd.protocol import Command
+
+    c = PlejdCoordinator(_hass(), _entry())
+    seen = []
+    remove = c.async_add_fault_listener(lambda addr, faults: seen.append((addr, faults)))
+    c._on_event(Command(address=5, command_type=0x03, command=CMD_NOTIFY_EVENTS, data=(0x8).to_bytes(8, "little")))
+    assert c.faults_for(5) == frozenset({"overtemperature"})
+    assert seen == [(5, frozenset({"overtemperature"}))]
+    remove()
+    assert c.faults_for(99) == frozenset()  # unknown address -> empty
+
+
+async def test_poll_faults_reads_each_device(monkeypatch):
+    from plejd.const import CMD_NOTIFY_EVENTS
+    from plejd.protocol import TYPE_READ, decode_command
+
+    client = _FakeClient()
+    _patch_connect(monkeypatch, client)
+    ble = types.SimpleNamespace(address="01:02:03:04:05:a0")
+    hass = _hass([_info("01:02:03:04:05:a0")], {"01:02:03:04:05:a0": ble})
+    entry = _entry(discovered=None)
+    entry.data[CONF_DEVICE_ADDRESSES] = {"d1": 5}  # physical device address, cached at setup
+    c = PlejdCoordinator(hass, entry)
+    await c.async_start()  # sets up the poll and does an initial fault read
+    reads = [decode_command(c._connection.mesh.decrypt(w[1])) for w in client.writes if w[0] == PLEJD_CHAR_DATA_UUID]
+    notify = [r for r in reads if r.command == CMD_NOTIFY_EVENTS]
+    assert notify and notify[0].command_type == TYPE_READ and notify[0].address == 5
+
+
+async def test_poll_faults_best_effort_when_not_connected():
+    c = PlejdCoordinator(_hass(), _entry())  # never connected -> _write_vector raises
+    await c._async_poll_faults(None)  # swallowed, no exception propagates
+    assert c.faults_for(5) == frozenset()
+
+
+async def test_poll_faults_one_device_failure_does_not_skip_the_rest(monkeypatch):
+    """A write failure for one device must not abort polling the remaining devices."""
+    from homeassistant.exceptions import HomeAssistantError
+
+    dev2 = {**_DEV, "device_id": "d2", "address": 6}
+    entry = types.SimpleNamespace(
+        entry_id="e1",
+        data={
+            CONF_CRYPTO_KEY: _KEY_HEX,
+            CONF_DEVICES: [_DEV, dev2],
+            CONF_DISCOVERED_ADDRESS: None,
+            CONF_DEVICE_ADDRESSES: {"d1": 5, "d2": 6},
+        },
+    )
+    c = PlejdCoordinator(_hass(), entry)
+    attempted: list[int] = []
+
+    async def _write_vector(vector):
+        attempted.append(vector[0])
+        if vector[0] == 5:
+            raise HomeAssistantError("not connected")
+
+    monkeypatch.setattr(c, "_write_vector", _write_vector)
+    await c._async_poll_faults(None)
+    assert sorted(attempted) == [5, 6]  # device 6 was still polled despite device 5 failing
+
+
+def test_device_address_for_resolves_cached_physical_addresses():
+    entry = types.SimpleNamespace(
+        entry_id="e1",
+        data={
+            CONF_CRYPTO_KEY: _KEY_HEX,
+            CONF_DEVICES: [_DEV],
+            CONF_DISCOVERED_ADDRESS: None,
+            CONF_DEVICE_ADDRESSES: {"d1": 5, "w1": 33},
+        },
+    )
+    c = PlejdCoordinator(_hass(), entry)
+    assert c.device_address_for("d1") == 5
+    assert c.device_address_for("w1") == 33
+    assert c.device_address_for("unknown") is None
+
+
+async def test_poll_faults_resolves_addresses_from_cloud_when_not_cached(monkeypatch):
+    """Entries added before CONF_DEVICE_ADDRESSES existed resolve it via one cloud fetch."""
+    c = PlejdCoordinator(_hass(), _cloud_entry())  # has credentials, no cached device_addresses
+    site = types.SimpleNamespace(device_addresses={"d1": 5, "w1": 33})
+
+    async def _login(*a):
+        return "tok"
+
+    async def _get_site(*a):
+        return site
+
+    attempted: list[int] = []
+
+    async def _write_vector(vector):
+        attempted.append(vector[0])
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _login)
+    monkeypatch.setattr(coordinator_mod, "async_get_site", _get_site)
+    monkeypatch.setattr(c, "_write_vector", _write_vector)
+
+    await c._async_poll_faults(None)
+    assert sorted(attempted) == [5, 33]
+    assert c._device_addresses == {"d1": 5, "w1": 33}  # cached — no repeat fetch on the next poll
+
+    await c._async_poll_faults(None)
+    assert sorted(attempted) == [5, 5, 33, 33]  # polled again, but from the cache
+
+
+async def test_poll_faults_swallows_cloud_fetch_failure(monkeypatch):
+    """A failed address-resolution fetch is best-effort: no crash, retried next interval."""
+    c = PlejdCoordinator(_hass(), _cloud_entry())  # has credentials, no cached device_addresses
+
+    async def _boom(*a):
+        raise coordinator_mod.PlejdAuthError("bad creds")
+
+    attempted: list[int] = []
+
+    async def _write_vector(vector):
+        attempted.append(vector[0])
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _boom)
+    monkeypatch.setattr(c, "_write_vector", _write_vector)
+    await c._async_poll_faults(None)  # no exception propagates
+    assert attempted == [] and c._device_addresses == {}
+
+
+async def test_poll_faults_without_credentials_or_cache_is_noop(monkeypatch):
+    """No cached addresses and no credentials to fetch them -> nothing polled, no crash."""
+    c = PlejdCoordinator(_hass(), _entry())  # no CONF_EMAIL/CONF_PASSWORD, no CONF_DEVICE_ADDRESSES
+
+    async def _boom(*a):
+        raise AssertionError("must not log in without credentials")
+
+    attempted: list[int] = []
+
+    async def _write_vector(vector):
+        attempted.append(vector[0])
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _boom)
+    monkeypatch.setattr(c, "_write_vector", _write_vector)
+    await c._async_poll_faults(None)
+    assert attempted == []
