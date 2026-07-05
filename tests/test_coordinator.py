@@ -900,22 +900,18 @@ async def test_cloud_poll_device_added_reloads(monkeypatch):
 
     entry = _cloud_poll_entry()
     updated = {}
-
-    async def _reload(eid):
-        reloaded.append(eid)
-
-    reloaded = []
     config_entries = types.SimpleNamespace(
         async_get_entry=lambda eid: entry,
         async_update_entry=lambda e, data: updated.update(data),
-        async_reload=_reload,
+        # No async_reload here: the entry's own update-listener (registered in
+        # __init__.py) handles reloading in response to async_update_entry - an
+        # explicit reload from _async_poll_cloud itself would be a second, redundant one.
     )
     hass = _hass()
     hass.session = object()
     hass.config_entries = config_entries
     c = PlejdCoordinator(hass, entry)
     await c._async_poll_cloud(None)
-    assert reloaded == ["e1"]
     assert len(updated[CONF_DEVICES]) == 2
 
 
@@ -931,22 +927,15 @@ async def test_cloud_poll_seeds_installation_id_for_new_gateway(monkeypatch):
 
     entry = _cloud_poll_entry()  # no CONF_INSTALLATION_ID - predates the gateway feature
     updated = {}
-
-    async def _reload(eid):
-        reloaded.append(eid)
-
-    reloaded = []
     config_entries = types.SimpleNamespace(
         async_get_entry=lambda eid: entry,
         async_update_entry=lambda e, data: updated.update(data),
-        async_reload=_reload,
     )
     hass = _hass()
     hass.session = object()
     hass.config_entries = config_entries
     c = PlejdCoordinator(hass, entry)
     await c._async_poll_cloud(None)
-    assert reloaded == ["e1"]
     assert updated[CONF_INSTALLATION_ID]  # a fresh id was generated, not left missing
 
 
@@ -1005,6 +994,26 @@ async def test_cloud_poll_cloud_error_skips_reload(monkeypatch):
     c = PlejdCoordinator(hass, entry)
     await c._async_poll_cloud(None)  # must not raise
     assert not reloaded
+
+
+async def test_cloud_poll_transport_error_is_treated_as_a_missed_poll(monkeypatch):
+    # DNS/socket/TLS/timeout failures raise plain OSError/aiohttp errors, not
+    # PlejdCloudError - these must be swallowed the same way, not surface as an
+    # unhandled error from this scheduled background callback.
+    async def _login(session, email, password):
+        raise OSError("Name or service not known")
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _login)
+
+    entry = _cloud_poll_entry()
+    hass = _hass()
+    hass.session = object()
+    hass.config_entries = types.SimpleNamespace(
+        async_get_entry=lambda eid: entry,
+        async_update_entry=lambda e, data: None,
+    )
+    c = PlejdCoordinator(hass, entry)
+    await c._async_poll_cloud(None)  # must not raise
 
 
 def _fw_site(firmware_by_device):

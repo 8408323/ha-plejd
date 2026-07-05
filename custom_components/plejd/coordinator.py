@@ -32,7 +32,6 @@ from . import protocol
 from .cloud import (
     PlejdAuthError,
     PlejdCloudDevice,
-    PlejdCloudError,
     PlejdCloudInput,
     PlejdCloudMotion,
     PlejdCloudScene,
@@ -292,8 +291,9 @@ class PlejdCoordinator:
         except PlejdAuthError:
             _LOGGER.warning("Plejd cloud poll: credentials rejected — use Reconfigure if this persists")
             return
-        except PlejdCloudError:
-            _LOGGER.debug("Plejd cloud poll: cloud unreachable, will retry at next interval")
+        except Exception:  # noqa: BLE001 - PlejdCloudError plus any transport failure (DNS/socket/TLS/
+            # timeout/non-JSON 5xx) is a missed poll, not a bug; retry at the next interval.
+            _LOGGER.debug("Plejd cloud poll: cloud unreachable, will retry at next interval", exc_info=True)
             return
         new_data = {
             CONF_CRYPTO_KEY: site.crypto_key.hex(),
@@ -313,8 +313,10 @@ class PlejdCoordinator:
         if not changed:
             return
         _LOGGER.info("Plejd site changed (%s) — reloading to apply updates", ", ".join(changed))
+        # async_update_entry alone triggers a reload: __init__.py registers
+        # entry.add_update_listener(_async_reload_entry), which fires on this update.
+        # Calling async_reload here too would start a second, redundant reload.
         self.hass.config_entries.async_update_entry(entry, data={**entry.data, **new_data})
-        await self.hass.config_entries.async_reload(self._entry_id)
 
     def _schedule_firmware_checks(self) -> None:
         """Check firmware shortly after start, then daily; both are best-effort."""
