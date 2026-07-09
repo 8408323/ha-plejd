@@ -143,7 +143,10 @@ class PlejdConfigFlow(ConfigFlow, domain=DOMAIN):
                 site = await async_get_site(session, token, entry.data[CONF_SITE_ID])
             except PlejdAuthError:
                 errors["base"] = "invalid_auth"
-            except PlejdCloudError:
+            except Exception:  # noqa: BLE001 - PlejdCloudError plus any transport failure
+                # (DNS/socket/TLS/timeout/non-JSON 5xx) should show cannot_connect, not crash
+                # the flow with an unhandled exception.
+                _LOGGER.debug("Plejd reconfigure: cloud unreachable", exc_info=True)
                 errors["base"] = "cannot_connect"
             else:
                 data_updates = {

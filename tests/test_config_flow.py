@@ -274,6 +274,15 @@ async def test_reconfigure_cannot_connect_on_site_fetch(monkeypatch):
     assert res["type"] == "form" and res["errors"] == {"base": "cannot_connect"}
 
 
+async def test_reconfigure_cannot_connect_on_transport_failure(monkeypatch):
+    # A raw transport failure (DNS/socket/TLS/timeout) isn't a PlejdCloudError, but must
+    # still show cannot_connect rather than crash the flow with an unhandled exception.
+    _patch_cloud(monkeypatch, login=OSError("connection reset"))
+    flow = _reconfigure_flow(_stored_entry())
+    res = await flow.async_step_reconfigure({})
+    assert res["type"] == "form" and res["errors"] == {"base": "cannot_connect"}
+
+
 def _opt_flow(options=None, scenes=None, runtime_data=None, gateways=None, resource_set_id="rs1", hass=None):
     data = {"scenes": scenes if scenes is not None else [{"index": 3, "name": "Movie"}]}
     if gateways is not None:
