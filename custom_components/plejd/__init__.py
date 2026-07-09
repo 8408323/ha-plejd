@@ -2,12 +2,21 @@
 
 from __future__ import annotations
 
+import logging
+
+import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry
 
+from .add_device import async_add_device
+from .const import DOMAIN
 from .coordinator import PlejdCoordinator
+from .discovery import async_bluetooth_available, async_scan_unprovisioned
+
+_LOGGER = logging.getLogger(__name__)
 
 PLATFORMS: list[Platform] = [
     Platform.LIGHT,
@@ -23,6 +32,23 @@ PLATFORMS: list[Platform] = [
     Platform.BUTTON,
     Platform.UPDATE,
 ]
+
+SERVICE_ADD_DEVICE = "add_device"
+SERVICE_SCAN_DEVICES = "scan_new_devices"
+
+_INPUT_SETTING_SCHEMA = vol.Schema({vol.Required("input"): int, vol.Required("button_type"): str})
+
+_ADD_DEVICE_SCHEMA = vol.Schema(
+    {
+        vol.Required("device_address"): str,
+        vol.Required("name"): str,
+        vol.Optional("hardware_id", default="0"): str,
+        vol.Optional("room_id"): str,
+        vol.Optional("room_title"): str,
+        vol.Optional("firmware_build_time", default=0): int,
+        vol.Optional("input_settings", default=[]): [_INPUT_SETTING_SCHEMA],
+    }
+)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -43,6 +69,35 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             device_registry.EVENT_DEVICE_REGISTRY_UPDATED, coordinator.async_handle_device_registry_update
         )
     )
+
+    async def _async_handle_add_device(call) -> None:
+        await async_add_device(
+            hass,
+            entry,
+            address=call.data["device_address"],
+            name=call.data["name"],
+            hardware_id=call.data.get("hardware_id", "0"),
+            room_id=call.data.get("room_id"),
+            room_title=call.data.get("room_title"),
+            firmware_build_time=int(call.data.get("firmware_build_time", 0)),
+            input_settings=call.data.get("input_settings", []),
+        )
+
+    async def _async_handle_scan_devices(call) -> None:
+        if not async_bluetooth_available(hass):
+            raise HomeAssistantError(
+                "Bluetooth is not available on this Home Assistant instance. Add a local "
+                "Bluetooth adapter or an ESPHome Bluetooth proxy, then try again."
+            )
+        new_devices = async_scan_unprovisioned(hass)
+        _LOGGER.info("Plejd scan found %d unprovisioned device(s)", len(new_devices))
+        _LOGGER.debug("Plejd scan found unprovisioned device(s): %s", [d["address"] for d in new_devices])
+        hass.bus.async_fire(f"{DOMAIN}_new_devices_found", {"devices": new_devices})
+
+    hass.services.async_register(DOMAIN, SERVICE_ADD_DEVICE, _async_handle_add_device, schema=_ADD_DEVICE_SCHEMA)
+    entry.async_on_unload(lambda: hass.services.async_remove(DOMAIN, SERVICE_ADD_DEVICE))
+    hass.services.async_register(DOMAIN, SERVICE_SCAN_DEVICES, _async_handle_scan_devices)
+    entry.async_on_unload(lambda: hass.services.async_remove(DOMAIN, SERVICE_SCAN_DEVICES))
     return True
 
 

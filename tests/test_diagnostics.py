@@ -45,6 +45,7 @@ def _entry():
             "installation_id": "inst-1",
             "discovered_address": "AA:BB:CC:DD:EE:FF",
             "gateways": ["E6C9AABBCCDD"],
+            "device_addresses": {"d1": 11, "w1": 33},
             "devices": [
                 {"device_id": "d1", "object_id": "7MK7dlrcfz", "address": 11, "name": "Vardagsrum", "model": "DIM-01"}
             ],
@@ -70,6 +71,7 @@ async def test_diagnostics_redacts_secrets_and_pii():
         "installation_id",
         "discovered_address",
         "gateways",
+        "device_addresses",  # mesh addresses keyed by device_id -- BLE/PII-adjacent
     ):
         assert data[key] == "**REDACTED**"
     dev = data["devices"][0]

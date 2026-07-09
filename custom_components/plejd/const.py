@@ -16,6 +16,7 @@ CONF_DISCOVERED_ADDRESS = "discovered_address"
 CONF_SITE_ID = "site_id"
 CONF_CRYPTO_KEY = "crypto_key"  # hex string of the 16-byte site key
 CONF_DEVICES = "devices"  # cached device list (so HA works offline after setup)
+CONF_DEVICE_ADDRESSES = "device_addresses"  # device_id -> physical mesh address, for fault polling
 CONF_SCENES = "scenes"  # cached scene list
 CONF_INPUTS = "inputs"  # cached button-input list
 CONF_MOTION = "motion"  # cached motion-sensor list
@@ -35,6 +36,10 @@ TRANSPORT_BLE = "ble"  # local Bluetooth only
 # All characteristics live under the service base UUID with the 3rd 16-bit group
 # (the "0001") swapped for the role suffix below.
 PLEJD_SERVICE_UUID = "31ba0001-6085-4726-be45-040c957391b5"
+
+# Bluetooth SIG company identifier Plejd uses in advertisement manufacturer data
+# (Plejd.Shared PlejdManufacturerId; confirmed against a live capture).
+PLEJD_BLE_COMPANY_ID = 887
 
 
 def _char(suffix: str) -> str:
@@ -71,15 +76,41 @@ CMD_OUTPUT_MAX_LEVEL = 0x00CA
 CMD_OUTPUT_SPEED = 0x00CB  # set/report dim transition time (output, u16le steps + >0.5s flag)
 CMD_OUTPUT_CURVE_TYPE = 0x00CC  # set/report dimming curve (output, LoadCurve byte)
 CMD_OUTPUT_PHASE_DIM_TYPE = 0x00CE  # set/report phase-dim edge (output, PhaseOutputType byte)
+CMD_OUTPUT_RELAY_OFF_TIME = 0x00D4  # minimum relay off time (output, u16le centiseconds)
+CMD_OUTPUT_BOOT_STATE = 0x00D7  # after-power-outage state (output[, 0x00=off]; 1-byte=use_last)
+CMD_OUTPUT_INRUSH_CURRENT = 0x00A2  # inrush current protection time (output, u16le centiseconds; 0=disabled)
+CMD_OUTPUT_RELAY_CONFIG = 0x022A  # relay pole configuration (output, RelayConfig wire byte)
 CMD_OUTPUT_START_LEVEL = 0x00CF  # set/report dim start level (output, u16le of fraction*65535)
 
-# Dimming-curve options (LoadCurve enum subset that applies to dimmable outputs).
-CURVE_OPTIONS: dict[str, int] = {"linear": 0, "logarithmic": 1, "antilogarithmic": 3}
-# Phase-dim edge (PhaseOutputType enum): trailing edge for resistive/LED, leading for inductive.
-PHASE_DIM_OPTIONS: dict[str, int] = {"trailing_edge": 0, "leading_edge": 1}
+# Dimming-curve options (LoadCurve enum, app: Standard/Linjär/Logaritmisk/Partiell).
+CURVE_OPTIONS: dict[str, int] = {
+    "standard": 0,
+    "linear": 1,
+    "logarithmic": 2,
+    "partial": 3,
+}
+# Light-source / phase-dim type (PhaseOutputType enum: TrailingEdge=0, LeadingEdge=1).
+# "Halogen" and "Non-dimmable LED" in the Plejd app are predefined cloud loads that
+# configure LoadCurve + Phase together — they are NOT PhaseOutputType values (2 and 3
+# map to PhaseOutputType.Invalid and are silently discarded by the firmware).
+PHASE_DIM_OPTIONS: dict[str, int] = {
+    "trailing_edge": 0,
+    "leading_edge": 1,
+}
 # Hardware that actually phase-cuts (app's IPhaseable: DIM-01/02 family, SPD-01, FAK-01).
 # Constant-current LED drivers, DALI, and downlights dim but aren't phase dimmers.
 PHASE_DIM_HARDWARE: frozenset[int] = frozenset({1, 2, 11, 14, 15, 22, 24, 25, 40, 164})
+# After-power-outage boot state options (0x00D7); True=restore last state, False=boot off.
+BOOT_STATE_OPTIONS: dict[str, bool] = {
+    "previous_state": True,
+    "off": False,
+}
+# Hardware with a real relay that supports minimum relay-off time (IRelayOffTimeable, 0x00D4).
+RELAY_HARDWARE: frozenset[int] = frozenset({3, 8, 17, 18})
+# Wire bytes for relay pole config (app GetBytes: TwoPole→0, OnePole→1; enum values differ).
+RELAY_POLE_OPTIONS: dict[str, int] = {"two_pole": 0, "one_pole": 1}
+# Hardware with relay pole config (IRelayConfigurable: DIM-01-2P hw 11, DIM-01-2P-LC2 hw 25).
+RELAY_CONFIG_HARDWARE: frozenset[int] = frozenset({11, 25})
 CMD_SCENE = 0x0021  # execute scene
 CMD_TIME_EVENT_TIME = 0x0258  # set/remove a time event's schedule
 CMD_TIME_EVENT_TYPE = 0x0259  # what a time event does (TimeEventResult)
@@ -137,6 +168,10 @@ PLEJD_FN_SITE_LIST = "functions/getSiteList"  # -> [{siteId, ...}]
 PLEJD_FN_SITE_BY_ID = "functions/getSiteById"  # {siteId} -> site w/ cryptoKey + devices
 PLEJD_FN_FIRMWARE_BY_HW = "functions/getFirmwaresByHardwareId"  # {hardwareId, faceplateId} -> [] when up to date
 PLEJD_FN_UPDATE_DEVICE = "functions/updateDevice_V2"  # {siteId, deviceId, deviceParseId, title} -> rename in the app
+PLEJD_FN_CREATE_DEVICE = "functions/createPlejdDevice_V2"  # register new device to site
+PLEJD_FN_COMPATIBLE_DEVICES = "functions/getCompatibleDevices"  # {devices:[{hardwareId,...}]} -> neededAddresses
+PLEJD_FN_CREATE_ROOM = "functions/createRoom"  # {siteId, roomId, title, category, imageHash} -> int
+PLEJD_FN_SET_INPUT = "functions/setPlejdDeviceInputSetting"  # {siteId, deviceId, input, buttonType, ...} -> bool
 
 # ── Device types (Plejd.Shared HardwareType enum: id -> product name) ──
 HARDWARE_TYPES: dict[int, str] = {

@@ -10,9 +10,11 @@ from uuid import uuid4
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlow
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.selector import SelectSelector, SelectSelectorConfig
 
+from .add_device import async_add_device
 from .cloud import (
     PlejdAuthError,
     PlejdCloudError,
@@ -22,6 +24,7 @@ from .cloud import (
 )
 from .const import (
     CONF_CRYPTO_KEY,
+    CONF_DEVICE_ADDRESSES,
     CONF_DEVICES,
     CONF_DISCOVERED_ADDRESS,
     CONF_GATEWAYS,
@@ -40,6 +43,7 @@ from .const import (
     TRANSPORT_GATEWAY,
     WEEKDAYS,
 )
+from .discovery import async_bluetooth_available, async_scan_unprovisioned
 
 if TYPE_CHECKING:
     from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
@@ -83,7 +87,7 @@ class PlejdConfigFlow(ConfigFlow, domain=DOMAIN):
 
     @staticmethod
     def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
-        """Return the options flow for managing on-device schedules."""
+        """Return the options flow: manage schedules, or add a new device."""
         return PlejdOptionsFlow(config_entry)
 
     def __init__(self) -> None:
@@ -150,6 +154,7 @@ class PlejdConfigFlow(ConfigFlow, domain=DOMAIN):
                     CONF_SCENES: [asdict(s) for s in site.scenes],
                     CONF_GATEWAYS: site.gateways,
                     CONF_RESOURCE_SET_ID: site.resource_set_id,
+                    CONF_DEVICE_ADDRESSES: site.device_addresses,
                 }
                 # A gateway newly appearing on an entry that predates CONF_INSTALLATION_ID
                 # (or never had one) must seed it now - the gateway transport requires it.
@@ -213,18 +218,24 @@ class PlejdConfigFlow(ConfigFlow, domain=DOMAIN):
                 CONF_SCENES: [asdict(s) for s in site.scenes],
                 CONF_GATEWAYS: site.gateways,
                 CONF_RESOURCE_SET_ID: site.resource_set_id,
+                CONF_DEVICE_ADDRESSES: site.device_addresses,
                 CONF_INSTALLATION_ID: str(uuid4()),
             },
         )
 
 
 class PlejdOptionsFlow(OptionsFlow):
-    """Manage on-device weekly schedules (time event -> scene)."""
+    """Configure Plejd: manage on-device schedules, or add a new device to the mesh."""
 
     def __init__(self, config_entry: ConfigEntry) -> None:
         self._entry = config_entry
+        self._new_device_address: str | None = None
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """Entry point: a menu, not tied to any particular device (works with or without a gateway)."""
+        return self.async_show_menu(step_id="init", menu_options=["schedules", "add_device"])
+
+    async def async_step_schedules(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         schedules: list[dict] = list(self._entry.options.get(CONF_SCHEDULES, []))
         next_id: int = self._entry.options.get("next_schedule_id", 0)
         transport: str = self._entry.options.get(CONF_TRANSPORT, TRANSPORT_AUTO)
@@ -301,7 +312,7 @@ class PlejdOptionsFlow(OptionsFlow):
             fields[vol.Optional("transport", default=transport)] = SelectSelector(
                 SelectSelectorConfig(options=transport_options)
             )
-        return self.async_show_form(step_id="init", data_schema=vol.Schema(fields), errors=errors)
+        return self.async_show_form(step_id="schedules", data_schema=vol.Schema(fields), errors=errors)
 
     async def _clear_deleted(self, removed: list[dict]) -> None:
         """Delete the device-side event for each removed schedule (best-effort)."""
@@ -311,3 +322,46 @@ class PlejdOptionsFlow(OptionsFlow):
                 await coordinator.async_remove_time_event(schedule["slot"])
             except Exception:  # noqa: BLE001 - best-effort; persist the deletion whatever the mesh does
                 _LOGGER.warning("Could not clear Plejd schedule slot %s from the mesh", schedule["slot"])
+
+    async def async_step_add_device(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """Pick an unprovisioned device from what's currently visible over Bluetooth."""
+        if not async_bluetooth_available(self.hass):
+            return self.async_show_form(step_id="add_device", data_schema=None, errors={"base": "no_bluetooth"})
+        devices = async_scan_unprovisioned(self.hass)
+        if not devices:
+            return self.async_show_form(step_id="add_device", data_schema=None, errors={"base": "no_devices_found"})
+        if user_input is not None and (address := user_input.get("device_address")):
+            self._new_device_address = address
+            return await self.async_step_add_device_details()
+        options = [
+            {"value": d["address"], "label": f"{d['address']} — {d['model']} (RSSI {d['rssi']})"} for d in devices
+        ]
+        schema = vol.Schema({vol.Required("device_address"): SelectSelector(SelectSelectorConfig(options=options))})
+        return self.async_show_form(step_id="add_device", data_schema=schema)
+
+    async def async_step_add_device_details(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """Name the device (and optionally its room), then commission it."""
+        errors: dict[str, str] = {}
+        description_placeholders = {"address": self._new_device_address or ""}
+        if user_input is not None:
+            name = (user_input.get("name") or "").strip()
+            room_title = (user_input.get("room_title") or "").strip() or None
+            if not name:
+                errors["name"] = "name_required"
+            else:
+                try:
+                    await async_add_device(
+                        self.hass, self._entry, address=self._new_device_address, name=name, room_title=room_title
+                    )
+                except HomeAssistantError as err:
+                    errors["base"] = "add_device_failed"
+                    description_placeholders["error"] = str(err)
+                else:
+                    return self.async_create_entry(title="", data=dict(self._entry.options))
+        schema = vol.Schema({vol.Required("name"): str, vol.Optional("room_title", default=""): str})
+        return self.async_show_form(
+            step_id="add_device_details",
+            data_schema=schema,
+            errors=errors,
+            description_placeholders=description_placeholders,
+        )

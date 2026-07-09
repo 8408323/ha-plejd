@@ -10,8 +10,8 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_call_later
 
-from .cloud import PlejdCloudDevice, PlejdCloudMotion
-from .const import DOMAIN
+from .cloud import PlejdCloudMotion
+from .const import DOMAIN, HARDWARE_GWY_01, HARDWARE_TYPES, HARDWARE_WMS_01
 from .coordinator import PlejdCoordinator
 from .protocol import MotionEvent
 
@@ -22,11 +22,41 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     """Set up Plejd motion sensors and per-device health (problem) sensors."""
     coordinator: PlejdCoordinator = entry.runtime_data
     entities: list[BinarySensorEntity] = [PlejdMotionBinarySensor(coordinator, sensor) for sensor in coordinator.motion]
+    # Fault entities target the physical device's own mesh address (where NotifyEvents
+    # is polled/stored) — not an output's address, and covering devices with no output
+    # at all (motion sensors, gateways), not just coordinator.devices.
     seen: set[str] = set()
     for device in coordinator.devices:
-        if device.device_address is not None and device.device_id not in seen:
+        if device.device_id in seen:
+            continue
+        address = coordinator.device_address_for(device.device_id)
+        if address is not None:
             seen.add(device.device_id)
-            entities.append(PlejdProblemBinarySensor(coordinator, device))
+            entities.append(PlejdProblemBinarySensor(coordinator, device.device_id, address, device.name, device.model))
+    for sensor in coordinator.motion:
+        if sensor.device_id not in seen:
+            seen.add(sensor.device_id)
+            entities.append(
+                PlejdProblemBinarySensor(
+                    coordinator, sensor.device_id, sensor.address, sensor.name, HARDWARE_TYPES[HARDWARE_WMS_01]
+                )
+            )
+    for button in coordinator.inputs:
+        if button.device_id in seen:
+            continue
+        address = coordinator.device_address_for(button.device_id)
+        if address is not None:
+            seen.add(button.device_id)
+            entities.append(PlejdProblemBinarySensor(coordinator, button.device_id, address, button.name, None))
+    for gateway_id in coordinator.gateways:
+        if gateway_id in seen:
+            continue
+        address = coordinator.device_address_for(gateway_id)
+        if address is not None:
+            seen.add(gateway_id)
+            entities.append(
+                PlejdProblemBinarySensor(coordinator, gateway_id, address, "Gateway", HARDWARE_TYPES[HARDWARE_GWY_01])
+            )
     async_add_entities(entities)
 
 
@@ -38,28 +68,28 @@ class PlejdProblemBinarySensor(BinarySensorEntity):
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_translation_key = "device_fault"
 
-    def __init__(self, coordinator: PlejdCoordinator, device: PlejdCloudDevice) -> None:
+    def __init__(
+        self, coordinator: PlejdCoordinator, device_id: str, address: int, name: str, model: str | None
+    ) -> None:
         self._coordinator = coordinator
-        self._device = device
-        self._attr_unique_id = f"fault_{device.device_id}"
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, device.device_id)},
-            name=device.name,
-            manufacturer="Plejd",
-            model=device.model,
-        )
+        self._address = address
+        self._attr_unique_id = f"fault_{device_id}"
+        info: dict[str, object] = {"identifiers": {(DOMAIN, device_id)}, "name": name, "manufacturer": "Plejd"}
+        if model is not None:
+            info["model"] = model
+        self._attr_device_info = DeviceInfo(**info)
 
     @property
     def is_on(self) -> bool:
-        return bool(self._coordinator.faults_for(self._device.device_address))
+        return bool(self._coordinator.faults_for(self._address))
 
     @property
     def extra_state_attributes(self) -> dict[str, list[str]]:
-        return {"active_faults": sorted(self._coordinator.faults_for(self._device.device_address))}
+        return {"active_faults": sorted(self._coordinator.faults_for(self._address))}
 
     @callback
     def _handle(self, address: int, _faults: frozenset[str]) -> None:
-        if address == self._device.device_address:
+        if address == self._address:
             self.async_write_ha_state()
 
     async def async_added_to_hass(self) -> None:

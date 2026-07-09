@@ -50,22 +50,43 @@
       },
       "transition_time": {
         "name": "Transition time"
+      },
+      "relay_off_time": {
+        "name": "Relay protection time"
+      },
+      "inrush_current_time": {
+        "name": "Inrush current protection"
       }
     },
     "select": {
       "dim_curve": {
         "name": "Dimming curve",
         "state": {
+          "standard": "Standard",
           "linear": "Linear",
           "logarithmic": "Logarithmic",
-          "antilogarithmic": "Anti-logarithmic"
+          "partial": "Partial"
         }
       },
       "phase_dim": {
-        "name": "Phase dimming",
+        "name": "Light source",
         "state": {
-          "trailing_edge": "Trailing edge",
-          "leading_edge": "Leading edge"
+          "trailing_edge": "LED trailing edge",
+          "leading_edge": "LED leading edge"
+        }
+      },
+      "boot_state": {
+        "name": "After power outage",
+        "state": {
+          "previous_state": "Restore previous state",
+          "off": "Turn off"
+        }
+      },
+      "relay_pole_config": {
+        "name": "Relay wiring",
+        "state": {
+          "two_pole": "Two-pole",
+          "one_pole": "One-pole"
         }
       }
     },
@@ -93,11 +114,22 @@
       "firmware": {
         "name": "Firmware"
       }
+    },
+    "binary_sensor": {
+      "device_fault": {
+        "name": "Fault"
+      }
     }
   },
   "options": {
     "step": {
       "init": {
+        "menu_options": {
+          "schedules": "Manage schedules",
+          "add_device": "Add a device"
+        }
+      },
+      "schedules": {
         "title": "Plejd schedules",
         "description": "Add a weekly on-device schedule that runs a scene, or remove existing ones. These run on the Plejd devices themselves, so they work even when Home Assistant is offline.",
         "data": {
@@ -109,13 +141,32 @@
           "fade": "Fade (seconds)",
           "transport": "Communication"
         }
+      },
+      "add_device": {
+        "title": "Add a device",
+        "description": "Pick a Plejd device that's currently broadcasting as unprovisioned nearby.",
+        "data": {
+          "device_address": "Device"
+        }
+      },
+      "add_device_details": {
+        "title": "Add a device",
+        "description": "Name the device found at {address}, and optionally put it in a new room.",
+        "data": {
+          "name": "Name",
+          "room_title": "New room (optional)"
+        }
       }
     },
     "error": {
       "no_free_slots": "All 20 schedule slots are in use.",
       "scene_required": "Pick a scene for the new schedule.",
       "days_required": "Pick at least one weekday for the new schedule.",
-      "invalid_time": "Enter the time as HH:MM (24-hour)."
+      "invalid_time": "Enter the time as HH:MM (24-hour).",
+      "no_devices_found": "No unprovisioned Plejd devices found nearby. Make sure the device is powered and in Bluetooth range, then try again.",
+      "name_required": "Enter a name for the device.",
+      "add_device_failed": "Failed to add the device: {error}",
+      "no_bluetooth": "Bluetooth is not available on this Home Assistant instance. Add a local Bluetooth adapter or an ESPHome Bluetooth proxy (in active mode), then try again."
     }
   }
 }

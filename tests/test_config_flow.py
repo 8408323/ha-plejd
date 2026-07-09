@@ -19,6 +19,7 @@ from plejd.cloud import (
 from plejd.config_flow import PlejdConfigFlow
 from plejd.const import (
     CONF_CRYPTO_KEY,
+    CONF_DEVICE_ADDRESSES,
     CONF_DEVICES,
     CONF_GATEWAYS,
     CONF_INSTALLATION_ID,
@@ -55,12 +56,14 @@ def _site(site_id="S1"):
         site_id=site_id,
         title="Home",
         crypto_key=bytes(16),
+        mesh_key="AA-BB-CC-DD",
         devices=[dev],
         inputs=[PlejdCloudInput("d1", "Kitchen", 11)],
         motion=[PlejdCloudMotion("w1", "Motion", 33)],
         scenes=[scene],
         gateways=["gw1"],
         resource_set_id="rsABC",
+        device_addresses={"d1": 1, "w1": 33},
     )
 
 
@@ -118,6 +121,7 @@ async def test_single_site_creates_entry(monkeypatch):
     assert result["data"][CONF_DEVICES][0]["model"] == "DIM-01"
     assert result["data"][CONF_GATEWAYS] == ["gw1"]
     assert result["data"][CONF_RESOURCE_SET_ID] == "rsABC"
+    assert result["data"][CONF_DEVICE_ADDRESSES] == {"d1": 1, "w1": 33}
     assert len(result["data"][CONF_INSTALLATION_ID]) == 36  # a generated uuid4
 
 
@@ -231,6 +235,7 @@ async def test_reconfigure_fetches_and_updates_entry(monkeypatch):
     updates = res["data_updates"]
     assert updates[CONF_DEVICES][0]["model"] == "DIM-01"
     assert updates[CONF_GATEWAYS] == ["gw1"]
+    assert updates[CONF_DEVICE_ADDRESSES] == {"d1": 1, "w1": 33}
     assert updates[CONF_RESOURCE_SET_ID] == "rsABC"
     assert updates[CONF_CRYPTO_KEY] == bytes(16).hex()
     # _stored_entry() predates CONF_INSTALLATION_ID; a gateway showing up must seed one
@@ -269,14 +274,16 @@ async def test_reconfigure_cannot_connect_on_site_fetch(monkeypatch):
     assert res["type"] == "form" and res["errors"] == {"base": "cannot_connect"}
 
 
-def _opt_flow(options=None, scenes=None, runtime_data=None, gateways=None, resource_set_id="rs1"):
+def _opt_flow(options=None, scenes=None, runtime_data=None, gateways=None, resource_set_id="rs1", hass=None):
     data = {"scenes": scenes if scenes is not None else [{"index": 3, "name": "Movie"}]}
     if gateways is not None:
         data["gateways"] = gateways
         if resource_set_id is not None:
             data["resource_set_id"] = resource_set_id
     entry = types.SimpleNamespace(options=options or {}, data=data, runtime_data=runtime_data)
-    return cf.PlejdOptionsFlow(entry)
+    flow = cf.PlejdOptionsFlow(entry)
+    flow.hass = hass or types.SimpleNamespace(service_infos=[], ble_devices={})
+    return flow
 
 
 def _schema_keys(result) -> list[str]:
@@ -284,21 +291,25 @@ def _schema_keys(result) -> list[str]:
 
 
 async def test_options_transport_field_only_with_usable_gateway():
-    assert "transport" not in _schema_keys(await _opt_flow().async_step_init())  # no gateway
+    assert "transport" not in _schema_keys(await _opt_flow().async_step_schedules())  # no gateway
     # gateway device but no resource set (can't build the transport) -> still hidden
-    assert "transport" not in _schema_keys(await _opt_flow(gateways=["gw1"], resource_set_id=None).async_step_init())
-    assert "transport" in _schema_keys(await _opt_flow(gateways=["gw1"]).async_step_init())
+    assert "transport" not in _schema_keys(
+        await _opt_flow(gateways=["gw1"], resource_set_id=None).async_step_schedules()
+    )
+    assert "transport" in _schema_keys(await _opt_flow(gateways=["gw1"]).async_step_schedules())
 
 
 async def test_options_saves_transport_choice():
-    res = await _opt_flow(gateways=["gw1"]).async_step_init({"name": "", "delete": [], "transport": "ble"})
+    res = await _opt_flow(gateways=["gw1"]).async_step_schedules({"name": "", "delete": [], "transport": "ble"})
     assert res["type"] == "create_entry" and res["data"]["transport"] == "ble"
 
 
 async def test_options_resets_stale_gateway_pref_without_usable_gateway():
     # A stored gateway-only pref must reset to auto when there's no usable gateway,
     # else the next reload keeps failing in the gateway-only branch.
-    res = await _opt_flow(options={"schedules": [], "transport": "gateway"}).async_step_init({"name": "", "delete": []})
+    res = await _opt_flow(options={"schedules": [], "transport": "gateway"}).async_step_schedules(
+        {"name": "", "delete": []}
+    )
     assert res["data"]["transport"] == "auto"
 
 
@@ -308,18 +319,18 @@ def test_get_options_flow_returns_options_flow():
 
 
 async def test_options_form_shown_first_time():
-    res = await _opt_flow().async_step_init()
-    assert res["type"] == "form" and res["step_id"] == "init"
+    res = await _opt_flow().async_step_schedules()
+    assert res["type"] == "form" and res["step_id"] == "schedules"
 
 
 async def test_options_form_with_existing_offers_delete():
     existing = [{"slot": 0, "name": "X", "days": [0], "time": "07:00", "scene": 1, "fade": 0}]
-    res = await _opt_flow(options={"schedules": existing}).async_step_init()
+    res = await _opt_flow(options={"schedules": existing}).async_step_schedules()
     assert res["type"] == "form"
 
 
 async def test_options_add_schedule_assigns_slot_and_maps_days():
-    res = await _opt_flow().async_step_init(
+    res = await _opt_flow().async_step_schedules(
         {"name": "Evening", "days": ["mon", "sun"], "time": "18:30", "scene": "3", "fade": 5}
     )
     sched = res["data"]["schedules"]
@@ -331,23 +342,25 @@ async def test_options_add_schedule_assigns_slot_and_maps_days():
 
 async def test_options_add_uses_monotonic_id_not_slot():
     opts = {"schedules": [], "next_schedule_id": 7}
-    res = await _opt_flow(options=opts).async_step_init({"name": "X", "days": ["mon"], "time": "06:00", "scene": "3"})
+    res = await _opt_flow(options=opts).async_step_schedules(
+        {"name": "X", "days": ["mon"], "time": "06:00", "scene": "3"}
+    )
     assert res["data"]["schedules"][0]["id"] == 7 and res["data"]["next_schedule_id"] == 8
 
 
 async def test_options_add_without_scene_errors():
-    res = await _opt_flow().async_step_init({"name": "X", "days": ["mon"], "time": "06:00"})
+    res = await _opt_flow().async_step_schedules({"name": "X", "days": ["mon"], "time": "06:00"})
     assert res["type"] == "form" and res["errors"] == {"base": "scene_required"}
 
 
 async def test_options_add_without_days_errors():
-    res = await _opt_flow().async_step_init({"name": "X", "days": [], "time": "06:00", "scene": "3"})
+    res = await _opt_flow().async_step_schedules({"name": "X", "days": [], "time": "06:00", "scene": "3"})
     assert res["type"] == "form" and res["errors"] == {"base": "days_required"}
 
 
 async def test_options_add_with_invalid_time_errors():
     for bad in ("7", "25:00", "07:xx", ""):
-        res = await _opt_flow().async_step_init({"name": "X", "days": ["mon"], "time": bad, "scene": "3"})
+        res = await _opt_flow().async_step_schedules({"name": "X", "days": ["mon"], "time": bad, "scene": "3"})
         assert res["type"] == "form" and res["errors"] == {"time": "invalid_time"}, bad
 
 
@@ -360,14 +373,14 @@ async def test_options_delete_schedule_clears_device_event():
             removed.append(slot)
 
     flow = _opt_flow(options={"schedules": existing}, runtime_data=_Coord())
-    res = await flow.async_step_init({"delete": ["0"]})
+    res = await flow.async_step_schedules({"delete": ["0"]})
     assert res["data"]["schedules"] == [] and removed == [0]
 
 
 async def test_options_delete_when_mesh_unavailable_is_best_effort():
     existing = [{"slot": 0, "name": "X", "days": [0], "time": "07:00", "scene": 1, "fade": 0}]
     # runtime_data None -> async_remove_time_event raises AttributeError, swallowed.
-    res = await _opt_flow(options={"schedules": existing}).async_step_init({"delete": ["0"]})
+    res = await _opt_flow(options={"schedules": existing}).async_step_schedules({"delete": ["0"]})
     assert res["data"]["schedules"] == []
 
 
@@ -378,7 +391,9 @@ async def test_options_delete_persists_even_if_ble_write_fails():
         async def async_remove_time_event(self, slot):
             raise RuntimeError("BLE link dropped")  # transport error, not HomeAssistantError
 
-    res = await _opt_flow(options={"schedules": existing}, runtime_data=_Coord()).async_step_init({"delete": ["0"]})
+    res = await _opt_flow(options={"schedules": existing}, runtime_data=_Coord()).async_step_schedules(
+        {"delete": ["0"]}
+    )
     assert res["data"]["schedules"] == []
 
 
@@ -392,20 +407,130 @@ async def test_options_delete_not_applied_when_same_submit_is_invalid():
 
     flow = _opt_flow(options={"schedules": existing}, runtime_data=_Coord())
     # Delete slot 0 AND add an invalid-time schedule in one submit -> validation error.
-    res = await flow.async_step_init({"delete": ["0"], "name": "New", "days": ["mon"], "time": "nope", "scene": "3"})
+    res = await flow.async_step_schedules(
+        {"delete": ["0"], "name": "New", "days": ["mon"], "time": "nope", "scene": "3"}
+    )
     assert res["type"] == "form" and res["errors"] == {"time": "invalid_time"}
     assert removed == []  # device event must NOT be cleared since the save didn't happen
 
 
 async def test_options_save_without_adding():
     existing = [{"slot": 2, "name": "Keep", "days": [1], "time": "08:00", "scene": 1, "fade": 0}]
-    res = await _opt_flow(options={"schedules": existing}).async_step_init({"name": "", "delete": []})
+    res = await _opt_flow(options={"schedules": existing}).async_step_schedules({"name": "", "delete": []})
     assert res["data"]["schedules"] == existing
 
 
 async def test_options_no_free_slots_errors():
     full = [{"slot": i, "name": f"s{i}", "days": [0], "time": "07:00", "scene": 1, "fade": 0} for i in range(20)]
-    res = await _opt_flow(options={"schedules": full}).async_step_init(
+    res = await _opt_flow(options={"schedules": full}).async_step_schedules(
         {"name": "More", "days": ["mon"], "time": "06:00", "scene": "3"}
     )
     assert res["type"] == "form" and res["errors"] == {"base": "no_free_slots"}
+
+
+# ── Options flow: entry menu ───────────────────────────────────────────────────
+
+
+async def test_options_init_shows_menu():
+    res = await _opt_flow().async_step_init()
+    assert res["type"] == "menu" and res["step_id"] == "init"
+    assert res["menu_options"] == ["schedules", "add_device"]
+
+
+# ── Options flow: add a device ─────────────────────────────────────────────────
+
+
+def _fake_service_info(address, mfr_data, rssi=-60):
+    from plejd.const import PLEJD_SERVICE_UUID
+
+    return types.SimpleNamespace(
+        address=address, name=None, rssi=rssi, service_uuids=[PLEJD_SERVICE_UUID], manufacturer_data=mfr_data
+    )
+
+
+async def test_add_device_no_devices_found_shows_error():
+    res = await _opt_flow().async_step_add_device()
+    assert res["type"] == "form" and res["step_id"] == "add_device"
+    assert res["errors"] == {"base": "no_devices_found"}
+
+
+async def test_add_device_reshow_form_when_empty_submit_but_devices_appeared():
+    """Submitting the empty no-devices form after a device appears must not KeyError."""
+    hass = types.SimpleNamespace(
+        service_infos=[_fake_service_info("AA:BB:CC:DD:EE:FF", {887: bytes([0x08, 0, 0, 1])})],
+        ble_devices={},
+    )
+    flow = _opt_flow(hass=hass)
+    # user_input={} simulates submitting the empty form returned on the no-devices path
+    res = await flow.async_step_add_device({})
+    # No device_address in user_input → fall through to show the picker form
+    assert res["type"] == "form" and res["step_id"] == "add_device"
+    assert res["errors"] is None  # devices are now visible; no error
+
+
+async def test_add_device_shows_error_when_bluetooth_unavailable():
+    hass = types.SimpleNamespace(service_infos=[], ble_devices={}, scanner_count=0)
+    res = await _opt_flow(hass=hass).async_step_add_device()
+    assert res["type"] == "form" and res["step_id"] == "add_device"
+    assert res["errors"] == {"base": "no_bluetooth"}
+
+
+async def test_add_device_lists_discovered_devices():
+    hass = types.SimpleNamespace(
+        service_infos=[_fake_service_info("AA:BB:CC:DD:EE:FF", {887: bytes([0x08, 0, 0, 1])})],
+        ble_devices={},
+    )
+    res = await _opt_flow(hass=hass).async_step_add_device()
+    assert res["type"] == "form" and res["errors"] is None
+    options = res["data_schema"].schema[next(iter(res["data_schema"].schema))].config.kwargs["options"]
+    assert options == [{"value": "AA:BB:CC:DD:EE:FF", "label": "AA:BB:CC:DD:EE:FF — DIM-01 (RSSI -60)"}]
+
+
+async def test_add_device_picking_device_advances_to_details():
+    hass = types.SimpleNamespace(
+        service_infos=[_fake_service_info("AA:BB:CC:DD:EE:FF", {887: bytes([0x08, 0, 0, 1])})],
+        ble_devices={},
+    )
+    flow = _opt_flow(hass=hass)
+    res = await flow.async_step_add_device({"device_address": "AA:BB:CC:DD:EE:FF"})
+    assert res["type"] == "form" and res["step_id"] == "add_device_details"
+    assert flow._new_device_address == "AA:BB:CC:DD:EE:FF"
+
+
+async def test_add_device_details_requires_name():
+    flow = _opt_flow()
+    flow._new_device_address = "AA:BB:CC:DD:EE:FF"
+    res = await flow.async_step_add_device_details({"name": "  ", "room_title": ""})
+    assert res["errors"] == {"name": "name_required"}
+
+
+async def test_add_device_details_success_finishes_flow(monkeypatch):
+    added = []
+
+    async def _fake_add_device(hass, entry, *, address, name, room_title=None, **kwargs):
+        added.append((address, name, room_title))
+
+    monkeypatch.setattr(cf, "async_add_device", _fake_add_device)
+
+    flow = _opt_flow(options={"schedules": []})
+    flow._new_device_address = "AA:BB:CC:DD:EE:FF"
+    res = await flow.async_step_add_device_details({"name": "Taklampa", "room_title": "Sovrum"})
+
+    assert added == [("AA:BB:CC:DD:EE:FF", "Taklampa", "Sovrum")]
+    assert res["type"] == "create_entry" and res["data"] == {"schedules": []}
+
+
+async def test_add_device_details_shows_error_on_failure(monkeypatch):
+    from homeassistant.exceptions import HomeAssistantError
+
+    async def _fake_add_device(*args, **kwargs):
+        raise HomeAssistantError("Plejd device not found in Bluetooth range")
+
+    monkeypatch.setattr(cf, "async_add_device", _fake_add_device)
+
+    flow = _opt_flow()
+    flow._new_device_address = "AA:BB:CC:DD:EE:FF"
+    res = await flow.async_step_add_device_details({"name": "X"})
+
+    assert res["errors"] == {"base": "add_device_failed"}
+    assert res["description_placeholders"]["error"] == "Plejd device not found in Bluetooth range"

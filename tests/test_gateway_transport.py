@@ -66,14 +66,7 @@ def _conn(ws, on_state=None, on_disconnect=None, on_event=None):
         return "tok"
 
     return PlejdGatewayConnection(
-        _FakeSession(ws),
-        "S1",
-        "rs1",
-        "inst-1",
-        _token,
-        on_state or (lambda: None),
-        on_disconnect,
-        on_event=on_event,
+        _FakeSession(ws), "S1", "rs1", "inst-1", _token, on_state or (lambda: None), on_disconnect, on_event=on_event
     )
 
 
@@ -159,6 +152,30 @@ def test_handle_push_without_on_event_does_not_crash():
 
     conn = _conn(_FakeWS())  # on_event defaults to None
     conn._handle_frame(json.dumps(_push_frame(10, encode_command(10, CMD_NOTIFY_EVENTS, bytes([1])))))
+
+
+def test_handle_push_routes_state_command_to_on_event_instead_of_on_state():
+    state_fired = []
+    events = []
+    conn = _conn(_FakeWS(), on_state=lambda: state_fired.append(1), on_event=lambda cmd: events.append(cmd))
+    vector = set_output_state_and_level(address=11, output=0, on=True, level=200)
+    conn._handle_frame(json.dumps(_push_frame(11, vector)))
+    # on_event takes over dispatch when provided; on_state (the old path) is not also called.
+    assert conn.state_for(11) is not None and conn.state_for(11).level == 200
+    assert state_fired == []
+    assert len(events) == 1 and events[0].address == 11
+
+
+def test_handle_push_routes_non_output_command_to_on_event():
+    from plejd.protocol import encode_command
+
+    events = []
+    conn = _conn(_FakeWS(), on_event=lambda cmd: events.append(cmd))
+    # A button (0x0097) push isn't an output state, but on_event still sees it
+    # (needed for NotifyEvents/motion/button on gateway-backed sites).
+    conn._handle_frame(json.dumps(_push_frame(10, encode_command(10, 0x0097, bytes([1])))))
+    assert conn.state == {}
+    assert len(events) == 1 and events[0].command == 0x0097
 
 
 def test_handle_push_ignores_undecodable_packet():

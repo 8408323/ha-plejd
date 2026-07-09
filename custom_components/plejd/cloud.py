@@ -4,11 +4,12 @@ Logs in and fetches a site's crypto key + device list, decoded from the app's
 `ParseClient` / `ImportSiteAsync`. Login is plain Parse (`/login`); the site comes
 from the `getSiteById` cloud function. The JSON shape matches the app's
 deserializers; the multi-output address mapping is worth confirming on a live
-capture (#2). See docs/protocol.md.
+capture (#2). See docs/reverse_engineering.md.
 """
 
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass, field
 
 from aiohttp import ClientSession
@@ -19,7 +20,11 @@ from .const import (
     DEFAULT_CATEGORY,
     HARDWARE_TYPES,
     HARDWARE_WMS_01,
+    PLEJD_FN_COMPATIBLE_DEVICES,
+    PLEJD_FN_CREATE_DEVICE,
+    PLEJD_FN_CREATE_ROOM,
     PLEJD_FN_FIRMWARE_BY_HW,
+    PLEJD_FN_SET_INPUT,
     PLEJD_FN_SITE_BY_ID,
     PLEJD_FN_SITE_LIST,
     PLEJD_FN_UPDATE_DEVICE,
@@ -62,10 +67,7 @@ class PlejdCloudDevice:
     traits: int
     room_id: str | None
     object_id: str | None = None  # the output's Parse objectId (deviceParseId), needed to rename it
-    # The physical device's own mesh address (deviceAddress) - distinct from `address`
-    # (the per-output control address) for multi-output hardware. Whole-device
-    # operations like NotifyEvents must target this, not an output address.
-    device_address: int | None = None
+    output_settings: dict | None = None  # raw cloud outputSettings dict, if returned by the API
 
 
 @dataclass
@@ -107,11 +109,12 @@ class PlejdCloudScene:
 
 @dataclass
 class PlejdCloudSite:
-    """A site: its crypto key, devices, scenes, and any gateway."""
+    """A site: its crypto key, mesh key, devices, scenes, and any gateway."""
 
     site_id: str
     title: str
     crypto_key: bytes
+    mesh_key: str  # dash-separated hex ("AA-BB-CC-DD") for SetAccessAddress during commissioning
     devices: list[PlejdCloudDevice]
     inputs: list[PlejdCloudInput]
     motion: list[PlejdCloudMotion]
@@ -120,6 +123,9 @@ class PlejdCloudSite:
     resource_set_id: str | None  # for the remote-control WebSocket (Resource-Set-ID)
     # every physical device's installed firmware (outputs, sensors, gateway)
     firmware_by_device: dict[str, PlejdDeviceFirmware] = field(default_factory=dict)
+    # every physical device's own mesh address (outputs, sensors, gateway) — distinct from
+    # an output's address; this is what NotifyEvents/fault polling must target.
+    device_addresses: dict[str, int] = field(default_factory=dict)
 
 
 def _headers(token: str | None = None) -> dict[str, str]:
@@ -188,6 +194,37 @@ async def async_get_available_firmware(
     return best
 
 
+async def async_get_needed_output_count(
+    session: ClientSession, token: str, hardware_id: str, firmware_build_time: int, faceplate_id: str = "0"
+) -> int:
+    """How many output addresses createPlejdDevice_V2's deviceInfo needs for this hardware.
+
+    Wall controllers (WPH-01, WRT-01, CTR-01, ...) need zero; multi-output hardware
+    (DIM-02, REL-02, OUT-02, ...) need more than one. Falls back to 1 (the common
+    single-output case) if the cloud doesn't confirm a compatible entry.
+    """
+    body = {
+        "devices": [
+            {
+                "buildTime": firmware_build_time,
+                "firmwareNumber": None,
+                "hardwareId": hardware_id,
+                "faceplateId": faceplate_id,
+                "variant": None,
+            }
+        ],
+        "appVersion": "7.3.0.1.65",
+        "deviceType": "android",
+    }
+    result = await _call_function(session, token, PLEJD_FN_COMPATIBLE_DEVICES, body)
+    compatible = result.get("compatible") if isinstance(result, dict) else None
+    for entry in compatible if isinstance(compatible, list) else []:
+        info = entry.get(hardware_id) if isinstance(entry, dict) else None
+        if isinstance(info, dict) and isinstance(info.get("neededAddresses"), int):
+            return info["neededAddresses"]
+    return 1
+
+
 async def async_set_device_title(
     session: ClientSession, token: str, site_id: str, device_id: str, device_parse_id: str, title: str
 ) -> bool:
@@ -209,6 +246,136 @@ async def async_get_site(session: ClientSession, token: str, site_id: str) -> Pl
     return parse_site(result)
 
 
+@dataclass
+class NewDeviceInfo:
+    """Per-output metadata for a new device being registered to a site."""
+
+    title: str
+    output_index: int
+    room_id: str | None = None
+    # Powerable | Groupable (DeviceTrait bitmask) - the baseline the app sends at
+    # creation time regardless of hardware type; the cloud fills in the rest
+    # (e.g. Dimmable) from its own hardware config once the device is registered.
+    traits: int = 9
+    hidden_from_room_list: bool = False
+
+
+@dataclass
+class NewDeviceAddresses:
+    """Addresses assigned to a newly registered device by the cloud."""
+
+    device_address: int | None  # mesh node address for the device
+    output_addresses: dict[int, int]  # output_index -> mesh address
+
+
+async def async_create_device(
+    session: ClientSession,
+    token: str,
+    site_id: str,
+    device_id: str,
+    hardware_id: str,
+    firmware_build_time: int,
+    device_infos: list[NewDeviceInfo] | None = None,
+    faceplate_id: str = "0",
+    variant: str | None = None,
+    installation_location: str = "",
+) -> NewDeviceAddresses:
+    """Register a new device to a site via createPlejdDevice_V2.
+
+    Returns the mesh addresses assigned by the cloud. Call this BEFORE BLE
+    commissioning — the returned device_address is the node index used in SetNodeIndex.
+    device_id is the BLE MAC address as a hex string (no separators, lowercase).
+    """
+    body: dict = {
+        "siteId": site_id,
+        "deviceId": device_id,
+        "hardwareId": hardware_id,
+        "firmwareBuildTime": firmware_build_time,
+        # The app always sends these two keys - a captured real request had
+        # variant=null (fine) but installationLocation as non-null free text;
+        # omitting either key entirely gets a generic "Invalid request." rejection.
+        "variant": variant,
+        "installationLocation": installation_location,
+        "faceplateId": faceplate_id,
+    }
+    if device_infos:
+        body["deviceInfo"] = [
+            {
+                "title": di.title,
+                "index": di.output_index,
+                "roomId": di.room_id,
+                "traits": di.traits,
+                "hiddenFromRoomList": di.hidden_from_room_list,
+            }
+            for di in device_infos
+        ]
+    result = await _call_function(session, token, PLEJD_FN_CREATE_DEVICE, body)
+    return _parse_new_device_addresses(result)
+
+
+def _parse_new_device_addresses(result: object) -> NewDeviceAddresses:
+    """Parse a createPlejdDevice_V2 response into mesh addresses."""
+    if not isinstance(result, dict):
+        return NewDeviceAddresses(device_address=None, output_addresses={})
+    device_addr_raw = result.get("deviceAddress")
+    device_address = int(device_addr_raw) if device_addr_raw is not None else None
+    output_address_map = result.get("outputAddress") or {}
+    output_addresses: dict[int, int] = {}
+    for idx_str, addr in output_address_map.items():
+        try:
+            output_addresses[int(idx_str)] = int(addr)
+        except (ValueError, TypeError):
+            continue  # malformed entry from the cloud - skip it, not fatal
+    return NewDeviceAddresses(device_address=device_address, output_addresses=output_addresses)
+
+
+async def async_create_room(
+    session: ClientSession,
+    token: str,
+    site_id: str,
+    title: str,
+    category: str = "Other",
+) -> str:
+    """Create a new room and return its ID (a UUID we generate and pass in)."""
+    room_id = str(uuid.uuid4())
+    await _call_function(
+        session,
+        token,
+        PLEJD_FN_CREATE_ROOM,
+        {"siteId": site_id, "roomId": room_id, "title": title, "category": category, "imageHash": 0},
+    )
+    return room_id
+
+
+async def async_set_input_setting(
+    session: ClientSession,
+    token: str,
+    site_id: str,
+    device_id: str,
+    input_index: int,
+    button_type: str,
+) -> None:
+    """Set the button type for one input of a device (e.g. 'Toggle' or 'PushButton')."""
+    await _call_function(
+        session,
+        token,
+        PLEJD_FN_SET_INPUT,
+        {
+            "siteId": site_id,
+            "deviceId": device_id,
+            "input": input_index,
+            "buttonType": button_type,
+            "dimSpeed": 0,
+            "singleClick": None,
+            "doubleClick": None,
+            "doubleSidedDirectionButton": False,
+            "motionSensorData": None,
+            "positiveEdgeScene": None,
+            "negativeEdgeScene": None,
+        },
+    )
+
+
 def parse_site(site: dict) -> PlejdCloudSite:
     """Parse a getSiteById result into a PlejdCloudSite."""
     mesh = site.get("plejdMesh") or {}
@@ -217,6 +384,8 @@ def parse_site(site: dict) -> PlejdCloudSite:
         raise PlejdCloudError("site has no cryptoKey")
     # cryptoKey is dash-separated hex ("XX-XX-..", 16 bytes) — validated against the API.
     crypto_key = bytes.fromhex(key_hex.replace("-", ""))
+    # meshKey is a dash-separated hex string used as the BLE AccessAddress during commissioning.
+    mesh_key: str = mesh.get("meshKey") or ""
 
     device_address = site.get("deviceAddress") or {}
     output_address = site.get("outputAddress") or {}
@@ -244,6 +413,7 @@ def parse_site(site: dict) -> PlejdCloudSite:
         # omits traits (a light-category output can still be on/off only).
         traits = int(info.get("traits") or 0)
         dimmable = bool(traits & TRAIT_DIMMABLE) if "traits" in info else category == CATEGORY_LIGHT
+        raw_settings = info.get("outputSettings")
         devices.append(
             PlejdCloudDevice(
                 device_id=device_id,
@@ -258,7 +428,7 @@ def parse_site(site: dict) -> PlejdCloudSite:
                 traits=traits,
                 room_id=info.get("roomId"),
                 object_id=info.get("objectId"),
-                device_address=int(phys_address) if phys_address is not None else None,
+                output_settings=raw_settings if isinstance(raw_settings, dict) else None,
             )
         )
 
@@ -321,10 +491,18 @@ def parse_site(site: dict) -> PlejdCloudSite:
         resource_set_id = resource_sets[0].get("objectId")
 
     meta = site.get("site") or site  # id/title are nested under "site" in the real payload
+    device_addresses: dict[str, int] = {}
+    for device_id, addr in device_address.items():
+        try:
+            device_addresses[device_id] = int(addr)
+        except (TypeError, ValueError):
+            continue
+
     return PlejdCloudSite(
         site_id=meta.get("siteId") or "",
         title=meta.get("title") or "Plejd",
         crypto_key=crypto_key,
+        mesh_key=mesh_key,
         devices=devices,
         inputs=inputs,
         motion=motion,
@@ -332,4 +510,5 @@ def parse_site(site: dict) -> PlejdCloudSite:
         gateways=gateways,
         resource_set_id=resource_set_id,
         firmware_by_device=firmware_by_device,
+        device_addresses=device_addresses,
     )
