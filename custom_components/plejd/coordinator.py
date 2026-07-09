@@ -415,7 +415,11 @@ class PlejdCoordinator:
             token = await async_login(session, self._email, self._password)
             site = await async_get_site(session, token, self._site_id)
         except PlejdAuthError:
-            _LOGGER.warning("Plejd cloud poll: credentials rejected — use Reconfigure if this persists")
+            # No gateway connect path exists in BLE-only setups, so prompt reauth here -
+            # otherwise a rejected password leaves the daily poll silently broken forever
+            # (Reconfigure alone can't fix it: it reuses the stored, now-invalid password).
+            _LOGGER.warning("Plejd cloud poll: credentials rejected — starting reauth")
+            self._entry.async_start_reauth(self.hass)
             return
         except Exception:  # noqa: BLE001 - PlejdCloudError plus any transport failure (DNS/socket/TLS/
             # timeout/non-JSON 5xx) is a missed poll, not a bug; retry at the next interval.
@@ -429,6 +433,7 @@ class PlejdCoordinator:
             CONF_SCENES: [asdict(s) for s in site.scenes],
             CONF_GATEWAYS: site.gateways,
             CONF_RESOURCE_SET_ID: site.resource_set_id,
+            CONF_DEVICE_ADDRESSES: site.device_addresses,
         }
         # A gateway newly appearing on an entry that predates CONF_INSTALLATION_ID (or
         # never had one) must seed it now - the gateway transport requires it and the

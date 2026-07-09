@@ -1185,11 +1185,12 @@ def _cloud_poll_entry():
             CONF_SCENES: [],
             CONF_GATEWAYS: [],
             CONF_RESOURCE_SET_ID: None,
+            CONF_DEVICE_ADDRESSES: {},
         },
     )
 
 
-def _fake_site(devices=None, gateways=None, resource_set_id=None):
+def _fake_site(devices=None, gateways=None, resource_set_id=None, device_addresses=None):
     """A PlejdCloudSite-like object matching _DEV by default (no change)."""
     from plejd.cloud import PlejdCloudSite
 
@@ -1206,6 +1207,7 @@ def _fake_site(devices=None, gateways=None, resource_set_id=None):
         scenes=[],
         gateways=gateways or [],
         resource_set_id=resource_set_id,
+        device_addresses=device_addresses or {},
     )
 
 
@@ -1290,7 +1292,34 @@ async def test_cloud_poll_seeds_installation_id_for_new_gateway(monkeypatch):
     assert updated[CONF_INSTALLATION_ID]  # a fresh id was generated, not left missing
 
 
-async def test_cloud_poll_auth_error_logs_warning(monkeypatch):
+async def test_cloud_poll_persists_device_addresses(monkeypatch):
+    """A new/remapped physical address must be persisted, or device_address_for() goes
+    stale after reload and fault sensors/polling silently stop working for that device."""
+
+    async def _login(session, email, password):
+        return "TOKEN"
+
+    async def _get_site(session, token, site_id):
+        return _fake_site(device_addresses={"d1": 5, "d2": 9})
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _login)
+    monkeypatch.setattr(coordinator_mod, "async_get_site", _get_site)
+
+    entry = _cloud_poll_entry()  # cached device_addresses: {}
+    updated = {}
+    config_entries = types.SimpleNamespace(
+        async_get_entry=lambda eid: entry,
+        async_update_entry=lambda e, data: updated.update(data),
+    )
+    hass = _hass()
+    hass.session = object()
+    hass.config_entries = config_entries
+    c = PlejdCoordinator(hass, entry)
+    await c._async_poll_cloud(None)
+    assert updated[CONF_DEVICE_ADDRESSES] == {"d1": 5, "d2": 9}
+
+
+async def test_cloud_poll_auth_error_starts_reauth(monkeypatch):
     from plejd.cloud import PlejdAuthError
 
     async def _login(session, email, password):
@@ -1309,8 +1338,14 @@ async def test_cloud_poll_auth_error_logs_warning(monkeypatch):
     hass.session = object()
     hass.config_entries = config_entries
     c = PlejdCoordinator(hass, entry)
+    started = []
+    c._entry = types.SimpleNamespace(async_start_reauth=lambda h: started.append(h))
     await c._async_poll_cloud(None)  # must not raise
     assert not reloaded
+    # BLE-only sites have no gateway reconnect path to trigger reauth, and Reconfigure
+    # can't repair a rejected password (it reuses the stored one) - the poll must start
+    # reauth itself or auto-sync stays silently broken forever.
+    assert started == [hass]
 
 
 async def test_cloud_poll_entry_gone_does_nothing(monkeypatch):
