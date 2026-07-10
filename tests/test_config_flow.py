@@ -5,6 +5,7 @@ from __future__ import annotations
 import types
 
 import pytest
+from aiohttp import ClientError
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
 from plejd import config_flow as cf
 from plejd.cloud import (
@@ -105,14 +106,22 @@ async def test_cannot_connect(monkeypatch):
     assert result["errors"] == {"base": "cannot_connect"}
 
 
-async def test_user_step_handles_login_transport_failure(monkeypatch):
-    _patch_cloud(monkeypatch, login=ConnectionResetError("connection reset"))
+@pytest.mark.parametrize(
+    "error",
+    [ConnectionResetError("connection reset"), TimeoutError("timed out"), ClientError("client error")],
+)
+async def test_user_step_handles_login_transport_failure(monkeypatch, error):
+    _patch_cloud(monkeypatch, login=error)
     result = await _flow().async_step_user(_LOGIN)
     assert result["errors"] == {"base": "cannot_connect"}
 
 
-async def test_user_step_handles_site_list_transport_failure(monkeypatch):
-    _patch_cloud(monkeypatch, login="tok", sites=ConnectionResetError("connection reset"))
+@pytest.mark.parametrize(
+    "error",
+    [ConnectionResetError("connection reset"), TimeoutError("timed out"), ClientError("client error")],
+)
+async def test_user_step_handles_site_list_transport_failure(monkeypatch, error):
+    _patch_cloud(monkeypatch, login="tok", sites=error)
     result = await _flow().async_step_user(_LOGIN)
     assert result["errors"] == {"base": "cannot_connect"}
 
@@ -162,8 +171,12 @@ async def test_create_entry_handles_site_fetch_error(monkeypatch):
     assert result["type"] == "form" and result["errors"] == {"base": "cannot_connect"}
 
 
-async def test_create_entry_handles_site_fetch_transport_failure(monkeypatch):
-    _patch_cloud(monkeypatch, sites=[{"siteId": "S1"}], site=ConnectionResetError("connection reset"))
+@pytest.mark.parametrize(
+    "error",
+    [ConnectionResetError("connection reset"), TimeoutError("timed out"), ClientError("client error")],
+)
+async def test_create_entry_handles_site_fetch_transport_failure(monkeypatch, error):
+    _patch_cloud(monkeypatch, sites=[{"siteId": "S1"}], site=error)
     result = await _flow().async_step_user(_LOGIN)
     assert result["type"] == "form" and result["errors"] == {"base": "cannot_connect"}
 
@@ -215,7 +228,15 @@ async def test_reauth_confirm_invalid_auth(monkeypatch):
     assert res["errors"] == {"base": "invalid_auth"}
 
 
-@pytest.mark.parametrize("error", [PlejdCloudError("down"), ConnectionResetError("connection reset")])
+@pytest.mark.parametrize(
+    "error",
+    [
+        PlejdCloudError("down"),
+        ConnectionResetError("connection reset"),
+        TimeoutError("timed out"),
+        ClientError("client error"),
+    ],
+)
 async def test_reauth_confirm_cannot_connect(monkeypatch, error):
     _patch_cloud(monkeypatch, login=error)
     flow = _reauth_flow(types.SimpleNamespace(data={CONF_EMAIL: "u@x.se"}))
