@@ -115,7 +115,7 @@ class PlejdConfigFlow(ConfigFlow, domain=DOMAIN):
             except PlejdAuthError:
                 errors["base"] = "invalid_auth"
             except (PlejdCloudError, ClientError, OSError):
-                _LOGGER.debug("Plejd cloud login failed", exc_info=True)
+                _LOGGER.debug("Plejd cloud login request failed", exc_info=True)
                 errors["base"] = "cannot_connect"
             else:
                 try:

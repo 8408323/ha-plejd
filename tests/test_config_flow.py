@@ -106,13 +106,13 @@ async def test_cannot_connect(monkeypatch):
 
 
 async def test_user_step_login_transport_failure(monkeypatch):
-    _patch_cloud(monkeypatch, login=OSError("connection reset"))
+    _patch_cloud(monkeypatch, login=ConnectionResetError("connection reset"))
     result = await _flow().async_step_user(_LOGIN)
     assert result["errors"] == {"base": "cannot_connect"}
 
 
 async def test_user_step_site_list_transport_failure(monkeypatch):
-    _patch_cloud(monkeypatch, login="tok", sites=OSError("connection reset"))
+    _patch_cloud(monkeypatch, login="tok", sites=ConnectionResetError("connection reset"))
     result = await _flow().async_step_user(_LOGIN)
     assert result["errors"] == {"base": "cannot_connect"}
 
@@ -163,7 +163,7 @@ async def test_create_entry_handles_site_fetch_error(monkeypatch):
 
 
 async def test_create_entry_handles_site_fetch_transport_failure(monkeypatch):
-    _patch_cloud(monkeypatch, sites=[{"siteId": "S1"}], site=OSError("connection reset"))
+    _patch_cloud(monkeypatch, sites=[{"siteId": "S1"}], site=ConnectionResetError("connection reset"))
     result = await _flow().async_step_user(_LOGIN)
     assert result["type"] == "form" and result["errors"] == {"base": "cannot_connect"}
 
@@ -215,7 +215,7 @@ async def test_reauth_confirm_invalid_auth(monkeypatch):
     assert res["errors"] == {"base": "invalid_auth"}
 
 
-@pytest.mark.parametrize("error", [PlejdCloudError("down"), OSError("connection reset")])
+@pytest.mark.parametrize("error", [PlejdCloudError("down"), ConnectionResetError("connection reset")])
 async def test_reauth_confirm_cannot_connect(monkeypatch, error):
     _patch_cloud(monkeypatch, login=error)
     flow = _reauth_flow(types.SimpleNamespace(data={CONF_EMAIL: "u@x.se"}))
