@@ -17,7 +17,6 @@ from homeassistant.helpers.selector import SelectSelector, SelectSelectorConfig
 from .add_device import async_add_device
 from .cloud import (
     PlejdAuthError,
-    PlejdCloudError,
     async_get_site,
     async_get_sites,
     async_login,
@@ -114,7 +113,8 @@ class PlejdConfigFlow(ConfigFlow, domain=DOMAIN):
                 self._sites = await async_get_sites(session, self._token)
             except PlejdAuthError:
                 errors["base"] = "invalid_auth"
-            except PlejdCloudError:
+            except Exception:  # noqa: BLE001 - PlejdCloudError plus any transport failure
+                _LOGGER.debug("Plejd login/site-list fetch failed", exc_info=True)
                 errors["base"] = "cannot_connect"
             else:
                 if not self._sites:
@@ -184,7 +184,8 @@ class PlejdConfigFlow(ConfigFlow, domain=DOMAIN):
                 await async_login(session, entry.data[CONF_EMAIL], user_input[CONF_PASSWORD])
             except PlejdAuthError:
                 errors["base"] = "invalid_auth"
-            except PlejdCloudError:
+            except Exception:  # noqa: BLE001 - PlejdCloudError plus any transport failure
+                _LOGGER.debug("Plejd reauth: cloud unreachable", exc_info=True)
                 errors["base"] = "cannot_connect"
             else:
                 return self.async_update_reload_and_abort(
@@ -203,7 +204,8 @@ class PlejdConfigFlow(ConfigFlow, domain=DOMAIN):
         session = async_get_clientsession(self.hass)
         try:
             site = await async_get_site(session, self._token, site_id)
-        except PlejdCloudError:
+        except Exception:  # noqa: BLE001 - PlejdCloudError plus any transport failure
+            _LOGGER.debug("Plejd site fetch failed during setup", exc_info=True)
             return self.async_show_form(step_id="user", data_schema=STEP_USER_SCHEMA, errors={"base": "cannot_connect"})
         await self.async_set_unique_id(site.site_id)
         self._abort_if_unique_id_configured()

@@ -105,6 +105,18 @@ async def test_cannot_connect(monkeypatch):
     assert result["errors"] == {"base": "cannot_connect"}
 
 
+async def test_cannot_connect_on_transport_failure_during_login(monkeypatch):
+    _patch_cloud(monkeypatch, login=OSError("connection reset"))
+    result = await _flow().async_step_user(_LOGIN)
+    assert result["errors"] == {"base": "cannot_connect"}
+
+
+async def test_cannot_connect_on_transport_failure_during_site_list_fetch(monkeypatch):
+    _patch_cloud(monkeypatch, login="tok", sites=OSError("connection reset"))
+    result = await _flow().async_step_user(_LOGIN)
+    assert result["errors"] == {"base": "cannot_connect"}
+
+
 async def test_no_sites(monkeypatch):
     _patch_cloud(monkeypatch, sites=[])
     result = await _flow().async_step_user(_LOGIN)
@@ -146,6 +158,12 @@ async def test_site_step_shows_form_when_no_input(monkeypatch):
 
 async def test_create_entry_handles_site_fetch_error(monkeypatch):
     _patch_cloud(monkeypatch, sites=[{"siteId": "S1"}], site=PlejdCloudError("nope"))
+    result = await _flow().async_step_user(_LOGIN)
+    assert result["type"] == "form" and result["errors"] == {"base": "cannot_connect"}
+
+
+async def test_create_entry_handles_site_fetch_transport_failure(monkeypatch):
+    _patch_cloud(monkeypatch, sites=[{"siteId": "S1"}], site=OSError("connection reset"))
     result = await _flow().async_step_user(_LOGIN)
     assert result["type"] == "form" and result["errors"] == {"base": "cannot_connect"}
 
@@ -199,6 +217,13 @@ async def test_reauth_confirm_invalid_auth(monkeypatch):
 
 async def test_reauth_confirm_cannot_connect(monkeypatch):
     _patch_cloud(monkeypatch, login=PlejdCloudError("down"))
+    flow = _reauth_flow(types.SimpleNamespace(data={CONF_EMAIL: "u@x.se"}))
+    res = await flow.async_step_reauth_confirm({CONF_PASSWORD: "x"})
+    assert res["errors"] == {"base": "cannot_connect"}
+
+
+async def test_reauth_confirm_cannot_connect_on_transport_failure(monkeypatch):
+    _patch_cloud(monkeypatch, login=OSError("connection reset"))
     flow = _reauth_flow(types.SimpleNamespace(data={CONF_EMAIL: "u@x.se"}))
     res = await flow.async_step_reauth_confirm({CONF_PASSWORD: "x"})
     assert res["errors"] == {"base": "cannot_connect"}
