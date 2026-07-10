@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import voluptuous as vol
+from aiohttp import ClientError
 from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlow
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
 from homeassistant.exceptions import HomeAssistantError
@@ -17,6 +18,7 @@ from homeassistant.helpers.selector import SelectSelector, SelectSelectorConfig
 from .add_device import async_add_device
 from .cloud import (
     PlejdAuthError,
+    PlejdCloudError,
     async_get_site,
     async_get_sites,
     async_login,
@@ -110,19 +112,24 @@ class PlejdConfigFlow(ConfigFlow, domain=DOMAIN):
             session = async_get_clientsession(self.hass)
             try:
                 self._token = await async_login(session, self._email, self._password)
-                self._sites = await async_get_sites(session, self._token)
             except PlejdAuthError:
                 errors["base"] = "invalid_auth"
-            except Exception:  # noqa: BLE001 - PlejdCloudError plus any transport failure
-                _LOGGER.debug("Plejd login/site-list fetch failed", exc_info=True)
+            except (PlejdCloudError, ClientError, OSError):
+                _LOGGER.debug("Plejd login failed", exc_info=True)
                 errors["base"] = "cannot_connect"
             else:
-                if not self._sites:
-                    errors["base"] = "no_sites"
-                elif len(self._sites) == 1:
-                    return await self._create_entry(_site_id(self._sites[0]))
+                try:
+                    self._sites = await async_get_sites(session, self._token)
+                except (PlejdCloudError, ClientError, OSError):
+                    _LOGGER.debug("Plejd site-list fetch failed", exc_info=True)
+                    errors["base"] = "cannot_connect"
                 else:
-                    return await self.async_step_site()
+                    if not self._sites:
+                        errors["base"] = "no_sites"
+                    elif len(self._sites) == 1:
+                        return await self._create_entry(_site_id(self._sites[0]))
+                    else:
+                        return await self.async_step_site()
         return self.async_show_form(step_id="user", data_schema=STEP_USER_SCHEMA, errors=errors)
 
     async def async_step_site(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
@@ -143,9 +150,7 @@ class PlejdConfigFlow(ConfigFlow, domain=DOMAIN):
                 site = await async_get_site(session, token, entry.data[CONF_SITE_ID])
             except PlejdAuthError:
                 errors["base"] = "invalid_auth"
-            except Exception:  # noqa: BLE001 - PlejdCloudError plus any transport failure
-                # (DNS/socket/TLS/timeout/non-JSON 5xx) should show cannot_connect, not crash
-                # the flow with an unhandled exception.
+            except (PlejdCloudError, ClientError, OSError):
                 _LOGGER.debug("Plejd reconfigure: cloud unreachable", exc_info=True)
                 errors["base"] = "cannot_connect"
             else:
@@ -184,7 +189,7 @@ class PlejdConfigFlow(ConfigFlow, domain=DOMAIN):
                 await async_login(session, entry.data[CONF_EMAIL], user_input[CONF_PASSWORD])
             except PlejdAuthError:
                 errors["base"] = "invalid_auth"
-            except Exception:  # noqa: BLE001 - PlejdCloudError plus any transport failure
+            except (PlejdCloudError, ClientError, OSError):
                 _LOGGER.debug("Plejd reauth: cloud unreachable", exc_info=True)
                 errors["base"] = "cannot_connect"
             else:
@@ -204,7 +209,7 @@ class PlejdConfigFlow(ConfigFlow, domain=DOMAIN):
         session = async_get_clientsession(self.hass)
         try:
             site = await async_get_site(session, self._token, site_id)
-        except Exception:  # noqa: BLE001 - PlejdCloudError plus any transport failure
+        except (PlejdCloudError, ClientError, OSError):
             _LOGGER.debug("Plejd site fetch failed during setup", exc_info=True)
             return self.async_show_form(step_id="user", data_schema=STEP_USER_SCHEMA, errors={"base": "cannot_connect"})
         await self.async_set_unique_id(site.site_id)

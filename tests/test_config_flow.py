@@ -215,15 +215,9 @@ async def test_reauth_confirm_invalid_auth(monkeypatch):
     assert res["errors"] == {"base": "invalid_auth"}
 
 
-async def test_reauth_confirm_cannot_connect(monkeypatch):
-    _patch_cloud(monkeypatch, login=PlejdCloudError("down"))
-    flow = _reauth_flow(types.SimpleNamespace(data={CONF_EMAIL: "u@x.se"}))
-    res = await flow.async_step_reauth_confirm({CONF_PASSWORD: "x"})
-    assert res["errors"] == {"base": "cannot_connect"}
-
-
-async def test_reauth_confirm_cannot_connect_on_transport_failure(monkeypatch):
-    _patch_cloud(monkeypatch, login=OSError("connection reset"))
+@pytest.mark.parametrize("error", [PlejdCloudError("down"), OSError("connection reset")])
+async def test_reauth_confirm_cannot_connect(monkeypatch, error):
+    _patch_cloud(monkeypatch, login=error)
     flow = _reauth_flow(types.SimpleNamespace(data={CONF_EMAIL: "u@x.se"}))
     res = await flow.async_step_reauth_confirm({CONF_PASSWORD: "x"})
     assert res["errors"] == {"base": "cannot_connect"}
