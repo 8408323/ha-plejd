@@ -105,13 +105,13 @@ async def test_cannot_connect(monkeypatch):
     assert result["errors"] == {"base": "cannot_connect"}
 
 
-async def test_cannot_connect_on_transport_failure_during_login(monkeypatch):
+async def test_user_step_login_transport_failure(monkeypatch):
     _patch_cloud(monkeypatch, login=OSError("connection reset"))
     result = await _flow().async_step_user(_LOGIN)
     assert result["errors"] == {"base": "cannot_connect"}
 
 
-async def test_cannot_connect_on_transport_failure_during_site_list_fetch(monkeypatch):
+async def test_user_step_site_list_transport_failure(monkeypatch):
     _patch_cloud(monkeypatch, login="tok", sites=OSError("connection reset"))
     result = await _flow().async_step_user(_LOGIN)
     assert result["errors"] == {"base": "cannot_connect"}
