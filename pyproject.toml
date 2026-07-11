@@ -10,16 +10,16 @@ testpaths = ["tests"]
 
 [dependency-groups]
 dev = [
-    "pytest>=9.0.3",
+    "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
     "pytest-cov>=7.1.0",
-    "ruff>=0.15.15",
+    "ruff>=0.15.21",
     "voluptuous>=0.16.0",
     "bleak>=3.0.2",
     "bleak-retry-connector>=4.6.1",
-    "cryptography>=48.0.0",
-    "aiohttp>=3.13.5",
-    "aioresponses>=0.7.8",
+    "cryptography>=49.0.0",
+    "aiohttp>=3.14.1",
+    "aioresponses>=0.7.9",
 ]
 
 [tool.ruff]
