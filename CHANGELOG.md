@@ -49,6 +49,17 @@ All notable changes to this project are documented here. The format follows
   per-output cloud address alone identifies the target, matching this
   opcode's own decode side (`output=cmd.address`). Switched to a new
   `set_group_state_and_level` (`0x0098`) for all on/off + level commands.
+- **Hold-to-dim over the gateway was chunky and dropped most commands.** The
+  cloud-relay transport published mesh commands fire-and-forget (`ack=false`),
+  which the relay mostly dropped under a rapid stream — an A/B against the live
+  relay delivered only 1 of 8 dim steps (final state after ~4s), matching the
+  chunky hold-to-dim in #70. The Plejd app sets `ack=true` and awaits the
+  `published` echo, which delivers reliably (round-trip ~40-140ms, no drops).
+  `write()` now does the same: acks each publish and awaits its echo (correlated
+  by the echoed content, bounded timeout), pacing the stream to the relay's real
+  round-trip. The echo doubles as the state relay for our own change; off-app
+  changes still arrive as `published`-without-publisher / `update` pushes.
+  Re-verified live: **8 of 8** dim steps delivered.
 
 ## [0.5.0] - 2026-05-31
 
