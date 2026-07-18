@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 
@@ -99,20 +100,100 @@ async def test_connect_handshake_and_headers():
     assert _sent_publishes(ws, gateway.TOPIC_CONTROL_IN)  # MeshStateRequest
 
 
-async def test_write_publishes_command_fire_and_forget():
+def _published_echo() -> dict:
+    # The cloud's confirmation of our own acked publish (see #70 capture): op
+    # "published" on mesh.out, echoing the command back with publisher=True.
+    return {"op": "published", "topic": "mesh.out", "data": "", "publisher": True}
+
+
+async def test_write_publishes_command_with_ack_and_awaits_echo():
     ws = _FakeWS()
     conn = _conn(ws)
     await conn.connect()
     vector = set_output_state_and_level(address=11, output=0, on=True, level=80)
-    await conn.write(vector)
+    task = asyncio.ensure_future(conn.write(vector))
+    await asyncio.sleep(0)  # let write() send and register its ack waiter
+    conn._handle_frame(json.dumps(_published_echo()))  # cloud confirms → write() unblocks
+    await task
     await conn.disconnect()
     mesh_pubs = _sent_publishes(ws, gateway.TOPIC_MESH_IN)
     assert len(mesh_pubs) == 1
+    assert mesh_pubs[0]["ack"] is True  # the app-matching flag that gets the fast path
     inner = json.loads(base64.b64decode(mesh_pubs[0]["data"]))
     assert inner["index"] == 11
     assert base64.b64decode(inner["raw"]) == gateway.repackage_command_to_ws(vector)
     # only the connect-time snapshot is requested; state changes arrive via mesh.out push
     assert len(_sent_publishes(ws, gateway.TOPIC_CONTROL_IN)) == 1
+
+
+async def test_write_returns_when_ack_times_out(monkeypatch):
+    from plejd import gateway_transport as gt
+
+    monkeypatch.setattr(gt, "GATEWAY_PUBLISH_ACK_TIMEOUT", 0.01)
+    ws = _FakeWS()
+    conn = _conn(ws)
+    await conn.connect()
+    vector = set_output_state_and_level(address=11, output=0, on=True, level=80)
+    await conn.write(vector)  # no echo ever arrives → returns after the timeout, no hang
+    assert len(_sent_publishes(ws, gateway.TOPIC_MESH_IN)) == 1
+    assert not conn._ack_waiters  # the timed-out waiter is cleaned up, not leaked
+    await conn.disconnect()
+
+
+async def test_published_echo_is_ack_not_state():
+    fired = []
+    events = []
+    conn = _conn(_FakeWS(), on_state=lambda: fired.append(1), on_event=lambda cmd: events.append(cmd))
+    # A published echo must not be decoded as a state push, even though it carries data.
+    conn._handle_frame(json.dumps(_published_echo()))
+    assert conn.state == {} and fired == [] and events == []
+
+
+async def test_concurrent_writes_each_resolve_in_order():
+    ws = _FakeWS()
+    conn = _conn(ws)
+    await conn.connect()
+    v1 = set_output_state_and_level(address=11, output=0, on=True, level=80)
+    v2 = set_output_state_and_level(address=12, output=0, on=True, level=90)
+    t1 = asyncio.ensure_future(conn.write(v1))
+    t2 = asyncio.ensure_future(conn.write(v2))
+    await asyncio.sleep(0)
+    assert len(conn._ack_waiters) == 2  # both in flight, FIFO
+    conn._handle_frame(json.dumps(_published_echo()))
+    conn._handle_frame(json.dumps(_published_echo()))
+    await asyncio.gather(t1, t2)
+    assert len(_sent_publishes(ws, gateway.TOPIC_MESH_IN)) == 2
+    await conn.disconnect()
+
+
+async def test_reconnect_releases_pending_ack_waiters():
+    ws = _FakeWS()
+    conn = _conn(ws)
+    await conn.connect()
+    vector = set_output_state_and_level(address=11, output=0, on=True, level=80)
+    task = asyncio.ensure_future(conn.write(vector))
+    await asyncio.sleep(0)  # write() is now blocked awaiting an ack
+    await conn.connect()  # socket dropped + reconnect must not strand the pending write
+    await task  # returns without waiting out the full timeout
+    assert not conn._ack_waiters
+    await conn.disconnect()
+
+
+async def test_write_discards_waiter_when_send_fails():
+    conn = _conn(_FakeWS())  # never connected → _send raises "not connected"
+    vector = set_output_state_and_level(address=11, output=0, on=True, level=80)
+    with pytest.raises(RuntimeError, match="not connected"):
+        await conn.write(vector)
+    assert not conn._ack_waiters  # a failed send must not leak its waiter
+
+
+async def test_discard_ack_waiter_tolerates_absent_waiter():
+    # A reconnect (or the timeout path) can clear a waiter before write()'s own cleanup
+    # runs; discarding one that's no longer tracked must be a safe no-op, not an error.
+    conn = _conn(_FakeWS())
+    waiter: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+    conn._discard_ack_waiter(waiter)
+    assert not conn._ack_waiters
 
 
 def test_handle_push_updates_state():
@@ -352,8 +433,6 @@ async def test_disconnect_is_idempotent():
 
 
 async def test_connect_cancels_leftover_tasks():
-    import asyncio
-
     conn = _conn(_FakeWS())
 
     async def _sleeper():

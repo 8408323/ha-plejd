@@ -17,6 +17,7 @@ import asyncio
 import base64
 import json
 import logging
+from collections import deque
 from collections.abc import Awaitable, Callable
 
 import aiohttp
@@ -31,6 +32,12 @@ _LOGGER = logging.getLogger(__name__)
 # detects a dead socket).
 GATEWAY_PING_INTERVAL = 60.0
 GATEWAY_PONG_TIMEOUT = 10.0
+
+# How long to wait for the cloud's `published` echo before proceeding anyway.
+# The app's own acked publishes round-tripped in ~40-640ms over the cloud relay
+# (#70); a lost ack past this window means the socket is in trouble and the ping
+# loop will reconnect, so falling through here is safe.
+GATEWAY_PUBLISH_ACK_TIMEOUT = 2.0
 
 
 class PlejdGatewayConnection:
@@ -63,6 +70,12 @@ class PlejdGatewayConnection:
         self._ping_task: asyncio.Task | None = None
         self._pong = False
         self._closing = False
+        # FIFO of futures awaiting a `published` ack, one per in-flight write().
+        # Ack echoes arrive in publish order on the single socket, so oldest-first
+        # resolution correlates each ack to its publish. Serialised by _publish_lock
+        # so a waiter is enqueued in the same order its publish is sent.
+        self._ack_waiters: deque[asyncio.Future[None]] = deque()
+        self._publish_lock = asyncio.Lock()
 
     @property
     def connected(self) -> bool:
@@ -78,8 +91,10 @@ class PlejdGatewayConnection:
     async def connect(self) -> None:
         """Open the WebSocket, authenticate, subscribe, and request initial state."""
         # A reconnect reuses this instance; cancel any leftover loops first so a stale
-        # ping task can't close the fresh socket.
+        # ping task can't close the fresh socket, and release any writes still waiting
+        # on an ack from the dropped socket.
         self._cancel_tasks()
+        self._release_ack_waiters()
         token = await self._get_token()
         headers = {
             "Client-Type": "app",
@@ -97,12 +112,30 @@ class PlejdGatewayConnection:
         self._ping_task = asyncio.ensure_future(self._ping_loop())
 
     async def write(self, vector: bytes) -> None:
-        """Publish a plaintext mesh command, fire-and-forget.
+        """Publish a plaintext mesh command and await the gateway's `published` ack.
 
-        Like the BLE DontRespond path: we don't await the publish ack (ack=False);
-        the resulting state change arrives as a mesh.out push (see _handle_frame).
+        The app sets ack=true on every mesh command and the cloud relay gives acked
+        publishes a faster, non-dropping path than fire-and-forget ones — this is what
+        makes the app's hold-to-dim smooth over the same channel where ours was chunky
+        (#70). Awaiting the ack also paces a rapid command stream to the relay's actual
+        round-trip instead of flooding it. On timeout or a dropped socket we proceed
+        anyway: the command already went out, and state still reconciles via the
+        mesh.out pushes and the periodic snapshot.
         """
-        await self._send({**gateway.build_mesh_publish(vector, ack=False), "topic": [gateway.TOPIC_MESH_IN]})
+        message = {**gateway.build_mesh_publish(vector, ack=True), "topic": [gateway.TOPIC_MESH_IN]}
+        waiter: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+        async with self._publish_lock:
+            self._ack_waiters.append(waiter)
+            try:
+                await self._send(message)
+            except Exception:
+                self._discard_ack_waiter(waiter)
+                raise
+        try:
+            await asyncio.wait_for(waiter, GATEWAY_PUBLISH_ACK_TIMEOUT)
+        except TimeoutError:
+            self._discard_ack_waiter(waiter)
+            _LOGGER.debug("Plejd gateway publish ack timed out; proceeding without it")
 
     async def async_request_state(self) -> None:
         """Ask the gateway for a full mesh-state snapshot."""
@@ -125,7 +158,15 @@ class PlejdGatewayConnection:
             frame = json.loads(raw)
         except ValueError:
             return
-        if not isinstance(frame, dict) or not isinstance(frame.get("data"), str):
+        if not isinstance(frame, dict):
+            return
+        if frame.get("op") == "published":
+            # Our own acked publish, echoed back as confirmation — an ack, not a
+            # state change. Release the matching write(); the resulting state arrives
+            # separately as a mesh.out `update` push, like any other change.
+            self._resolve_ack_waiter()
+            return
+        if not isinstance(frame.get("data"), str):
             return
         try:
             inner = json.loads(base64.b64decode(frame["data"]))
@@ -191,6 +232,28 @@ class PlejdGatewayConnection:
             if not self._closing and self._on_disconnect is not None:
                 self._on_disconnect()
 
+    def _resolve_ack_waiter(self) -> None:
+        # Resolve the oldest still-pending write(); skip any already timed out/cancelled.
+        while self._ack_waiters:
+            waiter = self._ack_waiters.popleft()
+            if not waiter.done():
+                waiter.set_result(None)
+                return
+
+    def _discard_ack_waiter(self, waiter: asyncio.Future[None]) -> None:
+        try:
+            self._ack_waiters.remove(waiter)
+        except ValueError:
+            pass
+
+    def _release_ack_waiters(self) -> None:
+        # Unblock every in-flight write() so a dropped socket doesn't strand them
+        # for the full ack timeout; their commands were already sent.
+        while self._ack_waiters:
+            waiter = self._ack_waiters.popleft()
+            if not waiter.done():
+                waiter.set_result(None)
+
     def _cancel_tasks(self) -> None:
         for task in (self._recv_task, self._ping_task):
             if task is not None:
@@ -200,6 +263,7 @@ class PlejdGatewayConnection:
     async def disconnect(self) -> None:
         self._closing = True
         self._cancel_tasks()
+        self._release_ack_waiters()
         if self._ws is not None:
             await self._ws.close()
             self._ws = None
