@@ -89,6 +89,27 @@ async def test_ramp_up_walks_in_steps():
     assert coord.sets == [(11, True, 225), (11, True, 250), (11, True, DIM_MAX)]
 
 
+# ── `current` seed (targets with no state read-back of their own, e.g. a room group) ──
+
+
+async def test_ramp_up_uses_seeded_current_instead_of_coordinator_state():
+    coord = _FakeCoord()  # no per-output state at all for a group address
+    ramp = _ramp(coord, step=25, interval=0)
+    ramp.start(99, 1, current=(True, 200))
+    await ramp._tasks[99]
+    await _drain()
+    assert coord.sets == [(99, True, 225), (99, True, 250), (99, True, DIM_MAX)]
+
+
+async def test_ramp_down_seeded_off_is_noop():
+    coord = _FakeCoord()
+    ramp = _ramp(coord, step=25, interval=0)
+    ramp.start(99, -1, current=(False, 0))
+    await ramp._tasks[99]
+    await _drain()
+    assert coord.sets == []  # seeded as off -> nothing to dim down, coordinator state ignored
+
+
 # ── stop / restart / shutdown ─────────────────────────────────────────────────
 
 

@@ -578,13 +578,47 @@ def test_parse_site_parses_rooms_with_group_addresses():
         ],
         # r2 is absent from rooms[] -> name falls back to "Room"; r4's address is non-int -> skipped
         "roomAddress": {"r1": 14, "r2": 16, "r3": 99, "r4": "bad"},
-        # d3.0 has no entry in outputAddress -> that membership is skipped (no address to control)
-        "outputGroups": {"d1": {"0": [14]}, "d2": {"0": [14], "1": [16]}, "d3": {"0": [14]}},
+        # d1 (a LIGHT) belongs to both groups; d2 (a RELAY) and d3 (a COVERABLE) are listed too
+        # but must not join a room's aggregate light entity - only light outputs count.
+        # d3.0 also has no entry in outputAddress -> that membership is skipped regardless.
+        "outputGroups": {"d1": {"0": [14, 16]}, "d2": {"0": [14], "1": [16]}, "d3": {"0": [14]}},
     }
     rooms = parse_site(site).rooms
     by_addr = {r.address: r for r in rooms}
     assert set(by_addr) == {14, 16}  # r3 (no members) and r4 (bad address) are dropped
     assert by_addr[14].name == "Kitchen"
-    assert by_addr[14].member_addresses == [11, 21]  # d1.out0 + d2.out0, both in group 14
+    assert by_addr[14].member_addresses == [11]  # only d1.out0 (a light); d2/d3 are non-light
+    assert by_addr[14].dimmable is True
     assert by_addr[16].name == "Room"  # fallback when the room has no title entry
-    assert by_addr[16].member_addresses == [22]
+    assert by_addr[16].member_addresses == [11]  # d1.out0 also belongs to group 16
+
+
+def test_parse_site_skips_malformed_output_group_entries():
+    site = {
+        **_SITE,
+        "roomAddress": {"r1": 14},
+        # d1's own group list has one malformed (non-int) group id alongside the valid one;
+        # d5 (not in devices[], so its own outputAddress cast can't crash devices-parsing)
+        # has a malformed (non-int) output address for an otherwise-valid group. Neither
+        # entry may abort the whole site parse - both are skipped like a bad roomAddress.
+        "outputGroups": {"d1": {"0": [14, "bad-group"]}, "d5": {"0": [14]}},
+        "outputAddress": {**_SITE["outputAddress"], "d5": {"0": "bad-address"}},
+    }
+    rooms = parse_site(site).rooms
+    assert len(rooms) == 1
+    assert rooms[0].member_addresses == [11]  # only d1.out0 survives
+
+
+def test_parse_site_room_not_dimmable_when_no_member_is_dimmable():
+    site = {
+        **_SITE,
+        "roomAddress": {"r1": 14},
+        "outputGroups": {"d1": {"0": [14]}},
+        # d1 is a LIGHT but explicitly lacks the Dimmable trait -> on/off only.
+        "devices": [
+            {"deviceId": "d1", "title": "Kitchen", "roomId": "r1", "outputType": "LIGHT", "traits": 0},
+        ],
+    }
+    rooms = parse_site(site).rooms
+    assert len(rooms) == 1
+    assert rooms[0].dimmable is False

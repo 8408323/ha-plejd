@@ -42,10 +42,10 @@ class PlejdDimRamp:
         self._interval = interval
         self._tasks: dict[int, asyncio.Task] = {}
 
-    def start(self, address: int, direction: int) -> None:
-        """Begin ramping `address` up (direction >= 0) or down (direction < 0) while held."""
+    def start(self, address: int, direction: int, *, current: tuple[bool, int] | None = None) -> None:
+        """Begin ramping `address` up/down while held; `current` seeds (is_on, level) for group addresses."""
         self.stop(address)
-        task = self._spawn(self._run(address, direction))
+        task = self._spawn(self._run(address, direction, current))
         self._tasks[address] = task
         # Drop the entry when the ramp ends on its own (bound reached), but only if it's
         # still the current task — a start() that replaced it must not be evicted.
@@ -73,10 +73,13 @@ class PlejdDimRamp:
             return create(coro, name="plejd-dim-ramp")
         return asyncio.ensure_future(coro)
 
-    async def _run(self, address: int, direction: int) -> None:
-        state = self._coordinator.state_for(address)
-        is_on = state is not None and state.on
-        level = state.level if state is not None else 0
+    async def _run(self, address: int, direction: int, current: tuple[bool, int] | None = None) -> None:
+        if current is not None:
+            is_on, level = current
+        else:
+            state = self._coordinator.state_for(address)
+            is_on = state is not None and state.on
+            level = state.level if state is not None else 0
         if direction < 0 and (not is_on or level <= DIM_MIN):
             return  # already off or at the floor — nothing to dim down
         if not is_on:

@@ -30,8 +30,8 @@ class _SpyRamp:
     def __init__(self):
         self.calls = []
 
-    def start(self, address, direction):
-        self.calls.append(("start", address, direction))
+    def start(self, address, direction, *, current=None):
+        self.calls.append(("start", address, direction, current))
 
     def stop(self, address):
         self.calls.append(("stop", address))
@@ -130,6 +130,13 @@ async def test_turn_on_without_brightness_restores_last_level():
     assert coord.commands == [(5, True, 140)]
 
 
+async def test_turn_on_without_brightness_preserves_zero_level():
+    coord = _Coordinator([], state=OutputState(output=0, on=False, level=0))
+    light = PlejdLight(coord, _device())
+    await light.async_turn_on()  # a saved level of 0 is a known value, not "unknown" -> stays 0
+    assert coord.commands == [(5, True, 0)]
+
+
 async def test_turn_off():
     coord = _Coordinator([])
     light = PlejdLight(coord, _device())
@@ -169,7 +176,7 @@ async def test_async_start_dim_ramps_dimmable_light():
     light = PlejdLight(coord, _device(dimmable=True, address=7))
     await light.async_start_dim("up")
     await light.async_start_dim("down")
-    assert coord.dim_ramp.calls == [("start", 7, 1), ("start", 7, -1)]
+    assert coord.dim_ramp.calls == [("start", 7, 1, None), ("start", 7, -1, None)]
 
 
 async def test_async_start_dim_noop_for_non_dimmable_light():
@@ -189,8 +196,8 @@ async def test_async_stop_dim_stops_ramp():
 # ── PlejdRoomLight (whole-room group control) ─────────────────────────────────
 
 
-def _room(address=14, members=(5, 6)):
-    return PlejdCloudRoom(room_id="r1", name="Kök", address=address, member_addresses=list(members))
+def _room(address=14, members=(5, 6), dimmable=True):
+    return PlejdCloudRoom(room_id="r1", name="Kök", address=address, member_addresses=list(members), dimmable=dimmable)
 
 
 async def test_setup_entry_creates_a_light_per_room():
@@ -215,6 +222,24 @@ async def test_room_turn_on_without_brightness_restores_or_full():
     light = PlejdRoomLight(coord, _room(members=(5, 6)))
     await light.async_turn_on()  # no brightness → the room's current average (150)
     assert coord.commands == [(14, True, 150)]
+
+
+async def test_room_turn_on_without_brightness_restores_average_of_off_members():
+    coord = _Coordinator(
+        [], states={5: OutputState(output=0, on=False, level=100), 6: OutputState(output=0, on=False, level=200)}
+    )
+    light = PlejdRoomLight(coord, _room(members=(5, 6)))
+    await light.async_turn_on()  # every member is off but remembers a level -> restore it, not full
+    assert coord.commands == [(14, True, 150)]
+
+
+async def test_room_turn_on_without_brightness_preserves_zero_average():
+    coord = _Coordinator(
+        [], states={5: OutputState(output=0, on=False, level=0), 6: OutputState(output=0, on=False, level=0)}
+    )
+    light = PlejdRoomLight(coord, _room(members=(5, 6)))
+    await light.async_turn_on()  # a saved average of 0 is a known value, not "unknown" -> stays 0
+    assert coord.commands == [(14, True, 0)]
 
 
 async def test_room_turn_off_sends_group_off():
@@ -262,3 +287,43 @@ async def test_room_added_to_hass_subscribes():
     light = PlejdRoomLight(coord, _room())
     await light.async_added_to_hass()
     assert len(coord.listeners) == 1
+
+
+def test_room_color_mode_onoff_when_no_member_is_dimmable():
+    light = PlejdRoomLight(_Coordinator([]), _room(dimmable=False))
+    assert light._attr_color_mode == ColorMode.ONOFF
+    assert light._attr_supported_color_modes == {ColorMode.ONOFF}
+
+
+def test_room_brightness_none_when_not_dimmable():
+    coord = _Coordinator([], states={5: OutputState(output=0, on=True, level=180)})
+    light = PlejdRoomLight(coord, _room(members=(5,), dimmable=False))
+    assert light.brightness is None
+
+
+# ── PlejdRoomLight hold-to-dim (ramps the room's group address) ───────────────
+
+
+async def test_room_async_start_dim_ramps_with_seeded_state():
+    coord = _Coordinator(
+        [], states={5: OutputState(output=0, on=True, level=100), 6: OutputState(output=0, on=False, level=50)}
+    )
+    light = PlejdRoomLight(coord, _room(address=14, members=(5, 6)))
+    await light.async_start_dim("up")
+    # dim_ramp has no state read-back for a group address, so the room seeds it:
+    # is_on = any member on (True); level = average of every known member level (75).
+    assert coord.dim_ramp.calls == [("start", 14, 1, (True, 75))]
+
+
+async def test_room_async_start_dim_noop_when_not_dimmable():
+    coord = _Coordinator([])
+    light = PlejdRoomLight(coord, _room(dimmable=False))
+    await light.async_start_dim("up")
+    assert coord.dim_ramp.calls == []  # on/off-only rooms can't ramp
+
+
+async def test_room_async_stop_dim_stops_ramp():
+    coord = _Coordinator([], rooms=[_room()])
+    light = PlejdRoomLight(coord, _room(address=16))
+    await light.async_stop_dim()
+    assert coord.dim_ramp.calls == [("stop", 16)]

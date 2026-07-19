@@ -9,7 +9,7 @@ import pytest
 from bleak.backends.device import BLEDevice
 from homeassistant.exceptions import HomeAssistantError
 from plejd.add_device import async_add_device
-from plejd.cloud import NewDeviceAddresses, PlejdCloudError, PlejdCloudSite
+from plejd.cloud import NewDeviceAddresses, PlejdCloudError, PlejdCloudRoom, PlejdCloudSite
 
 _KEY = bytes(range(16))
 _ADDR = "AA:BB:CC:DD:EE:FF"
@@ -163,6 +163,39 @@ async def test_add_device_refreshes_gateway_metadata(monkeypatch):
     assert entry.data["resource_set_id"] == "rs-new"
     # the newly-added device's physical address must be present for fault polling/sensors
     assert entry.data["device_addresses"] == {"new-device": 5}
+
+
+async def test_add_device_refreshes_rooms(monkeypatch):
+    # A device (or room) added during this flow can change room membership, so the
+    # cached room list must be refreshed alongside devices/inputs/scenes, not just on
+    # a full reconfigure - otherwise the new member can't be controlled via its room.
+    hass = _hass(ble_devices={_ADDR: _device()})
+    entry = _entry()
+    monkeypatch.setattr("plejd.add_device.async_login", AsyncMock(return_value="tok"))
+    fresh_site = PlejdCloudSite(
+        site_id="S1",
+        title="Home",
+        crypto_key=_KEY,
+        mesh_key="01-02-03-04",
+        devices=[],
+        inputs=[],
+        motion=[],
+        scenes=[],
+        gateways=[],
+        resource_set_id=None,
+        rooms=[PlejdCloudRoom(room_id="r1", name="Kitchen", address=14, member_addresses=[5], dimmable=True)],
+    )
+    monkeypatch.setattr("plejd.add_device.async_get_site", AsyncMock(return_value=fresh_site))
+    monkeypatch.setattr(
+        "plejd.add_device.async_commission_device",
+        AsyncMock(return_value=NewDeviceAddresses(device_address=5, output_addresses={})),
+    )
+
+    await async_add_device(hass, entry, address=_ADDR, name="X")
+
+    assert entry.data["rooms"] == [
+        {"room_id": "r1", "name": "Kitchen", "address": 14, "member_addresses": [5], "dimmable": True}
+    ]
 
 
 async def test_add_device_passes_room_title_through_to_commission(monkeypatch):

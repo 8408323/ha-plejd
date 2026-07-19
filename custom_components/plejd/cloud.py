@@ -109,13 +109,13 @@ class PlejdCloudScene:
 
 @dataclass
 class PlejdCloudRoom:
-    """A Plejd room: its group mesh address (one 0x0098 controls the whole room at once,
-    the way the app dims a room) plus the member output addresses (for aggregate state)."""
+    """A Plejd room: its group mesh address (one 0x0098 controls the whole room) plus member output addresses."""
 
     room_id: str
     name: str
     address: int  # the room's group mesh address — target of set_group_state_and_level
     member_addresses: list[int]
+    dimmable: bool  # True if any member output supports brightness (vs. on/off only)
 
 
 @dataclass
@@ -508,6 +508,8 @@ def parse_site(site: dict) -> PlejdCloudSite:
     room_address = site.get("roomAddress") or {}
     output_groups = site.get("outputGroups") or {}
     room_titles = {r.get("roomId"): (r.get("title") or "").strip() for r in site.get("rooms") or []}
+    category_by_address = {d.address: d.category for d in devices if d.address is not None}
+    dimmable_by_address = {d.address: d.dimmable for d in devices if d.address is not None}
     members_by_group: dict[int, list[int]] = {}
     for device_id, out_map in output_groups.items():
         dev_out_addr = output_address.get(device_id) or {}
@@ -515,8 +517,18 @@ def parse_site(site: dict) -> PlejdCloudSite:
             out_addr = dev_out_addr.get(str(out_idx))
             if out_addr is None:
                 continue
+            try:
+                addr = int(out_addr)
+            except (TypeError, ValueError):
+                continue
+            if category_by_address.get(addr) != CATEGORY_LIGHT:
+                continue  # only light outputs join a room's aggregate light entity
             for group in groups or []:
-                members_by_group.setdefault(int(group), []).append(int(out_addr))
+                try:
+                    group_addr = int(group)
+                except (TypeError, ValueError):
+                    continue
+                members_by_group.setdefault(group_addr, []).append(addr)
     rooms: list[PlejdCloudRoom] = []
     for room_id, addr in room_address.items():
         try:
@@ -532,6 +544,7 @@ def parse_site(site: dict) -> PlejdCloudSite:
                 name=room_titles.get(room_id) or "Room",
                 address=group_addr,
                 member_addresses=members,
+                dimmable=any(dimmable_by_address.get(m) for m in members),
             )
         )
 

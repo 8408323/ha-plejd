@@ -81,9 +81,9 @@ class PlejdLight(LightEntity):
     async def async_turn_on(self, **kwargs: Any) -> None:
         level = kwargs.get(ATTR_BRIGHTNESS)
         if level is None:
-            # No brightness requested: restore the last level, or full if unknown/off.
+            # No brightness requested: restore the last level, or full if unknown.
             current = self.brightness
-            level = current if current else 255
+            level = current if current is not None else 255
         await self._coordinator.async_set_output(self._device.address, True, level)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
@@ -113,8 +113,6 @@ class PlejdRoomLight(LightEntity):
 
     _attr_has_entity_name = True
     _attr_name = None
-    _attr_color_mode = ColorMode.BRIGHTNESS
-    _attr_supported_color_modes = {ColorMode.BRIGHTNESS}
 
     def __init__(self, coordinator: PlejdCoordinator, room: PlejdCloudRoom) -> None:
         self._coordinator = coordinator
@@ -126,6 +124,9 @@ class PlejdRoomLight(LightEntity):
             manufacturer="Plejd",
             model="Room",
         )
+        mode = ColorMode.BRIGHTNESS if room.dimmable else ColorMode.ONOFF
+        self._attr_color_mode = mode
+        self._attr_supported_color_modes = {mode}
 
     @property
     def available(self) -> bool:
@@ -142,18 +143,36 @@ class PlejdRoomLight(LightEntity):
 
     @property
     def brightness(self) -> int | None:
+        if not self._room.dimmable:
+            return None
         on_levels = [s.level for s in self._member_states() if s.on and s.level is not None]
         return round(sum(on_levels) / len(on_levels)) if on_levels else None
+
+    def _restore_level(self) -> int | None:
+        """Average of every member's last-known level (on or off), for turn_on() with no explicit level."""
+        levels = [s.level for s in self._member_states() if s.level is not None]
+        return round(sum(levels) / len(levels)) if levels else None
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         level = kwargs.get(ATTR_BRIGHTNESS)
         if level is None:
-            current = self.brightness
-            level = current if current else 255
+            current = self._restore_level()
+            level = current if current is not None else 255
         await self._coordinator.async_set_output(self._room.address, True, level)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         await self._coordinator.async_set_output(self._room.address, False, 0)
+
+    async def async_start_dim(self, direction: str) -> None:
+        """Start a smooth hold-to-dim ramp across the room's group address (entity service)."""
+        if not self._room.dimmable:
+            return  # on/off-only rooms can't ramp; nothing to do
+        current = (bool(self.is_on), self._restore_level() or 0)
+        self._coordinator.dim_ramp.start(self._room.address, 1 if direction == "up" else -1, current=current)
+
+    async def async_stop_dim(self) -> None:
+        """Stop an in-progress ramp on this room, holding its brightness (entity service)."""
+        self._coordinator.dim_ramp.stop(self._room.address)
 
     async def async_added_to_hass(self) -> None:
         self.async_on_remove(self._coordinator.async_add_listener(self.async_write_ha_state))
