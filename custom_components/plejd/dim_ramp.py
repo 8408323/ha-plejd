@@ -13,8 +13,10 @@ import asyncio
 
 from homeassistant.core import HomeAssistant
 
-# Per-tick brightness delta (0-255) and tick spacing. ~13/255 every 100 ms walks the
-# full range in ~2 s, matching a comfortable hold-to-dim feel.
+# Per-tick brightness delta (0-255) and the pause between ticks. ~13/255 gives ~20
+# steps across the full range; each tick also awaits the command's gateway round-trip,
+# so a full sweep is roughly a couple of seconds of wall-clock — a comfortable
+# hold-to-dim feel.
 DIM_STEP = 13
 DIM_INTERVAL = 0.1
 # Holding "down" dims to a low floor, not fully off — releasing leaves the light on,
