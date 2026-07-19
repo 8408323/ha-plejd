@@ -71,6 +71,7 @@ test("hass updates coalesce lights renders to one animation frame", () => {
   let shells = 0;
   let loads = 0;
   let lights = 0;
+  let motion = 0;
 
   panel._renderShell = () => {
     shells += 1;
@@ -81,6 +82,9 @@ test("hass updates coalesce lights renders to one animation frame", () => {
   panel._updateLights = () => {
     lights += 1;
   };
+  panel._updateMotion = () => {
+    motion += 1;
+  };
 
   panel.hass = { states: {} };
   panel.hass = { states: {} };
@@ -90,9 +94,11 @@ test("hass updates coalesce lights renders to one animation frame", () => {
   assert.equal(loads, 1);
   assert.equal(frames.length, 1);
   assert.equal(lights, 0);
+  assert.equal(motion, 0);
 
   frames.shift()();
   assert.equal(lights, 1);
+  assert.equal(motion, 1);
 
   panel.hass = { states: {} };
   assert.equal(frames.length, 1);
@@ -113,6 +119,7 @@ test("disconnect cancels a queued lights render", () => {
   panel._renderShell = () => {};
   panel._loadBindings = () => {};
   panel._updateLights = () => {};
+  panel._updateMotion = () => {};
   panel.hass = { states: {} };
   panel.disconnectedCallback();
 
@@ -135,6 +142,7 @@ test("disconnect cancels a queued setTimeout fallback when requestAnimationFrame
   panel._renderShell = () => {};
   panel._loadBindings = () => {};
   panel._updateLights = () => {};
+  panel._updateMotion = () => {};
   panel.hass = { states: {} };
   panel.disconnectedCallback();
 
@@ -180,6 +188,135 @@ test("_updateLights renders the current Plejd lights list", () => {
   assert.match(lights.innerHTML, /50%/);
   assert.match(lights.innerHTML, /Patio/);
   assert.doesNotMatch(lights.innerHTML, /Other vendor/);
+});
+
+// ── motion & illuminance ─────────────────────────────────────────────────────
+
+test("_updateMotion lists each motion sensor with its device name, state, and illuminance", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const motion = { innerHTML: "" };
+
+  panel.querySelector = (selector) => (selector === "#plejd-motion" ? motion : null);
+  panel._hass = {
+    states: {
+      "binary_sensor.hallway_motion": {
+        entity_id: "binary_sensor.hallway_motion",
+        state: "on",
+        attributes: { friendly_name: "Hallway Motion", device_class: "motion" },
+      },
+      "sensor.hallway_illuminance": {
+        entity_id: "sensor.hallway_illuminance",
+        state: "42",
+        attributes: { friendly_name: "Hallway Illuminance", device_class: "illuminance" },
+      },
+      "binary_sensor.garage_motion": {
+        entity_id: "binary_sensor.garage_motion",
+        state: "off",
+        attributes: { friendly_name: "Garage Motion", device_class: "motion" },
+      },
+      "binary_sensor.other_vendor_motion": {
+        entity_id: "binary_sensor.other_vendor_motion",
+        state: "on",
+        attributes: { friendly_name: "Other vendor motion", device_class: "motion" },
+      },
+    },
+    entities: {
+      "binary_sensor.hallway_motion": { platform: "plejd", device_id: "dev.hallway" },
+      "sensor.hallway_illuminance": { platform: "plejd", device_id: "dev.hallway" },
+      "binary_sensor.garage_motion": { platform: "plejd", device_id: "dev.garage" },
+      "binary_sensor.other_vendor_motion": { platform: "other" },
+    },
+    devices: { "dev.hallway": { name: "Hallway" }, "dev.garage": { name: "Garage" } },
+  };
+
+  panel._updateMotion();
+
+  assert.match(motion.innerHTML, />2<\/span>/);
+  assert.match(motion.innerHTML, /Hallway/);
+  assert.match(motion.innerHTML, /Detected/);
+  assert.match(motion.innerHTML, /42 lx/);
+  assert.match(motion.innerHTML, /Garage/);
+  assert.match(motion.innerHTML, /Clear/);
+  assert.doesNotMatch(motion.innerHTML, /Other vendor motion/);
+});
+
+test("_updateMotion omits the illuminance reading when the paired sensor is unavailable", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const motion = { innerHTML: "" };
+
+  panel.querySelector = (selector) => (selector === "#plejd-motion" ? motion : null);
+  panel._hass = {
+    states: {
+      "binary_sensor.hallway_motion": {
+        entity_id: "binary_sensor.hallway_motion",
+        state: "on",
+        attributes: { friendly_name: "Hallway Motion", device_class: "motion" },
+      },
+      "sensor.hallway_illuminance": {
+        entity_id: "sensor.hallway_illuminance",
+        state: "unavailable",
+        attributes: { friendly_name: "Hallway Illuminance", device_class: "illuminance" },
+      },
+    },
+    entities: {
+      "binary_sensor.hallway_motion": { platform: "plejd", device_id: "dev.hallway" },
+      "sensor.hallway_illuminance": { platform: "plejd", device_id: "dev.hallway" },
+    },
+    devices: { "dev.hallway": { name: "Hallway" } },
+  };
+
+  panel._updateMotion();
+
+  assert.match(motion.innerHTML, /Detected/);
+  assert.doesNotMatch(motion.innerHTML, /lx/);
+});
+
+test("_updateMotion falls back to the entity's friendly name when no device_id is registered", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const motion = { innerHTML: "" };
+
+  panel.querySelector = (selector) => (selector === "#plejd-motion" ? motion : null);
+  panel._hass = {
+    states: {
+      "binary_sensor.attic_motion": {
+        entity_id: "binary_sensor.attic_motion",
+        state: "off",
+        attributes: { friendly_name: "Attic Motion", device_class: "motion", attribution: "Plejd" },
+      },
+    },
+    entities: {},
+  };
+
+  panel._updateMotion();
+
+  assert.match(motion.innerHTML, /Attic Motion/);
+  assert.match(motion.innerHTML, /Clear/);
+});
+
+test("_updateMotion does not crash on a site with no motion sensors", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const motion = { innerHTML: "" };
+
+  panel.querySelector = (selector) => (selector === "#plejd-motion" ? motion : null);
+  panel._hass = { states: {} };
+
+  panel._updateMotion();
+
+  assert.match(motion.innerHTML, /No motion sensors found/);
+});
+
+test("_updateMotion is a no-op when the panel DOM isn't mounted yet", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+
+  panel.querySelector = () => null;
+  panel._hass = { states: {} };
+
+  assert.doesNotThrow(() => panel._updateMotion());
 });
 
 test("deleting a binding preserves an in-progress add form", async () => {

@@ -209,6 +209,26 @@ class PlejdPanel extends HTMLElement {
       );
   }
 
+  // Per-device WMS-01 motion binary_sensors, the same domain-and-platform filtering
+  // approach as _lights() but for binary_sensor.* motion entities instead of light.*.
+  _motionSensors() {
+    const hass = this._hass;
+    if (!hass) return [];
+    return Object.values(hass.states)
+      .filter(
+        (s) =>
+          s.entity_id.startsWith("binary_sensor.") &&
+          s.attributes.device_class === "motion" &&
+          (hass.entities?.[s.entity_id]?.platform === "plejd" ||
+            s.attributes.attribution === "Plejd"),
+      )
+      .sort((a, b) =>
+        (a.attributes.friendly_name || a.entity_id).localeCompare(
+          b.attributes.friendly_name || b.entity_id,
+        ),
+      );
+  }
+
   _allLights() {
     const hass = this._hass;
     return Object.values(hass.states)
@@ -266,6 +286,25 @@ class PlejdPanel extends HTMLElement {
     return d?.name_by_user || d?.name || deviceId;
   }
 
+  // A motion sensor's physical device, resolved the same way binding targets are (registry
+  // name over entity name) so the row shows "Hallway", not "Hallway Motion".
+  _motionDeviceName(state) {
+    const deviceId = this._hass.entities?.[state.entity_id]?.device_id;
+    return deviceId ? this._deviceName(deviceId) : state.attributes.friendly_name || state.entity_id;
+  }
+
+  // The illuminance sensor sharing a motion sensor's device, if the platform exposes one.
+  _illuminanceFor(deviceId) {
+    const hass = this._hass;
+    if (!deviceId) return null;
+    return Object.values(hass.states).find(
+      (s) =>
+        s.entity_id.startsWith("sensor.") &&
+        s.attributes.device_class === "illuminance" &&
+        hass.entities?.[s.entity_id]?.device_id === deviceId,
+    );
+  }
+
   // A stored binding's target(s) -> a human string. Lists every target (a binding can
   // hold multiple entities/areas/devices) so a Delete's scope isn't misread.
   _targetName(binding) {
@@ -293,6 +332,7 @@ class PlejdPanel extends HTMLElement {
       <div style="padding:16px 16px 48px;max-width:760px;margin:0 auto;color:var(--primary-text-color,#212121);font-family:var(--paper-font-body1_-_font-family,Roboto,sans-serif)">
         <h1 style="font-weight:400;margin:8px 4px 20px">Plejd</h1>
         <div id="plejd-lights" style="${CARD}"></div>
+        <div id="plejd-motion" style="${CARD};margin-top:16px"></div>
         <div id="plejd-bindings" style="${CARD};margin-top:16px"></div>
       </div>`;
     this._renderEditor();
@@ -303,6 +343,7 @@ class PlejdPanel extends HTMLElement {
     this._lightsFrame = this._scheduleLightsFrame(() => {
       this._lightsFrame = null;
       this._updateLights();
+      this._updateMotion();
     });
   }
 
@@ -331,6 +372,38 @@ class PlejdPanel extends HTMLElement {
         <span style="color:var(--secondary-text-color,#727272);font-size:.9rem">${lights.length}</span>
       </div>
       ${rows || '<p style="color:var(--secondary-text-color,#727272)">No Plejd lights found.</p>'}`;
+  }
+
+  _updateMotion() {
+    const el = this.querySelector("#plejd-motion");
+    if (!el) return;
+    const sensors = this._motionSensors();
+    const rows = sensors
+      .map((s) => {
+        const name = this._motionDeviceName(s);
+        const detected = s.state === "on";
+        const deviceId = this._hass.entities?.[s.entity_id]?.device_id;
+        const illuminance = this._illuminanceFor(deviceId);
+        const lux =
+          illuminance && !["unavailable", "unknown"].includes(illuminance.state)
+            ? `${illuminance.state} lx`
+            : null;
+        const status = detected ? "Detected" : "Clear";
+        const dot = detected ? "var(--state-light-active-color, #fdd835)" : "var(--disabled-text-color, #9e9e9e)";
+        return `
+          <div style="display:flex;align-items:center;gap:12px;padding:10px 4px;border-bottom:1px solid var(--divider-color,#e0e0e0)">
+            <span style="width:10px;height:10px;border-radius:50%;background:${dot};flex:none"></span>
+            <span style="flex:1">${esc(name)}</span>
+            <span style="color:var(--secondary-text-color,#727272)">${status}${lux ? ` · ${esc(lux)}` : ""}</span>
+          </div>`;
+      })
+      .join("");
+    el.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px">
+        <h2 style="font-weight:500;font-size:1.05rem;margin:0">Motion & illuminance</h2>
+        <span style="color:var(--secondary-text-color,#727272);font-size:.9rem">${sensors.length}</span>
+      </div>
+      ${rows || '<p style="color:var(--secondary-text-color,#727272)">No motion sensors found.</p>'}`;
   }
 
   _triggerOptions(deviceId, selected) {
