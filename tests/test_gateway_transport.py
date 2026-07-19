@@ -81,6 +81,15 @@ def _sent_publishes(ws, topic):
     return out
 
 
+def test_set_state_records_output_state():
+    from plejd.protocol import OutputState
+
+    conn = PlejdGatewayConnection(object(), "S1", "rs1", "inst-1", None, lambda: None)
+    assert conn.state_for(11) is None
+    conn.set_state(11, OutputState(output=11, on=True, level=200))
+    assert conn.state_for(11).on is True and conn.state_for(11).level == 200
+
+
 async def test_connect_handshake_and_headers():
     ws = _FakeWS()
     session = _FakeSession(ws)

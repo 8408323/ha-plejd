@@ -182,6 +182,35 @@ test("_updateLights renders the current Plejd lights list", () => {
   assert.doesNotMatch(lights.innerHTML, /Other vendor/);
 });
 
+test("_updateLights renders an explicit on/off switch reflecting each light's state", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const lights = { innerHTML: "", querySelector: () => null, querySelectorAll: () => [] };
+
+  panel.querySelector = (selector) => (selector === "#plejd-lights" ? lights : null);
+  panel._hass = {
+    states: {
+      "light.kitchen": { entity_id: "light.kitchen", state: "on", attributes: { friendly_name: "Kitchen" } },
+      "light.patio": { entity_id: "light.patio", state: "off", attributes: { friendly_name: "Patio" } },
+    },
+    entities: {
+      "light.kitchen": { platform: "plejd" },
+      "light.patio": { platform: "plejd" },
+    },
+  };
+
+  panel._updateLights();
+
+  // One switch per light, matching its own state - not one shared/ambiguous control.
+  const switches = [...lights.innerHTML.matchAll(/role="switch"[^>]*aria-checked="(true|false)"/g)];
+  assert.equal(switches.length, 2);
+  assert.deepEqual(
+    switches.map((m) => m[1]),
+    ["true", "false"],
+  );
+  assert.match(lights.innerHTML, /data-toggle="light\.kitchen"[^>]*role="switch"/);
+});
+
 test("_updateLights renders a brightness slider only for dimmable lights", () => {
   const PanelClass = loadPanelClass();
   const panel = new PanelClass();

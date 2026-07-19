@@ -150,7 +150,10 @@ def test_pick_device_uses_rssi_without_preference():
     assert c._pick_device().address == "Y"
 
 
-async def test_set_output_writes_and_state_reflects(monkeypatch):
+async def test_set_output_reflects_state_immediately(monkeypatch):
+    """No notification replay needed - a second command sent right after must see this
+    state, not stale state (a fast on-then-off from the panel must not read "still off"
+    and send "on" again just because the real echo hasn't landed yet)."""
     client = _FakeClient()
     _patch_connect(monkeypatch, client)
     ble = types.SimpleNamespace(address="01:02:03:04:05:a0")
@@ -158,7 +161,59 @@ async def test_set_output_writes_and_state_reflects(monkeypatch):
     c = PlejdCoordinator(hass, _entry(discovered=None))
     await c.async_start()
     await c.async_set_output(5, True, 120)
-    # the written command, fed back as a notification, becomes the live state
+    assert c.state_for(5).on is True and c.state_for(5).level == 120
+
+
+async def test_set_output_notifies_listeners(monkeypatch):
+    client = _FakeClient()
+    _patch_connect(monkeypatch, client)
+    ble = types.SimpleNamespace(address="01:02:03:04:05:a0")
+    hass = _hass([_info("01:02:03:04:05:a0")], {"01:02:03:04:05:a0": ble})
+    c = PlejdCoordinator(hass, _entry(discovered=None))
+    await c.async_start()
+    seen = []
+    c.async_add_listener(lambda: seen.append(1))
+    await c.async_set_output(5, True, 120)
+    assert seen == [1]
+
+
+async def test_set_output_off_preserves_remembered_brightness(monkeypatch):
+    # Turning off must not zero out the remembered brightness - the protocol's off
+    # payload (level=0) is not "the light is now dim to 0", and a later turn_on()
+    # restore (PlejdLight.async_turn_on) relies on the prior level surviving.
+    client = _FakeClient()
+    _patch_connect(monkeypatch, client)
+    ble = types.SimpleNamespace(address="01:02:03:04:05:a0")
+    hass = _hass([_info("01:02:03:04:05:a0")], {"01:02:03:04:05:a0": ble})
+    c = PlejdCoordinator(hass, _entry(discovered=None))
+    await c.async_start()
+    await c.async_set_output(5, True, 150)
+    await c.async_set_output(5, False, 0)
+    assert c.state_for(5).on is False and c.state_for(5).level == 150
+
+
+async def test_set_output_off_falls_back_to_zero_for_unknown_prior_state(monkeypatch):
+    client = _FakeClient()
+    _patch_connect(monkeypatch, client)
+    ble = types.SimpleNamespace(address="01:02:03:04:05:a0")
+    hass = _hass([_info("01:02:03:04:05:a0")], {"01:02:03:04:05:a0": ble})
+    c = PlejdCoordinator(hass, _entry(discovered=None))
+    await c.async_start()
+    await c.async_set_output(9, False, 0)  # output 9 has no prior state at all
+    assert c.state_for(9).on is False and c.state_for(9).level == 0
+
+
+async def test_set_output_notification_replay_still_confirms_state(monkeypatch):
+    # A real device echo arriving after the optimistic update must not break anything -
+    # replaying the same written command back through the notification path still
+    # decodes to consistent state.
+    client = _FakeClient()
+    _patch_connect(monkeypatch, client)
+    ble = types.SimpleNamespace(address="01:02:03:04:05:a0")
+    hass = _hass([_info("01:02:03:04:05:a0")], {"01:02:03:04:05:a0": ble})
+    c = PlejdCoordinator(hass, _entry(discovered=None))
+    await c.async_start()
+    await c.async_set_output(5, True, 120)
     _, payload = client.writes[-1]
     client.notify_cb(None, bytearray(payload))
     assert c.state_for(5).level == 120
@@ -477,6 +532,9 @@ class _FakeGateway:
 
     def state_for(self, address):
         return self.state.get(address)
+
+    def set_state(self, address, state):
+        self.state[address] = state
 
     async def disconnect(self):
         self.disconnected = True

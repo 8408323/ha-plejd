@@ -727,6 +727,26 @@ class PlejdCoordinator:
         device (#71).
         """
         await self._write_vector(protocol.set_group_state_and_level(address, on, level))
+        # Reflect the change immediately rather than waiting for the mesh's own echo:
+        # BLE writes are never acked, and even the gateway's ack isn't guaranteed to
+        # land before this returns. Without this, a command sent right after another
+        # (e.g. a fast on-then-off) reads stale state and computes the wrong direction.
+        # Turning off doesn't erase the remembered brightness - a real device keeps
+        # reporting its last dim position while off, so the off case preserves the
+        # prior level instead of the protocol's own off payload (always 0).
+        if on:
+            record_level = level
+        else:
+            prior = self.state_for(address)
+            record_level = prior.level if prior is not None else level
+        self._record_output_state(address, OutputState(output=address, on=on, level=record_level))
+        self._notify_outputs()
+
+    def _record_output_state(self, address: int, state: OutputState) -> None:
+        if self._active == "gateway" and self._gateway is not None:
+            self._gateway.set_state(address, state)
+        elif self._connection.mesh is not None:
+            self._connection.mesh.set_state(address, state)
 
     async def async_set_output_min_level(self, address: int, output: int, fraction: float) -> None:
         """Set an output's minimum dim level (0-1 fraction)."""

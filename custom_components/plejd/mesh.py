@@ -27,6 +27,11 @@ class PlejdMesh:
         """A copy of the last-known output state, keyed by mesh output address."""
         return dict(self._state)
 
+    def set_state(self, address: int, state: OutputState) -> None:
+        """Record an output's state directly, e.g. an optimistic update after sending
+        a command — BLE writes are never acked, so this is the only timely signal."""
+        self._state[address] = state
+
     def encrypt(self, plaintext: bytes) -> bytes:
         """Encrypt a Datavector payload for the connected device."""
         return crypto.encrypt_decrypt(self._address, plaintext, self._key)
