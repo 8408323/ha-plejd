@@ -312,6 +312,46 @@ async def test_load_stays_empty_when_legacy_id_save_fails(monkeypatch):
     assert pb.bindings == []  # nothing committed → manager stays empty and consistent
 
 
+async def test_attach_rolls_back_when_trigger_yields_no_unsub(monkeypatch):
+    events = []
+
+    async def _init(hass, configs, action, domain, name, log_cb, **kwargs):
+        if configs == [{"nostop": 1}]:
+            return None  # HA set up nothing for this (stale/invalid) trigger
+
+        def _unsub():
+            events.append(("unsub", configs))
+
+        events.append(("attach", configs))
+        return _unsub
+
+    monkeypatch.setattr(bindings_mod, "async_initialize_triggers", _init)
+    hass = _hass()
+    hass.data[("store", bindings_mod.STORE_KEY)] = [
+        {"id": "b1", "targets": {"entity_id": ["light.a"]}, "up": {"ok": 1}, "stop": {"nostop": 1}},
+    ]
+    pb = PlejdDimBindings(hass)
+    await pb.async_load()  # per-binding guard logs; the half-attached binding is rolled back
+    assert ("unsub", [{"ok": 1}]) in events  # the good "up" trigger was undone
+    assert pb._unsubs == []  # nothing left live — no start-without-stop binding
+
+
+async def test_concurrent_replaces_leave_consistent_triggers(monkeypatch):
+    async def _init(hass, configs, action, domain, name, log_cb, **kwargs):
+        await asyncio.sleep(0)  # yield: without the lock the two saves would interleave here
+        return lambda: None
+
+    monkeypatch.setattr(bindings_mod, "async_initialize_triggers", _init)
+    hass = _hass()
+    pb = PlejdDimBindings(hass)
+    await pb.async_load()
+    a = [{"id": "a", "targets": {"entity_id": ["light.a"]}, "up": {"x": 1}, "down": {"y": 1}, "stop": {"z": 1}}]
+    b = [{"id": "b", "targets": {"entity_id": ["light.b"]}, "up": {"x": 1}}]
+    await asyncio.gather(pb.async_replace(a), pb.async_replace(b))
+    live = sum(1 for key in ("up", "down", "stop") if pb.bindings[0].get(key))
+    assert len(pb._unsubs) == live  # exactly the winner's triggers remain — no stale leak
+
+
 async def test_replace_assigns_missing_ids(monkeypatch):
     monkeypatch.setattr(bindings_mod, "async_initialize_triggers", _spy_triggers([]))
     hass = _hass()

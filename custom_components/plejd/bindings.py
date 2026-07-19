@@ -138,29 +138,35 @@ class PlejdDimBindings:
         self._bindings: list[dict] = []
         self._unsubs: list = []
         self._ramp = DimRamp(hass)
+        self._lock = asyncio.Lock()
 
     @property
     def bindings(self) -> list[dict]:
         return self._bindings
 
     async def async_load(self) -> None:
-        # Commit in-memory state only after the store save succeeds, so a failed read/save
-        # leaves an empty, consistent manager (no triggers attached, nothing listed).
-        bindings = await self._store.async_load() or []
-        if _ensure_ids(bindings):
-            await self._store.async_save(bindings)  # persist ids assigned to legacy data
-        self._bindings = bindings
-        await self._async_attach()
+        # Serialize with replace (shared lock) so triggers are never attached twice; commit
+        # in-memory state only after the read/save, so a failed load leaves an empty,
+        # consistent manager (no triggers attached, nothing listed).
+        async with self._lock:
+            bindings = await self._store.async_load() or []
+            if _ensure_ids(bindings):
+                await self._store.async_save(bindings)  # persist ids assigned to legacy data
+            self._bindings = bindings
+            await self._async_attach()
 
     async def async_replace(self, bindings: list[dict]) -> None:
         """Persist the full set of bindings and re-attach their triggers."""
         _ensure_ids(bindings)
-        # Save before swapping bindings/triggers: a failed save then leaves the old
-        # bindings and their live triggers intact instead of a half-applied state.
-        await self._store.async_save(bindings)
-        self._bindings = bindings
-        self._detach()
-        await self._async_attach()
+        # Serialize the whole save→swap→re-attach so two overlapping saves can't interleave
+        # and leave both trigger sets live. Save first so the in-memory list and the live
+        # triggers always agree; durability is best-effort — HA's Store logs write failures
+        # rather than raising, so we can't promise the on-disk copy beyond that.
+        async with self._lock:
+            await self._store.async_save(bindings)
+            self._bindings = bindings
+            self._detach()
+            await self._async_attach()
 
     async def _async_attach(self) -> None:
         for binding in self._bindings:
@@ -190,9 +196,15 @@ class PlejdDimBindings:
         self._unsubs.extend(attached)
 
     async def _attach_trigger(self, attached: list, trigger, action) -> None:
+        # Attach each config on its own so a partial failure in a multi-trigger slot is
+        # visible: async_initialize_triggers returns None when a config sets up nothing
+        # (stale/invalid). Treat that as a failure so _attach rolls the binding back —
+        # a binding that can start a ramp but never stop it would run to DIM_MAX_DURATION.
         configs = trigger if isinstance(trigger, list) else [trigger]
-        unsub = await async_initialize_triggers(self._hass, configs, action, DOMAIN, "plejd-dim", _LOGGER.log)
-        if unsub is not None:
+        for config in configs:
+            unsub = await async_initialize_triggers(self._hass, [config], action, DOMAIN, "plejd-dim", _LOGGER.log)
+            if unsub is None:
+                raise RuntimeError("dim binding trigger failed to initialize")
             attached.append(unsub)
 
     def _start_action(self, bid, target, direction):
