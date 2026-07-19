@@ -56,11 +56,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     coordinator = PlejdCoordinator(hass, entry)
     # Assign before connecting so diagnostics work even while setup is still failing.
     entry.runtime_data = coordinator
-    # Register the sidebar dashboard before starting the coordinator: a rare panel
-    # failure (e.g. url-path clash) then can't leave the BLE coordinator running, and
-    # HA runs this on_unload if a later setup step fails. Toggle via the options.
+    # Register the sidebar dashboard before starting the coordinator. It's optional, so a
+    # failure (e.g. another panel already owns the `plejd` url path) must not abort setup —
+    # the mesh/lights still work, and options remain reachable to hide it. HA also runs
+    # this on_unload if a later setup step fails. Toggle via the options.
     if entry.options.get(CONF_SHOW_PANEL, True):
-        await panel.async_register_panel(hass)
+        try:
+            await panel.async_register_panel(hass)
+        except Exception:  # noqa: BLE001 - the dashboard is optional; never fail setup over it
+            _LOGGER.warning("Plejd dashboard panel could not be registered; continuing without it", exc_info=True)
     entry.async_on_unload(lambda: panel.async_unregister_panel(hass))
     await coordinator.async_start()
     try:

@@ -437,3 +437,17 @@ async def test_unload_removes_panel(monkeypatch):
 
 async def _noop_async(hass):
     return None
+
+
+async def test_setup_survives_panel_registration_failure(monkeypatch):
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    _FakeCoordinator.instances.clear()
+
+    async def _boom(hass):
+        raise ValueError("panel url path already taken")
+
+    monkeypatch.setattr(plejd.panel, "async_register_panel", _boom)
+    hass, entry = _hass(), _entry()
+    # A url-path clash must NOT abort setup — the mesh/lights still load.
+    assert await async_setup_entry(hass, entry) is True
+    assert entry.runtime_data.started is True
