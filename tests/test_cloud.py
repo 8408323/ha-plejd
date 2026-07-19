@@ -627,6 +627,18 @@ def test_parse_site_tolerates_non_dict_room_and_group_fields():
     assert parse_site(site).rooms == []  # both malformed top-level fields are treated as absent
 
 
+def test_parse_site_skips_non_dict_room_entry():
+    site = {
+        **_SITE,
+        # a stray non-dict entry alongside a valid one must not abort parsing
+        "rooms": [{"roomId": "r1", "title": "Kitchen"}, "not-a-dict", None],
+        "roomAddress": {"r1": 14},
+        "outputGroups": {"d1": {"0": [14]}},
+    }
+    rooms = parse_site(site).rooms
+    assert len(rooms) == 1 and rooms[0].name == "Kitchen"
+
+
 def test_parse_site_skips_non_dict_output_group_membership_map():
     site = {
         **_SITE,
