@@ -45,13 +45,13 @@ class PlejdPanel extends HTMLElement {
     this._notice = "";
     this._busy = false;
     this._lightsFrame = null;
-    const hasAnimationFrame = Boolean(
+    const useAnimationFrame = Boolean(
       globalThis.requestAnimationFrame && globalThis.cancelAnimationFrame,
     );
-    this._scheduleLightsFrame = hasAnimationFrame
+    this._scheduleLightsFrame = useAnimationFrame
       ? globalThis.requestAnimationFrame.bind(globalThis)
       : (cb) => globalThis.setTimeout(cb, 0);
-    this._cancelLightsFrame = hasAnimationFrame
+    this._cancelLightsFrame = useAnimationFrame
       ? globalThis.cancelAnimationFrame.bind(globalThis)
       : globalThis.clearTimeout.bind(globalThis);
   }
@@ -82,7 +82,7 @@ class PlejdPanel extends HTMLElement {
 
   disconnectedCallback() {
     if (this._lightsFrame === null) return;
-    this._cancelLightsFrame?.(this._lightsFrame);
+    this._cancelLightsFrame(this._lightsFrame);
     this._lightsFrame = null;
   }
 
