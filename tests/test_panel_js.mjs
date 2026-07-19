@@ -182,6 +182,188 @@ test("_updateLights renders the current Plejd lights list", () => {
   assert.doesNotMatch(lights.innerHTML, /Other vendor/);
 });
 
+// ── climate ──────────────────────────────────────────────────────────────────
+
+test("_updateLights also refreshes the climate section on the same coalesced pass", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const lights = { innerHTML: "" };
+  const climate = { innerHTML: "", querySelectorAll: () => [] };
+
+  panel.querySelector = (selector) =>
+    selector === "#plejd-lights" ? lights : selector === "#plejd-climate" ? climate : null;
+  panel._hass = {
+    states: {
+      "climate.living_room": {
+        entity_id: "climate.living_room",
+        state: "heat",
+        attributes: { friendly_name: "Living Room", current_temperature: 21, temperature: 21.5 },
+      },
+    },
+    entities: { "climate.living_room": { platform: "plejd" } },
+  };
+
+  panel._updateLights();
+
+  assert.match(climate.innerHTML, /Living Room/);
+  assert.match(climate.innerHTML, /21.5°C/);
+});
+
+test("_updateClimate renders the current Plejd thermostats list", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const climate = { innerHTML: "", querySelectorAll: () => [] };
+
+  panel.querySelector = (selector) => (selector === "#plejd-climate" ? climate : null);
+  panel._hass = {
+    states: {
+      "climate.living_room": {
+        entity_id: "climate.living_room",
+        state: "heat",
+        attributes: { friendly_name: "Living Room <TRM>", current_temperature: 21, temperature: 21.5 },
+      },
+      "climate.hallway": {
+        entity_id: "climate.hallway",
+        state: "heat",
+        attributes: { friendly_name: "Hallway" },
+      },
+      "climate.other": {
+        entity_id: "climate.other",
+        state: "heat",
+        attributes: { friendly_name: "Other vendor" },
+      },
+    },
+    entities: {
+      "climate.living_room": { platform: "plejd" },
+      "climate.hallway": { platform: "plejd" },
+      "climate.other": { platform: "other" },
+    },
+  };
+
+  panel._updateClimate();
+
+  assert.match(climate.innerHTML, />2<\/span>/);
+  assert.match(climate.innerHTML, /Living Room &lt;TRM&gt;/);
+  assert.match(climate.innerHTML, /21°C/);
+  assert.match(climate.innerHTML, /21.5°C/);
+  assert.match(climate.innerHTML, /Hallway/);
+  assert.match(climate.innerHTML, /disabled/); // Hallway has no target reading yet
+  assert.doesNotMatch(climate.innerHTML, /Other vendor/);
+});
+
+test("_updateClimate renders a placeholder and does not crash with no Plejd thermostats", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const climate = { innerHTML: "", querySelectorAll: () => [] };
+  panel.querySelector = (selector) => (selector === "#plejd-climate" ? climate : null);
+  panel._hass = { states: {}, entities: {} };
+
+  panel._updateClimate();
+
+  assert.match(climate.innerHTML, /No Plejd thermostats found/);
+});
+
+function makeClimateButton(attrName, attrValue) {
+  const listeners = {};
+  return {
+    getAttribute: (name) => (name === attrName ? attrValue : null),
+    addEventListener: (ev, fn) => {
+      listeners[ev] = fn;
+    },
+    fire: (ev) => listeners[ev](),
+  };
+}
+
+test("tapping + calls climate.set_temperature using the entity's own target_temp_step", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const calls = [];
+  panel._callService = (domain, service, data) => {
+    calls.push({ domain, service, data });
+    return Promise.resolve();
+  };
+  const state = {
+    entity_id: "climate.living_room",
+    attributes: { temperature: 21, target_temp_step: 1 },
+  };
+  const incBtn = makeClimateButton("data-climate-inc", "climate.living_room");
+  const el = { querySelectorAll: (sel) => (sel === "[data-climate-inc]" ? [incBtn] : []) };
+
+  panel._wireClimate(el, [state]);
+  incBtn.fire("click");
+
+  assert.deepEqual(plain(calls), [
+    {
+      domain: "climate",
+      service: "set_temperature",
+      data: { entity_id: "climate.living_room", temperature: 22 },
+    },
+  ]);
+});
+
+test("tapping - calls climate.set_temperature and falls back to a 0.5° step when unset", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const calls = [];
+  panel._callService = (domain, service, data) => {
+    calls.push({ domain, service, data });
+    return Promise.resolve();
+  };
+  const state = { entity_id: "climate.living_room", attributes: { temperature: 21 } };
+  const decBtn = makeClimateButton("data-climate-dec", "climate.living_room");
+  const el = { querySelectorAll: (sel) => (sel === "[data-climate-dec]" ? [decBtn] : []) };
+
+  panel._wireClimate(el, [state]);
+  decBtn.fire("click");
+
+  assert.deepEqual(plain(calls), [
+    {
+      domain: "climate",
+      service: "set_temperature",
+      data: { entity_id: "climate.living_room", temperature: 20.5 },
+    },
+  ]);
+});
+
+test("_stepClimate clamps the next target to the entity's min/max_temp", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const calls = [];
+  panel._callService = (domain, service, data) => {
+    calls.push(data);
+    return Promise.resolve();
+  };
+
+  panel._stepClimate(
+    { entity_id: "climate.attic", attributes: { temperature: 34.5, target_temp_step: 0.5, max_temp: 35 } },
+    1,
+  );
+  panel._stepClimate(
+    { entity_id: "climate.attic", attributes: { temperature: 5.2, target_temp_step: 0.5, min_temp: 5 } },
+    -1,
+  );
+
+  assert.deepEqual(plain(calls), [
+    { entity_id: "climate.attic", temperature: 35 },
+    { entity_id: "climate.attic", temperature: 5 },
+  ]);
+});
+
+test("_stepClimate is a no-op when the thermostat has no target temperature yet", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  let called = false;
+  panel._callService = () => {
+    called = true;
+    return Promise.resolve();
+  };
+
+  panel._stepClimate({ entity_id: "climate.x", attributes: {} }, 1);
+  panel._stepClimate(null, 1);
+
+  assert.equal(called, false);
+});
+
 test("deleting a binding preserves an in-progress add form", async () => {
   const PanelClass = loadPanelClass();
   const panel = new PanelClass();
