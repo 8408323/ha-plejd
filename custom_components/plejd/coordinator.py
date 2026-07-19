@@ -33,6 +33,7 @@ from .cloud import (
     PlejdCloudDevice,
     PlejdCloudInput,
     PlejdCloudMotion,
+    PlejdCloudRoom,
     PlejdCloudScene,
     async_get_available_firmware,
     async_get_site,
@@ -66,6 +67,7 @@ from .const import (
     CONF_INSTALLATION_ID,
     CONF_MOTION,
     CONF_RESOURCE_SET_ID,
+    CONF_ROOMS,
     CONF_SCENES,
     CONF_SITE_ID,
     CONF_TRANSPORT,
@@ -154,6 +156,7 @@ class PlejdCoordinator:
         # Tolerate entries stored before a field existed (e.g. output_index).
         self.devices = [PlejdCloudDevice(**{"output_index": 0, **device}) for device in entry.data[CONF_DEVICES]]
         self.scenes = [PlejdCloudScene(**scene) for scene in entry.data.get(CONF_SCENES, [])]
+        self.rooms = [PlejdCloudRoom(**room) for room in entry.data.get(CONF_ROOMS, [])]
         self.inputs = [PlejdCloudInput(**i) for i in entry.data.get(CONF_INPUTS, [])]
         self.motion = [PlejdCloudMotion(**m) for m in entry.data.get(CONF_MOTION, [])]
         self._motion_addresses = {m.address for m in self.motion}

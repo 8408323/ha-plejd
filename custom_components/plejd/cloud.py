@@ -108,6 +108,17 @@ class PlejdCloudScene:
 
 
 @dataclass
+class PlejdCloudRoom:
+    """A Plejd room: its group mesh address (one 0x0098 controls the whole room at once,
+    the way the app dims a room) plus the member output addresses (for aggregate state)."""
+
+    room_id: str
+    name: str
+    address: int  # the room's group mesh address — target of set_group_state_and_level
+    member_addresses: list[int]
+
+
+@dataclass
 class PlejdCloudSite:
     """A site: its crypto key, mesh key, devices, scenes, and any gateway."""
 
@@ -126,6 +137,8 @@ class PlejdCloudSite:
     # every physical device's own mesh address (outputs, sensors, gateway) — distinct from
     # an output's address; this is what NotifyEvents/fault polling must target.
     device_addresses: dict[str, int] = field(default_factory=dict)
+    # rooms with a group address, so a whole room is controlled in one 0x0098 command.
+    rooms: list[PlejdCloudRoom] = field(default_factory=list)
 
 
 def _headers(token: str | None = None) -> dict[str, str]:
@@ -489,6 +502,39 @@ def parse_site(site: dict) -> PlejdCloudSite:
     if resource_set_id is None and len(resource_sets) == 1:
         resource_set_id = resource_sets[0].get("objectId")
 
+    # Rooms carry a group mesh address (roomAddress: roomId -> address); outputGroups maps
+    # each output to the group addresses it belongs to. Dimming a room = one 0x0098 to its
+    # group address (every member responds at once), the way the app controls a room.
+    room_address = site.get("roomAddress") or {}
+    output_groups = site.get("outputGroups") or {}
+    room_titles = {r.get("roomId"): (r.get("title") or "").strip() for r in site.get("rooms") or []}
+    members_by_group: dict[int, list[int]] = {}
+    for device_id, out_map in output_groups.items():
+        dev_out_addr = output_address.get(device_id) or {}
+        for out_idx, groups in (out_map or {}).items():
+            out_addr = dev_out_addr.get(str(out_idx))
+            if out_addr is None:
+                continue
+            for group in groups or []:
+                members_by_group.setdefault(int(group), []).append(int(out_addr))
+    rooms: list[PlejdCloudRoom] = []
+    for room_id, addr in room_address.items():
+        try:
+            group_addr = int(addr)
+        except (TypeError, ValueError):
+            continue
+        members = sorted(set(members_by_group.get(group_addr, [])))
+        if not members:
+            continue  # a room with no controllable outputs isn't worth a group entity
+        rooms.append(
+            PlejdCloudRoom(
+                room_id=room_id,
+                name=room_titles.get(room_id) or "Room",
+                address=group_addr,
+                member_addresses=members,
+            )
+        )
+
     meta = site.get("site") or site  # id/title are nested under "site" in the real payload
     device_addresses: dict[str, int] = {}
     for device_id, addr in device_address.items():
@@ -510,4 +556,5 @@ def parse_site(site: dict) -> PlejdCloudSite:
         resource_set_id=resource_set_id,
         firmware_by_device=firmware_by_device,
         device_addresses=device_addresses,
+        rooms=rooms,
     )

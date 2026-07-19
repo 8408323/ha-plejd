@@ -567,3 +567,24 @@ async def test_set_input_setting_posts_toggle():
     assert captured["input"] == 0
     assert captured["buttonType"] == "Toggle"
     assert captured["doubleSidedDirectionButton"] is False
+
+
+def test_parse_site_parses_rooms_with_group_addresses():
+    site = {
+        **_SITE,
+        "rooms": [
+            {"roomId": "r1", "title": "Kitchen"},
+            {"roomId": "r3", "title": "Empty room"},
+        ],
+        # r2 is absent from rooms[] -> name falls back to "Room"; r4's address is non-int -> skipped
+        "roomAddress": {"r1": 14, "r2": 16, "r3": 99, "r4": "bad"},
+        # d3.0 has no entry in outputAddress -> that membership is skipped (no address to control)
+        "outputGroups": {"d1": {"0": [14]}, "d2": {"0": [14], "1": [16]}, "d3": {"0": [14]}},
+    }
+    rooms = parse_site(site).rooms
+    by_addr = {r.address: r for r in rooms}
+    assert set(by_addr) == {14, 16}  # r3 (no members) and r4 (bad address) are dropped
+    assert by_addr[14].name == "Kitchen"
+    assert by_addr[14].member_addresses == [11, 21]  # d1.out0 + d2.out0, both in group 14
+    assert by_addr[16].name == "Room"  # fallback when the room has no title entry
+    assert by_addr[16].member_addresses == [22]

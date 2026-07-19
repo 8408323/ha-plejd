@@ -5,8 +5,8 @@ from __future__ import annotations
 import types
 
 from homeassistant.components.light import ATTR_BRIGHTNESS, ColorMode
-from plejd.cloud import PlejdCloudDevice
-from plejd.light import PlejdLight, async_setup_entry
+from plejd.cloud import PlejdCloudDevice, PlejdCloudRoom
+from plejd.light import PlejdLight, PlejdRoomLight, async_setup_entry
 from plejd.protocol import OutputState
 
 
@@ -38,15 +38,19 @@ class _SpyRamp:
 
 
 class _Coordinator:
-    def __init__(self, devices, state=None):
+    def __init__(self, devices, state=None, rooms=None, states=None):
         self.devices = devices
         self._state = state
+        self._states = states or {}  # address -> OutputState, for room aggregation
+        self.rooms = rooms or []
         self.commands = []
         self.listeners = []
         self.available = True
         self.dim_ramp = _SpyRamp()
 
     def state_for(self, address):
+        if self._states:
+            return self._states.get(address)
         return self._state
 
     def async_add_listener(self, cb):
@@ -180,3 +184,81 @@ async def test_async_stop_dim_stops_ramp():
     light = PlejdLight(coord, _device(address=7))
     await light.async_stop_dim()
     assert coord.dim_ramp.calls == [("stop", 7)]
+
+
+# ── PlejdRoomLight (whole-room group control) ─────────────────────────────────
+
+
+def _room(address=14, members=(5, 6)):
+    return PlejdCloudRoom(room_id="r1", name="Kök", address=address, member_addresses=list(members))
+
+
+async def test_setup_entry_creates_a_light_per_room():
+    coord = _Coordinator([_device()], rooms=[_room(), _room(address=16, members=(7,))])
+    entry = types.SimpleNamespace(runtime_data=coord)
+    added = []
+    await async_setup_entry(None, entry, lambda entities: added.extend(entities))
+    assert sum(isinstance(e, PlejdRoomLight) for e in added) == 2
+
+
+async def test_room_turn_on_sends_one_group_command():
+    coord = _Coordinator([], rooms=[_room()])
+    light = PlejdRoomLight(coord, _room(address=14))
+    await light.async_turn_on(**{ATTR_BRIGHTNESS: 120})
+    assert coord.commands == [(14, True, 120)]  # a single 0x0098 to the room group address
+
+
+async def test_room_turn_on_without_brightness_restores_or_full():
+    coord = _Coordinator(
+        [], states={5: OutputState(output=0, on=True, level=100), 6: OutputState(output=0, on=True, level=200)}
+    )
+    light = PlejdRoomLight(coord, _room(members=(5, 6)))
+    await light.async_turn_on()  # no brightness → the room's current average (150)
+    assert coord.commands == [(14, True, 150)]
+
+
+async def test_room_turn_off_sends_group_off():
+    coord = _Coordinator([], rooms=[_room()])
+    light = PlejdRoomLight(coord, _room(address=16))
+    await light.async_turn_off()
+    assert coord.commands == [(16, False, 0)]
+
+
+def test_room_is_on_true_if_any_member_on():
+    coord = _Coordinator(
+        [], states={5: OutputState(output=0, on=False, level=0), 6: OutputState(output=0, on=True, level=90)}
+    )
+    assert PlejdRoomLight(coord, _room(members=(5, 6))).is_on is True
+
+
+def test_room_state_none_when_no_member_states():
+    light = PlejdRoomLight(_Coordinator([], states={}), _room(members=(5, 6)))
+    assert light.is_on is None and light.brightness is None
+
+
+def test_room_brightness_averages_on_members():
+    coord = _Coordinator(
+        [],
+        states={
+            5: OutputState(output=0, on=True, level=100),
+            6: OutputState(output=0, on=False, level=200),
+            7: OutputState(output=0, on=True, level=200),
+        },
+    )
+    assert PlejdRoomLight(coord, _room(members=(5, 6, 7))).brightness == 150  # (100+200)/2
+
+
+def test_room_available_and_identity():
+    coord = _Coordinator([], rooms=[_room()])
+    light = PlejdRoomLight(coord, _room())
+    assert light.available is True
+    assert light._attr_unique_id == "room_r1"
+    assert light._attr_device_info["model"] == "Room"
+    assert light._attr_color_mode == ColorMode.BRIGHTNESS
+
+
+async def test_room_added_to_hass_subscribes():
+    coord = _Coordinator([], rooms=[_room()])
+    light = PlejdRoomLight(coord, _room())
+    await light.async_added_to_hass()
+    assert len(coord.listeners) == 1
