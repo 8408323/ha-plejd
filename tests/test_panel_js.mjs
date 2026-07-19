@@ -115,7 +115,7 @@ test("disconnect cancels a queued lights render", () => {
   assert.equal(panel._lightsFrame, null);
 });
 
-test("disconnect cancels a queued timeout fallback when animation frames are unavailable", () => {
+test("disconnect cancels a queued timeout fallback when requestAnimationFrame is unavailable", () => {
   const cancelled = [];
   const PanelClass = loadPanelClass({
     setTimeout() {

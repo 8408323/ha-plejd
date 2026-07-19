@@ -45,7 +45,15 @@ class PlejdPanel extends HTMLElement {
     this._notice = "";
     this._busy = false;
     this._lightsFrame = null;
-    this._cancelLightsFrame = null;
+    const hasAnimationFrame = Boolean(
+      globalThis.requestAnimationFrame && globalThis.cancelAnimationFrame,
+    );
+    this._scheduleLightsFrame = hasAnimationFrame
+      ? globalThis.requestAnimationFrame.bind(globalThis)
+      : (cb) => globalThis.setTimeout(cb, 0);
+    this._cancelLightsFrame = hasAnimationFrame
+      ? globalThis.cancelAnimationFrame.bind(globalThis)
+      : globalThis.clearTimeout.bind(globalThis);
   }
 
   set hass(hass) {
@@ -76,7 +84,6 @@ class PlejdPanel extends HTMLElement {
     if (this._lightsFrame === null) return;
     this._cancelLightsFrame?.(this._lightsFrame);
     this._lightsFrame = null;
-    this._cancelLightsFrame = null;
   }
 
   // ── data ──────────────────────────────────────────────────────────────────
@@ -222,18 +229,8 @@ class PlejdPanel extends HTMLElement {
 
   _scheduleLightsUpdate() {
     if (this._lightsFrame !== null) return;
-    const useAnimationFrame = Boolean(
-      globalThis.requestAnimationFrame && globalThis.cancelAnimationFrame,
-    );
-    const schedule = useAnimationFrame
-      ? globalThis.requestAnimationFrame.bind(globalThis)
-      : (cb) => globalThis.setTimeout(cb, 0);
-    this._cancelLightsFrame = useAnimationFrame
-      ? globalThis.cancelAnimationFrame.bind(globalThis)
-      : globalThis.clearTimeout.bind(globalThis);
-    this._lightsFrame = schedule(() => {
+    this._lightsFrame = this._scheduleLightsFrame(() => {
       this._lightsFrame = null;
-      this._cancelLightsFrame = null;
       this._updateLights();
     });
   }
