@@ -401,7 +401,8 @@ def parse_site(site: dict) -> PlejdCloudSite:
     mesh_key: str = mesh.get("meshKey") or ""
 
     device_address = site.get("deviceAddress") or {}
-    output_address = site.get("outputAddress") or {}
+    output_address = site.get("outputAddress")
+    output_address = output_address if isinstance(output_address, dict) else {}
     hardware_by_id = {d.get("deviceId"): d for d in site.get("plejdDevices") or []}
 
     devices: list[PlejdCloudDevice] = []
@@ -510,7 +511,9 @@ def parse_site(site: dict) -> PlejdCloudSite:
     output_groups = site.get("outputGroups")
     output_groups = output_groups if isinstance(output_groups, dict) else {}
     room_titles = {
-        r.get("roomId"): (r.get("title") or "").strip() for r in site.get("rooms") or [] if isinstance(r, dict)
+        r.get("roomId"): (r.get("title") if isinstance(r.get("title"), str) else "").strip()
+        for r in site.get("rooms") or []
+        if isinstance(r, dict)
     }
     category_by_address = {d.address: d.category for d in devices if d.address is not None}
     dimmable_by_address = {d.address: d.dimmable for d in devices if d.address is not None}
@@ -518,7 +521,8 @@ def parse_site(site: dict) -> PlejdCloudSite:
     for device_id, out_map in output_groups.items():
         if not isinstance(out_map, dict):
             continue  # untrusted cloud data: skip a malformed per-device group-membership map
-        dev_out_addr = output_address.get(device_id) or {}
+        dev_out_addr = output_address.get(device_id)
+        dev_out_addr = dev_out_addr if isinstance(dev_out_addr, dict) else {}
         for out_idx, groups in out_map.items():
             out_addr = dev_out_addr.get(str(out_idx))
             if out_addr is None:

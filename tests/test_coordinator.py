@@ -194,6 +194,33 @@ async def test_set_group_output_writes_group_command_and_reflects_member_state(m
     assert seen == [1]  # listeners notified of the optimistic update
 
 
+async def test_set_group_output_off_preserves_member_levels(monkeypatch):
+    # Turning a room off must not zero out each member's remembered brightness - the
+    # protocol's off payload (level=0) is not a "the light is now dim to 0" fact, and
+    # a later turn_on() restore relies on the prior level surviving the off command.
+    client = _FakeClient()
+    _patch_connect(monkeypatch, client)
+    ble = types.SimpleNamespace(address="01:02:03:04:05:a0")
+    hass = _hass([_info("01:02:03:04:05:a0")], {"01:02:03:04:05:a0": ble})
+    c = PlejdCoordinator(hass, _entry(discovered=None))
+    await c.async_start()
+    await c.async_set_group_output(14, True, 150, [5, 6])  # first turn on at 150...
+    await c.async_set_group_output(14, False, 0, [5, 6])  # ...then off
+    assert c.state_for(5).on is False and c.state_for(5).level == 150
+    assert c.state_for(6).on is False and c.state_for(6).level == 150
+
+
+async def test_set_group_output_off_falls_back_to_zero_for_unknown_member(monkeypatch):
+    client = _FakeClient()
+    _patch_connect(monkeypatch, client)
+    ble = types.SimpleNamespace(address="01:02:03:04:05:a0")
+    hass = _hass([_info("01:02:03:04:05:a0")], {"01:02:03:04:05:a0": ble})
+    c = PlejdCoordinator(hass, _entry(discovered=None))
+    await c.async_start()
+    await c.async_set_group_output(14, False, 0, [9])  # member 9 has no prior state at all
+    assert c.state_for(9).on is False and c.state_for(9).level == 0
+
+
 async def test_execute_scene_broadcasts(monkeypatch):
     client = _FakeClient()
     _patch_connect(monkeypatch, client)

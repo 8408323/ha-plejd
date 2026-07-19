@@ -42,10 +42,22 @@ class PlejdDimRamp:
         self._interval = interval
         self._tasks: dict[int, asyncio.Task] = {}
 
-    def start(self, address: int, direction: int, *, current: tuple[bool, int] | None = None) -> None:
-        """Begin ramping `address` up/down while held; `current` seeds (is_on, level) for group addresses."""
+    def start(
+        self,
+        address: int,
+        direction: int,
+        *,
+        current: tuple[bool, int] | None = None,
+        member_addresses: list[int] | None = None,
+    ) -> None:
+        """Begin ramping `address` up/down while held.
+
+        `current` seeds (is_on, level) for a target with no state read-back of its own
+        (a room's group address). `member_addresses`, for the same case, routes each
+        tick through the coordinator's member-aware group write instead of a plain one.
+        """
         self.stop(address)
-        task = self._spawn(self._run(address, direction, current))
+        task = self._spawn(self._run(address, direction, current, member_addresses))
         self._tasks[address] = task
         # Drop the entry when the ramp ends on its own (bound reached), but only if it's
         # still the current task — a start() that replaced it must not be evicted.
@@ -73,7 +85,13 @@ class PlejdDimRamp:
             return create(coro, name="plejd-dim-ramp")
         return asyncio.ensure_future(coro)
 
-    async def _run(self, address: int, direction: int, current: tuple[bool, int] | None = None) -> None:
+    async def _run(
+        self,
+        address: int,
+        direction: int,
+        current: tuple[bool, int] | None = None,
+        member_addresses: list[int] | None = None,
+    ) -> None:
         if current is not None:
             is_on, level = current
         else:
@@ -87,7 +105,10 @@ class PlejdDimRamp:
         step = self._step if direction >= 0 else -self._step
         while True:
             level = max(DIM_MIN, min(DIM_MAX, level + step))
-            await self._coordinator.async_set_output(address, True, level)
+            if member_addresses is not None:
+                await self._coordinator.async_set_group_output(address, True, level, member_addresses)
+            else:
+                await self._coordinator.async_set_output(address, True, level)
             if level <= DIM_MIN or level >= DIM_MAX:
                 return  # reached a bound; hold there until released
             await asyncio.sleep(self._interval)

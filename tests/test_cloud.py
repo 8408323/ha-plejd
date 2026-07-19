@@ -650,6 +650,44 @@ def test_parse_site_skips_non_dict_output_group_membership_map():
     assert parse_site(site).rooms == []
 
 
+def test_parse_site_ignores_non_string_room_title():
+    site = {
+        **_SITE,
+        # a non-string title must not crash the .strip() call -> falls back like a
+        # missing title does ("Room")
+        "rooms": [{"roomId": "r1", "title": 123}],
+        "roomAddress": {"r1": 14},
+        "outputGroups": {"d1": {"0": [14]}},
+    }
+    rooms = parse_site(site).rooms
+    assert len(rooms) == 1 and rooms[0].name == "Room"
+
+
+def test_parse_site_tolerates_non_dict_output_address_fields():
+    site = {
+        **_SITE,
+        "roomAddress": {"r1": 14},
+        "outputGroups": {"d1": {"0": [14]}},
+        # the whole outputAddress map is malformed (untrusted cloud data) -> treated as
+        # empty rather than raising when the room-membership loop calls .get() on it
+        "outputAddress": ["not", "a", "dict"],
+    }
+    assert parse_site(site).rooms == []  # d1's own out addr can't be resolved -> no members
+
+
+def test_parse_site_skips_non_dict_per_device_output_address():
+    site = {
+        **_SITE,
+        "roomAddress": {"r1": 14},
+        # d5 doesn't appear in devices[] (so its malformed entry can't crash the
+        # unrelated device-parsing loop); its own outputAddress value is a scalar, not
+        # {outputIdx: address} -> its membership must be skipped, not raise.
+        "outputGroups": {"d5": {"0": [14]}},
+        "outputAddress": {**_SITE["outputAddress"], "d5": "not-a-dict"},
+    }
+    assert parse_site(site).rooms == []
+
+
 def test_parse_site_room_not_dimmable_when_no_member_is_dimmable():
     site = {
         **_SITE,

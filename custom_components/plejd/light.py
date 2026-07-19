@@ -81,9 +81,11 @@ class PlejdLight(LightEntity):
     async def async_turn_on(self, **kwargs: Any) -> None:
         level = kwargs.get(ATTR_BRIGHTNESS)
         if level is None:
-            # No brightness requested: restore the last level, or full if unknown.
+            # No brightness requested: restore the last level, or full if unknown. A
+            # level of 0 is never a real "on" position for a Plejd dimmer (ramps floor
+            # at DIM_MIN=1), so it's treated the same as unknown, not commanded as-is.
             current = self.brightness
-            level = current if current is not None else 255
+            level = current if current else 255
         await self._coordinator.async_set_output(self._device.address, True, level)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
@@ -157,8 +159,9 @@ class PlejdRoomLight(LightEntity):
         if level is None:
             # An on/off-only room has no meaningful "restore level" (HA never sends
             # brightness for ColorMode.ONOFF anyway) -> always command full, like PlejdLight.
+            # A restored level of 0 is likewise treated as unknown (see PlejdLight).
             current = self._restore_level() if self._room.dimmable else None
-            level = current if current is not None else 255
+            level = current if current else 255
         await self._coordinator.async_set_group_output(self._room.address, True, level, self._room.member_addresses)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
@@ -169,7 +172,12 @@ class PlejdRoomLight(LightEntity):
         if not self._room.dimmable:
             return  # on/off-only rooms can't ramp; nothing to do
         current = (bool(self.is_on), self._restore_level() or 0)
-        self._coordinator.dim_ramp.start(self._room.address, 1 if direction == "up" else -1, current=current)
+        self._coordinator.dim_ramp.start(
+            self._room.address,
+            1 if direction == "up" else -1,
+            current=current,
+            member_addresses=self._room.member_addresses,
+        )
 
     async def async_stop_dim(self) -> None:
         """Stop an in-progress ramp on this room, holding its brightness (entity service)."""

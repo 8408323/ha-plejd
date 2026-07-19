@@ -740,7 +740,16 @@ class PlejdCoordinator:
         """
         await self.async_set_output(address, on, level)
         for member in member_addresses:
-            self._record_output_state(member, OutputState(output=member, on=on, level=level))
+            if on:
+                member_level = level
+            else:
+                # Turning off doesn't erase a member's remembered brightness (the level
+                # param here is just the protocol's off payload) - a real device keeps
+                # reporting its own last dim position while off, and the room's restore
+                # should too.
+                prior = self.state_for(member)
+                member_level = prior.level if prior is not None else level
+            self._record_output_state(member, OutputState(output=member, on=on, level=member_level))
         self._notify_outputs()
 
     def _record_output_state(self, address: int, state: OutputState) -> None:
