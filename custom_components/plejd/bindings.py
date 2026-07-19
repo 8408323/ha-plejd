@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from typing import Any
 from uuid import uuid4
@@ -70,9 +71,20 @@ def _is_stopless(binding: dict) -> bool:
 # on the binding's target — the general counterpart to the hold-to-dim up/down/stop triggers.
 PRESS_ACTIONS = ("toggle", "on", "off", "scene", "service")
 
+# HA's actual slug convention: lowercase alphanumeric segments joined by single
+# underscores — no leading/trailing/double underscore (matches HA's own entity-id and
+# service-name validators). A stricter check here catches typos that would otherwise
+# only surface as a failed hass.services.async_call when the remote fires.
+_SLUG_RE = re.compile(r"^[a-z0-9]+(?:_[a-z0-9]+)*$")
+_SCENE_ENTITY_RE = re.compile(r"^scene\.[a-z0-9]+(?:_[a-z0-9]+)*$")
+
 
 def _validate_presses(binding: dict) -> None:
-    """Reject a binding whose press mappings are malformed (raised before persisting)."""
+    """Reject a binding whose press mappings are malformed.
+
+    Raised from both the save path (async_replace, before persisting) and the load path
+    (_attach, as a safety net for legacy/hand-edited storage).
+    """
     presses = binding.get("presses")
     if presses is None:
         return
@@ -81,8 +93,17 @@ def _validate_presses(binding: dict) -> None:
     for press in presses:
         if not isinstance(press, dict):
             raise InvalidDimBinding("each press entry must be a mapping")
-        if not press.get("trigger"):
+        trigger = press.get("trigger")
+        if not trigger:
             raise InvalidDimBinding("binding press has no trigger")
+        trigger_configs = trigger if isinstance(trigger, list) else [trigger]
+        if not all(isinstance(t, dict) and t for t in trigger_configs):
+            raise InvalidDimBinding("binding press trigger must be a non-empty mapping (or a list of them)")
+        if not all(isinstance(t.get("platform"), str) and t.get("platform") for t in trigger_configs):
+            # HA's trigger helper reads CONF_PLATFORM to dispatch to the right trigger
+            # integration; without it, async_initialize_triggers fails and _async_attach
+            # only logs and skips the binding — save-time is where this should be caught.
+            raise InvalidDimBinding("binding press trigger must include a platform")
         action = press.get("action")
         if action is not None and not isinstance(action, dict):
             raise InvalidDimBinding("press action must be a mapping")
@@ -90,10 +111,19 @@ def _validate_presses(binding: dict) -> None:
         atype = action.get("type")
         if atype not in PRESS_ACTIONS:
             raise InvalidDimBinding(f"unknown press action type: {atype!r}")
-        if atype == "scene" and not action.get("entity_id"):
-            raise InvalidDimBinding("scene press action needs an entity_id")
-        if atype == "service" and not (action.get("domain") and action.get("service")):
-            raise InvalidDimBinding("service press action needs a domain and service")
+        if atype == "scene":
+            entity_id = action.get("entity_id")
+            if not isinstance(entity_id, str) or not _SCENE_ENTITY_RE.match(entity_id):
+                raise InvalidDimBinding("scene press action needs a valid scene.* entity_id")
+        if atype == "service":
+            domain, service = action.get("domain"), action.get("service")
+            if not (isinstance(domain, str) and _SLUG_RE.match(domain)):
+                raise InvalidDimBinding("service press action needs a valid domain")
+            if not (isinstance(service, str) and _SLUG_RE.match(service)):
+                raise InvalidDimBinding("service press action needs a valid service name")
+            data = action.get("data")
+            if data is not None and not isinstance(data, dict):
+                raise InvalidDimBinding("service press action data must be a mapping")
 
 
 def _ensure_ids(bindings: list[dict]) -> bool:
