@@ -88,3 +88,19 @@ def test_async_register_registers_all_commands():
     assert dim_binding_ws.ws_list in registered
     assert dim_binding_ws.ws_save in registered
     assert dim_binding_ws.ws_device_triggers in registered
+
+
+class _FailingBindings:
+    bindings: list = []
+
+    async def async_replace(self, items):
+        raise ValueError("bad payload")
+
+
+async def test_save_returns_error_when_replace_fails():
+    hass = _hass()
+    hass.data[DATA_BINDINGS] = _FailingBindings()
+    conn = _Conn()
+    await dim_binding_ws.ws_save(hass, conn, {"id": 3, "bindings": [{}]})
+    assert conn.error[0] == 3 and conn.error[1] == "save_failed"
+    assert conn.result is None

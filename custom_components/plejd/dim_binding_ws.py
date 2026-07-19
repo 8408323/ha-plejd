@@ -32,7 +32,11 @@ async def ws_save(hass: HomeAssistant, connection, msg) -> None:
     if bindings is None:
         connection.send_error(msg["id"], "not_loaded", "Plejd is not loaded")
         return
-    await bindings.async_replace(msg["bindings"])
+    try:
+        await bindings.async_replace(msg["bindings"])
+    except Exception as err:  # noqa: BLE001 - return a structured error the dashboard can show
+        connection.send_error(msg["id"], "save_failed", str(err))
+        return
     connection.send_result(msg["id"], {"bindings": bindings.bindings})
 
 

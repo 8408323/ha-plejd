@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from typing import Any
+from uuid import uuid4
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
@@ -38,6 +39,14 @@ def _target(binding: dict) -> dict[str, Any]:
     """The HA service target from a binding (entity/device/area), non-empty keys only."""
     targets = binding.get("targets") or {}
     return {key: targets[key] for key in _TARGET_KEYS if targets.get(key)}
+
+
+def _ensure_ids(bindings: list[dict]) -> list[dict]:
+    """Give every binding a stable unique id so ramps never collide under a shared key."""
+    for binding in bindings:
+        if not binding.get("id"):
+            binding["id"] = uuid4().hex
+    return bindings
 
 
 class DimRamp:
@@ -118,13 +127,13 @@ class PlejdDimBindings:
         return self._bindings
 
     async def async_load(self) -> None:
-        self._bindings = await self._store.async_load() or []
+        self._bindings = _ensure_ids(await self._store.async_load() or [])
         await self._async_attach()
 
     async def async_replace(self, bindings: list[dict]) -> None:
         """Persist the full set of bindings and re-attach their triggers."""
-        self._bindings = bindings
-        await self._store.async_save(bindings)
+        self._bindings = _ensure_ids(bindings)
+        await self._store.async_save(self._bindings)
         self._detach()
         await self._async_attach()
 
@@ -136,21 +145,30 @@ class PlejdDimBindings:
                 _LOGGER.warning("Plejd: could not attach dim binding %s", binding.get("id"), exc_info=True)
 
     async def _attach(self, binding: dict) -> None:
-        bid = binding.get("id")
+        bid = binding["id"]  # guaranteed by _ensure_ids
         target = _target(binding)
-        for key, direction in (("up", "up"), ("down", "down")):
-            trigger = binding.get(key)
-            if trigger:
-                await self._attach_trigger(trigger, self._start_action(bid, target, direction))
-        stop = binding.get("stop")
-        if stop:
-            await self._attach_trigger(stop, self._stop_action(bid))
+        # Attach atomically: if any trigger fails, roll back the ones already attached for
+        # this binding, so we never leave a ramp that can start but not stop.
+        attached: list = []
+        try:
+            for key, direction in (("up", "up"), ("down", "down")):
+                trigger = binding.get(key)
+                if trigger:
+                    await self._attach_trigger(attached, trigger, self._start_action(bid, target, direction))
+            stop = binding.get("stop")
+            if stop:
+                await self._attach_trigger(attached, stop, self._stop_action(bid))
+        except Exception:
+            for unsub in attached:
+                unsub()
+            raise
+        self._unsubs.extend(attached)
 
-    async def _attach_trigger(self, trigger, action) -> None:
+    async def _attach_trigger(self, attached: list, trigger, action) -> None:
         configs = trigger if isinstance(trigger, list) else [trigger]
         unsub = await async_initialize_triggers(self._hass, configs, action, DOMAIN, "plejd-dim", _LOGGER.log)
         if unsub is not None:
-            self._unsubs.append(unsub)
+            attached.append(unsub)
 
     def _start_action(self, bid, target, direction):
         async def _action(run_variables=None, context=None):

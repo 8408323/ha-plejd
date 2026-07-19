@@ -222,3 +222,38 @@ async def test_shutdown_detaches_and_stops_ramp(monkeypatch):
     await pb.async_load()
     pb.async_shutdown()
     assert ("unsub",) in captured and ("shutdown",) in pb._ramp.calls
+
+
+async def test_attach_rolls_back_partial_binding_on_failure(monkeypatch):
+    events = []
+
+    async def _init(hass, configs, action, domain, name, log_cb, **kwargs):
+        events.append(("attach", configs))
+        if configs == [{"boom": 1}]:
+            raise ValueError("stop trigger invalid")
+
+        def _unsub():
+            events.append(("unsub", configs))
+
+        return _unsub
+
+    monkeypatch.setattr(bindings_mod, "async_initialize_triggers", _init)
+    hass = _hass()
+    hass.data[("store", bindings_mod.STORE_KEY)] = [
+        {"id": "b1", "targets": {"entity_id": ["light.a"]}, "up": {"ok": 1}, "stop": {"boom": 1}},
+    ]
+    pb = PlejdDimBindings(hass)
+    await pb.async_load()  # the per-binding guard logs the failure
+    # the already-attached "up" trigger is rolled back, so no half-attached ramp lingers
+    assert ("attach", [{"ok": 1}]) in events and ("unsub", [{"ok": 1}]) in events
+    assert pb._unsubs == []
+
+
+async def test_replace_assigns_missing_ids(monkeypatch):
+    monkeypatch.setattr(bindings_mod, "async_initialize_triggers", _spy_triggers([]))
+    hass = _hass()
+    pb = PlejdDimBindings(hass)
+    await pb.async_load()
+    await pb.async_replace([{"targets": {"entity_id": ["light.a"]}}])  # no id supplied
+    assert pb.bindings[0]["id"]  # assigned
+    assert hass.data[("store", bindings_mod.STORE_KEY)][0]["id"]  # and persisted

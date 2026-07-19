@@ -114,8 +114,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     entry.async_on_unload(lambda: hass.services.async_remove(DOMAIN, SERVICE_SCAN_DEVICES))
 
     # Remote → light dim bindings (managed from the dashboard via the WebSocket API).
+    # Optional, like the panel: a storage error must not stop the mesh/lights loading.
     dim_bindings = PlejdDimBindings(hass)
-    await dim_bindings.async_load()
+    try:
+        await dim_bindings.async_load()
+    except Exception:  # noqa: BLE001 - bindings are optional; continue with an empty manager
+        _LOGGER.warning("Plejd: could not load dim bindings; continuing without them", exc_info=True)
     hass.data[dim_binding_ws.DATA_BINDINGS] = dim_bindings
     entry.async_on_unload(lambda: hass.data.pop(dim_binding_ws.DATA_BINDINGS, None))
     entry.async_on_unload(dim_bindings.async_shutdown)

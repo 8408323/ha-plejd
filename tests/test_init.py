@@ -480,3 +480,22 @@ async def test_unload_cleans_up_bindings(monkeypatch):
     for unload in unloads:
         unload()
     assert DATA_BINDINGS not in hass.data
+
+
+async def test_setup_survives_binding_load_failure(monkeypatch):
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    _FakeCoordinator.instances.clear()
+
+    class _BadBindings:
+        def __init__(self, hass):
+            pass
+
+        async def async_load(self):
+            raise ValueError("corrupt store")
+
+        def async_shutdown(self):
+            return None
+
+    monkeypatch.setattr(plejd, "PlejdDimBindings", _BadBindings)
+    hass, entry = _hass(), _entry()
+    assert await async_setup_entry(hass, entry) is True  # storage error must not abort setup
