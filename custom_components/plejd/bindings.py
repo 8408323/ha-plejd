@@ -144,16 +144,21 @@ class PlejdDimBindings:
         return self._bindings
 
     async def async_load(self) -> None:
-        self._bindings = await self._store.async_load() or []
-        if _ensure_ids(self._bindings):
-            await self._store.async_save(self._bindings)  # persist ids assigned to legacy data
+        # Commit in-memory state only after the store save succeeds, so a failed read/save
+        # leaves an empty, consistent manager (no triggers attached, nothing listed).
+        bindings = await self._store.async_load() or []
+        if _ensure_ids(bindings):
+            await self._store.async_save(bindings)  # persist ids assigned to legacy data
+        self._bindings = bindings
         await self._async_attach()
 
     async def async_replace(self, bindings: list[dict]) -> None:
         """Persist the full set of bindings and re-attach their triggers."""
+        _ensure_ids(bindings)
+        # Save before swapping bindings/triggers: a failed save then leaves the old
+        # bindings and their live triggers intact instead of a half-applied state.
+        await self._store.async_save(bindings)
         self._bindings = bindings
-        _ensure_ids(self._bindings)
-        await self._store.async_save(self._bindings)
         self._detach()
         await self._async_attach()
 

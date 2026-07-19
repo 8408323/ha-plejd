@@ -5,8 +5,13 @@ from __future__ import annotations
 import asyncio
 import types
 
+import pytest
 from plejd import bindings as bindings_mod
 from plejd.bindings import DimRamp, PlejdDimBindings
+
+
+async def _raise_disk_full(_data):
+    raise OSError("disk full")
 
 
 class _Services:
@@ -279,6 +284,32 @@ async def test_attach_rolls_back_partial_binding_on_failure(monkeypatch):
     # the already-attached "up" trigger is rolled back, so no half-attached ramp lingers
     assert ("attach", [{"ok": 1}]) in events and ("unsub", [{"ok": 1}]) in events
     assert pb._unsubs == []
+
+
+async def test_replace_keeps_old_bindings_when_save_fails(monkeypatch):
+    captured = []
+    monkeypatch.setattr(bindings_mod, "async_initialize_triggers", _spy_triggers(captured))
+    hass = _hass()
+    hass.data[("store", bindings_mod.STORE_KEY)] = [{"id": "b1", "targets": {"entity_id": ["light.a"]}, "up": {"x": 1}}]
+    pb = PlejdDimBindings(hass)
+    await pb.async_load()
+    old = pb.bindings
+    pb._store.async_save = _raise_disk_full
+    with pytest.raises(OSError):
+        await pb.async_replace([{"id": "b2", "targets": {"entity_id": ["light.b"]}, "up": {"y": 1}}])
+    assert pb.bindings == old  # in-memory bindings untouched, old triggers never detached
+    assert ("unsub",) not in captured
+
+
+async def test_load_stays_empty_when_legacy_id_save_fails(monkeypatch):
+    monkeypatch.setattr(bindings_mod, "async_initialize_triggers", _spy_triggers([]))
+    hass = _hass()
+    hass.data[("store", bindings_mod.STORE_KEY)] = [{"targets": {"entity_id": ["light.a"]}}]  # no id → forces a save
+    pb = PlejdDimBindings(hass)
+    pb._store.async_save = _raise_disk_full
+    with pytest.raises(OSError):
+        await pb.async_load()
+    assert pb.bindings == []  # nothing committed → manager stays empty and consistent
 
 
 async def test_replace_assigns_missing_ids(monkeypatch):

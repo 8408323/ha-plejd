@@ -53,8 +53,11 @@ async def ws_device_triggers(hass: HomeAssistant, connection, msg) -> None:
     device_id = msg["device_id"]
     try:
         triggers = await async_get_device_automations(hass, DeviceAutomationType.TRIGGER, [device_id])
-    except Exception:  # noqa: BLE001 - a stale/removed device raises DeviceNotFound; just report none
-        _LOGGER.debug("Plejd: could not get triggers for device %s", device_id, exc_info=True)
+    except Exception:  # noqa: BLE001 - one device failing to enumerate must not break the picker
+        # Degrade to "no triggers" for this device, but log loudly: in the dashboard flow the
+        # device_id is a real, user-picked device, so a failure here is an unexpected backend
+        # error worth surfacing, not the routine empty result of an unknown device.
+        _LOGGER.warning("Plejd: could not get triggers for device %s", device_id, exc_info=True)
         triggers = {}
     connection.send_result(msg["id"], {"triggers": triggers.get(device_id, [])})
 
