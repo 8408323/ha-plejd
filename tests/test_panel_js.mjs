@@ -250,6 +250,50 @@ test("first hass assignment loads area and device registries over websocket", as
   assert.equal(panel._deviceName("dev.remote"), "Remote Hall");
 });
 
+test("trigger change listeners keep _form in sync so re-renders preserve selections", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+
+  const listeners = {};
+  function makeSelect(id) {
+    const el = {
+      value: "",
+      addEventListener(ev, fn) {
+        listeners[id] = listeners[id] || {};
+        listeners[id][ev] = fn;
+      },
+    };
+    return el;
+  }
+
+  const upEl = makeSelect("f-up");
+  const downEl = makeSelect("f-down");
+  const stopEl = makeSelect("f-stop");
+
+  const el = {
+    querySelectorAll: () => [],
+    querySelector(sel) {
+      if (sel === "#f-up") return upEl;
+      if (sel === "#f-down") return downEl;
+      if (sel === "#f-stop") return stopEl;
+      return null;
+    },
+  };
+
+  panel._wire(el);
+
+  upEl.value = "1";
+  listeners["f-up"].change({ target: upEl });
+  downEl.value = "2";
+  listeners["f-down"].change({ target: downEl });
+  stopEl.value = "3";
+  listeners["f-stop"].change({ target: stopEl });
+
+  assert.equal(panel._form.up, "1");
+  assert.equal(panel._form.down, "2");
+  assert.equal(panel._form.stop, "3");
+});
+
 test("registry loading failure keeps registries empty and logs a warning", async () => {
   const warnings = [];
   const PanelClass = loadPanelClass({

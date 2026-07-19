@@ -442,6 +442,15 @@ class PlejdPanel extends HTMLElement {
       await this._loadTriggers(this._form.device);
       this._renderEditor();
     });
+    el.querySelector("#f-up")?.addEventListener("change", (e) => {
+      this._form.up = e.target.value;
+    });
+    el.querySelector("#f-down")?.addEventListener("change", (e) => {
+      this._form.down = e.target.value;
+    });
+    el.querySelector("#f-stop")?.addEventListener("change", (e) => {
+      this._form.stop = e.target.value;
+    });
     el.querySelector("#f-save")?.addEventListener("click", () => this._onSave(el));
   }
 
