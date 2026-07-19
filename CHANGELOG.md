@@ -6,6 +6,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **Remote bindings: any trigger → any action (backend).** Beyond hold-to-dim,
+  a binding can now map *any* remote trigger (any button, short/long press,
+  hold, release, click, …) to an instantaneous action on its target: **toggle**,
+  **turn on**, **turn off**, **activate a scene**, or **call any service**
+  (an escape hatch that merges the target in). Stored as a `presses` list on the
+  binding and validated before saving; the dashboard editor for it follows.
+
 ## [0.10.0] - 2026-07-19
 
 ### Added
