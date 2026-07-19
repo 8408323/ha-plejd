@@ -203,8 +203,17 @@ async def test_async_stop_dim_stops_ramp():
 # ── PlejdRoomLight (whole-room group control) ─────────────────────────────────
 
 
-def _room(address=14, members=(5, 6), dimmable=True):
-    return PlejdCloudRoom(room_id="r1", name="Kök", address=address, member_addresses=list(members), dimmable=dimmable)
+def _room(address=14, members=(5, 6), dimmable=True, dimmable_addresses=None):
+    if dimmable_addresses is None:
+        dimmable_addresses = list(members) if dimmable else []
+    return PlejdCloudRoom(
+        room_id="r1",
+        name="Kök",
+        address=address,
+        member_addresses=list(members),
+        dimmable=dimmable,
+        dimmable_addresses=dimmable_addresses,
+    )
 
 
 async def test_setup_entry_creates_a_light_per_room():
@@ -238,6 +247,17 @@ async def test_room_turn_on_without_brightness_restores_average_of_off_members()
     light = PlejdRoomLight(coord, _room(members=(5, 6)))
     await light.async_turn_on()  # every member is off but remembers a level -> restore it, not full
     assert coord.commands == [(14, True, 150)]
+
+
+async def test_room_turn_on_ignores_zero_levels_when_restoring_mixed_members():
+    # A level of 0 is degenerate/unknown (see PlejdLight) - blending it into the average
+    # would dilute a real remembered level instead of restoring it outright.
+    coord = _Coordinator(
+        [], states={5: OutputState(output=0, on=False, level=0), 6: OutputState(output=0, on=False, level=200)}
+    )
+    light = PlejdRoomLight(coord, _room(members=(5, 6)))
+    await light.async_turn_on()
+    assert coord.commands == [(14, True, 200)]  # restores the one known level, not (0+200)/2
 
 
 async def test_room_turn_on_without_brightness_defaults_full_when_average_zero():
@@ -306,6 +326,18 @@ def test_room_brightness_averages_on_members():
     assert PlejdRoomLight(coord, _room(members=(5, 6, 7))).brightness == 150  # (100+200)/2
 
 
+def test_room_brightness_excludes_on_off_only_members():
+    coord = _Coordinator(
+        [],
+        states={
+            5: OutputState(output=0, on=True, level=50),  # dimmable
+            6: OutputState(output=0, on=True, level=255),  # on/off-only, level is meaningless
+        },
+    )
+    room = _room(members=(5, 6), dimmable=True, dimmable_addresses=[5])
+    assert PlejdRoomLight(coord, room).brightness == 50  # only the dimmable member counts
+
+
 def test_room_available_and_identity():
     coord = _Coordinator([], rooms=[_room()])
     light = PlejdRoomLight(coord, _room())
@@ -343,10 +375,23 @@ async def test_room_async_start_dim_ramps_with_seeded_state():
     )
     light = PlejdRoomLight(coord, _room(address=14, members=(5, 6)))
     await light.async_start_dim("up")
-    # dim_ramp has no state read-back for a group address, so the room seeds it:
-    # is_on = any member on (True); level = average of every known member level (75).
+    # dim_ramp has no state read-back for a group address, so the room seeds it from its
+    # own visible brightness (on members only) - is_on = any member on (True); level =
+    # the one on member's level (100), not blended with the off member's remembered 50.
     # member_addresses routes each ramp tick through the member-aware group write.
-    assert coord.dim_ramp.calls == [("start", 14, 1, (True, 75), [5, 6])]
+    assert coord.dim_ramp.calls == [("start", 14, 1, (True, 100), [5, 6])]
+
+
+async def test_room_async_start_dim_seeds_from_visible_not_blended_average():
+    # Regression test: averaging in an off member's remembered level would seed a "dim
+    # down" from a level higher than what's actually showing, briefly brightening the
+    # lit output (and turning the off member on) on the ramp's first tick.
+    coord = _Coordinator(
+        [], states={5: OutputState(output=0, on=True, level=20), 6: OutputState(output=0, on=False, level=200)}
+    )
+    light = PlejdRoomLight(coord, _room(address=14, members=(5, 6)))
+    await light.async_start_dim("down")
+    assert coord.dim_ramp.calls == [("start", 14, -1, (True, 20), [5, 6])]
 
 
 async def test_room_async_start_dim_noop_when_not_dimmable():

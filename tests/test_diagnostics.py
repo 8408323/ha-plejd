@@ -50,7 +50,14 @@ def _entry():
                 {"device_id": "d1", "object_id": "7MK7dlrcfz", "address": 11, "name": "Vardagsrum", "model": "DIM-01"}
             ],
             "rooms": [
-                {"room_id": "r1", "name": "Vardagsrum", "address": 14, "member_addresses": [11], "dimmable": True}
+                {
+                    "room_id": "r1",
+                    "name": "Vardagsrum",
+                    "address": 14,
+                    "member_addresses": [11],
+                    "dimmable": True,
+                    "dimmable_addresses": [11],
+                }
             ],
         },
         options={
@@ -85,6 +92,7 @@ async def test_diagnostics_redacts_secrets_and_pii():
     room = data["rooms"][0]
     assert room["room_id"] == "**REDACTED**" and room["address"] == "**REDACTED**" and room["name"] == "**REDACTED**"
     assert room["member_addresses"] == "**REDACTED**"  # mesh output addresses -- BLE/PII-adjacent
+    assert room["dimmable_addresses"] == "**REDACTED**"  # mesh output addresses -- BLE/PII-adjacent
     assert room["dimmable"] is True  # not sensitive and is kept
     # schedules (occupancy/routine) are redacted wholesale, transport pref kept
     assert diag["options"]["schedules"] == "**REDACTED**" and diag["options"]["transport"] == "gateway"

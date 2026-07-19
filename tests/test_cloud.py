@@ -669,10 +669,14 @@ def test_parse_site_tolerates_non_dict_output_address_fields():
         "roomAddress": {"r1": 14},
         "outputGroups": {"d1": {"0": [14]}},
         # the whole outputAddress map is malformed (untrusted cloud data) -> treated as
-        # empty rather than raising when the room-membership loop calls .get() on it
+        # empty rather than raising when the room-membership loop calls .get() on it;
+        # d1 is still resolved via the deviceAddress fallback (mirrors the device
+        # parser's own fallback for a single-output light)
         "outputAddress": ["not", "a", "dict"],
     }
-    assert parse_site(site).rooms == []  # d1's own out addr can't be resolved -> no members
+    rooms = parse_site(site).rooms
+    assert len(rooms) == 1
+    assert rooms[0].member_addresses == [1]  # d1's deviceAddress (1), not its missing outputAddress
 
 
 def test_parse_site_skips_non_dict_per_device_output_address():
@@ -688,6 +692,21 @@ def test_parse_site_skips_non_dict_per_device_output_address():
     assert parse_site(site).rooms == []
 
 
+def test_parse_site_room_membership_falls_back_to_device_address():
+    site = {
+        **_SITE,
+        "roomAddress": {"r1": 14},
+        "outputGroups": {"d1": {"0": [14]}},
+        # d1 has no entry in outputAddress at all (a valid dict, just missing this key)
+        # -> falls back to deviceAddress, mirroring the device parser's own fallback
+        # for a single-output light whose outputAddress the cloud omits.
+        "outputAddress": {"d2": _SITE["outputAddress"]["d2"]},
+    }
+    rooms = parse_site(site).rooms
+    assert len(rooms) == 1
+    assert rooms[0].member_addresses == [1]  # d1's deviceAddress
+
+
 def test_parse_site_room_not_dimmable_when_no_member_is_dimmable():
     site = {
         **_SITE,
@@ -701,3 +720,22 @@ def test_parse_site_room_not_dimmable_when_no_member_is_dimmable():
     rooms = parse_site(site).rooms
     assert len(rooms) == 1
     assert rooms[0].dimmable is False
+
+
+def test_parse_site_room_dimmable_addresses_excludes_on_off_only_members():
+    site = {
+        **_SITE,
+        "roomAddress": {"r1": 14},
+        "outputGroups": {"d1": {"0": [14]}, "d6": {"0": [14]}},
+        "outputAddress": {**_SITE["outputAddress"], "d6": {"0": 61}},
+        "plejdDevices": [*_SITE["plejdDevices"], {"deviceId": "d6", "hardwareId": "1"}],
+        "devices": [
+            *_SITE["devices"],
+            {"deviceId": "d6", "title": "Lamp", "roomId": "r1", "outputType": "LIGHT", "traits": 0},
+        ],
+    }
+    rooms = parse_site(site).rooms
+    assert len(rooms) == 1
+    room = rooms[0]
+    assert set(room.member_addresses) == {11, 61}
+    assert room.dimmable_addresses == [11]  # d1 is dimmable; d6 (traits=0) is on/off only

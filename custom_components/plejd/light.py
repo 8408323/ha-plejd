@@ -133,25 +133,28 @@ class PlejdRoomLight(LightEntity):
     def available(self) -> bool:
         return self._coordinator.available
 
-    def _member_states(self) -> list:
-        states = (self._coordinator.state_for(addr) for addr in self._room.member_addresses)
+    def _member_states(self, addresses: list[int]) -> list:
+        states = (self._coordinator.state_for(addr) for addr in addresses)
         return [s for s in states if s is not None]
 
     @property
     def is_on(self) -> bool | None:
-        states = self._member_states()
+        states = self._member_states(self._room.member_addresses)
         return any(s.on for s in states) if states else None
 
     @property
     def brightness(self) -> int | None:
         if not self._room.dimmable:
             return None
-        on_levels = [s.level for s in self._member_states() if s.on and s.level is not None]
+        # Only dimmable members' levels count: an on/off-only member's level is
+        # meaningless and would skew the displayed brightness of the room's dimmers.
+        # A level of 0 is likewise excluded (never a real "on" position, see PlejdLight).
+        on_levels = [s.level for s in self._member_states(self._room.dimmable_addresses) if s.on and s.level]
         return round(sum(on_levels) / len(on_levels)) if on_levels else None
 
     def _restore_level(self) -> int | None:
-        """Average of every member's last-known level (on or off), for turn_on() with no explicit level."""
-        levels = [s.level for s in self._member_states() if s.level is not None]
+        """Average of every dimmable member's last-known level (on or off), for an all-off room's turn_on()."""
+        levels = [s.level for s in self._member_states(self._room.dimmable_addresses) if s.level]
         return round(sum(levels) / len(levels)) if levels else None
 
     async def async_turn_on(self, **kwargs: Any) -> None:
@@ -171,7 +174,11 @@ class PlejdRoomLight(LightEntity):
         """Start a smooth hold-to-dim ramp across the room's group address (entity service)."""
         if not self._room.dimmable:
             return  # on/off-only rooms can't ramp; nothing to do
-        current = (bool(self.is_on), self._restore_level() or 0)
+        # Seed from the room's actual visible brightness (on dimmable members only) when
+        # lit, not the all-off restore average - otherwise dimming down a partially-lit
+        # room could start from a higher level than what's actually showing and brighten
+        # the lit output on the first tick.
+        current = (bool(self.is_on), self.brightness or 0)
         self._coordinator.dim_ramp.start(
             self._room.address,
             1 if direction == "up" else -1,

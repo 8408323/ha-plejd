@@ -116,6 +116,7 @@ class PlejdCloudRoom:
     address: int  # the room's group mesh address — target of set_group_state_and_level
     member_addresses: list[int]
     dimmable: bool  # True if any member output supports brightness (vs. on/off only)
+    dimmable_addresses: list[int]  # subset of member_addresses that support brightness
 
 
 @dataclass
@@ -524,7 +525,9 @@ def parse_site(site: dict) -> PlejdCloudSite:
         dev_out_addr = output_address.get(device_id)
         dev_out_addr = dev_out_addr if isinstance(dev_out_addr, dict) else {}
         for out_idx, groups in out_map.items():
-            out_addr = dev_out_addr.get(str(out_idx))
+            # Mirror the device parser's own fallback: a single-output light can be
+            # missing from outputAddress and controlled via its deviceAddress instead.
+            out_addr = dev_out_addr.get(str(out_idx), device_address.get(device_id))
             if out_addr is None:
                 continue
             try:
@@ -555,6 +558,7 @@ def parse_site(site: dict) -> PlejdCloudSite:
                 address=group_addr,
                 member_addresses=members,
                 dimmable=any(dimmable_by_address.get(m) for m in members),
+                dimmable_addresses=[m for m in members if dimmable_by_address.get(m)],
             )
         )
 

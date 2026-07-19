@@ -183,7 +183,11 @@ async def test_add_device_refreshes_rooms(monkeypatch):
         scenes=[],
         gateways=[],
         resource_set_id=None,
-        rooms=[PlejdCloudRoom(room_id="r1", name="Kitchen", address=14, member_addresses=[5], dimmable=True)],
+        rooms=[
+            PlejdCloudRoom(
+                room_id="r1", name="Kitchen", address=14, member_addresses=[5], dimmable=True, dimmable_addresses=[5]
+            )
+        ],
     )
     monkeypatch.setattr("plejd.add_device.async_get_site", AsyncMock(return_value=fresh_site))
     monkeypatch.setattr(
@@ -194,7 +198,14 @@ async def test_add_device_refreshes_rooms(monkeypatch):
     await async_add_device(hass, entry, address=_ADDR, name="X")
 
     assert entry.data["rooms"] == [
-        {"room_id": "r1", "name": "Kitchen", "address": 14, "member_addresses": [5], "dimmable": True}
+        {
+            "room_id": "r1",
+            "name": "Kitchen",
+            "address": 14,
+            "member_addresses": [5],
+            "dimmable": True,
+            "dimmable_addresses": [5],
+        }
     ]
 
 
