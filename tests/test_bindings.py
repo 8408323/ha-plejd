@@ -620,7 +620,7 @@ async def test_press_toggle_calls_homeassistant_toggle(monkeypatch):
         {
             "id": "b1",
             "targets": {"entity_id": ["light.a"]},
-            "presses": [{"trigger": {"x": 1}, "action": {"type": "toggle"}}],
+            "presses": [{"trigger": {"platform": "device", "x": 1}, "action": {"type": "toggle"}}],
         },
     )
     await captured[0][1]()  # fire the press trigger
@@ -636,8 +636,8 @@ async def test_press_on_and_off_map_to_turn_on_off(monkeypatch):
             "id": "b1",
             "targets": {"area_id": ["kitchen"]},
             "presses": [
-                {"trigger": {"a": 1}, "action": {"type": "on"}},
-                {"trigger": {"b": 1}, "action": {"type": "off"}},
+                {"trigger": {"platform": "device", "a": 1}, "action": {"type": "on"}},
+                {"trigger": {"platform": "device", "b": 1}, "action": {"type": "off"}},
             ],
         },
     )
@@ -657,7 +657,9 @@ async def test_press_scene_activates_scene(monkeypatch):
         {
             "id": "b1",
             "targets": {},
-            "presses": [{"trigger": {"x": 1}, "action": {"type": "scene", "entity_id": "scene.kvall"}}],
+            "presses": [
+                {"trigger": {"platform": "device", "x": 1}, "action": {"type": "scene", "entity_id": "scene.kvall"}}
+            ],
         },
     )
     await captured[0][1]()
@@ -674,7 +676,7 @@ async def test_press_service_merges_target_and_data(monkeypatch):
             "targets": {"entity_id": ["light.a"]},
             "presses": [
                 {
-                    "trigger": {"x": 1},
+                    "trigger": {"platform": "device", "x": 1},
                     "action": {
                         "type": "service",
                         "domain": "light",
@@ -694,7 +696,11 @@ async def test_press_toggle_on_empty_target_is_noop(monkeypatch):
     _, captured = await _load_one(
         monkeypatch,
         hass,
-        {"id": "b1", "targets": {}, "presses": [{"trigger": {"x": 1}, "action": {"type": "toggle"}}]},
+        {
+            "id": "b1",
+            "targets": {},
+            "presses": [{"trigger": {"platform": "device", "x": 1}, "action": {"type": "toggle"}}],
+        },
     )
     await captured[0][1]()
     assert hass.services.calls == []  # nothing to toggle
@@ -708,7 +714,7 @@ async def test_press_action_noops_after_close(monkeypatch):
         {
             "id": "b1",
             "targets": {"entity_id": ["light.a"]},
-            "presses": [{"trigger": {"x": 1}, "action": {"type": "toggle"}}],
+            "presses": [{"trigger": {"platform": "device", "x": 1}, "action": {"type": "toggle"}}],
         },
     )
     pb.shutdown()
@@ -722,19 +728,23 @@ async def test_replace_rejects_malformed_presses(monkeypatch):
     await pb.async_load()
     bad = [
         {"presses": [{"action": {"type": "toggle"}}]},  # no trigger
-        {"presses": [{"trigger": {"x": 1}, "action": {"type": "bogus"}}]},  # unknown type
-        {"presses": [{"trigger": {"x": 1}, "action": {"type": "scene"}}]},  # scene w/o entity_id
-        {"presses": [{"trigger": {"x": 1}, "action": {"type": "service", "domain": "light"}}]},  # no service
+        {"presses": [{"trigger": {"platform": "device", "x": 1}, "action": {"type": "bogus"}}]},  # unknown type
+        {"presses": [{"trigger": {"platform": "device", "x": 1}, "action": {"type": "scene"}}]},  # scene w/o entity_id
+        {
+            "presses": [{"trigger": {"platform": "device", "x": 1}, "action": {"type": "service", "domain": "light"}}]
+        },  # no service
         {"presses": "not-a-list"},  # wrong type for presses
-        {"presses": [{"trigger": {"x": 1}, "action": "not-a-dict"}]},  # wrong type for action
+        {"presses": [{"trigger": {"platform": "device", "x": 1}, "action": "not-a-dict"}]},  # wrong type for action
         {"presses": ["not-a-dict"]},  # wrong type for a press entry
         {
-            "presses": [{"trigger": {"x": 1}, "action": {"type": "scene", "entity_id": ["scene.kvall"]}}]
+            "presses": [
+                {"trigger": {"platform": "device", "x": 1}, "action": {"type": "scene", "entity_id": ["scene.kvall"]}}
+            ]
         },  # entity_id must be a single string, not a list
         {
             "presses": [
                 {
-                    "trigger": {"x": 1},
+                    "trigger": {"platform": "device", "x": 1},
                     "action": {"type": "service", "domain": "light", "service": "turn_on", "data": ["bad"]},
                 }
             ]
@@ -742,29 +752,72 @@ async def test_replace_rejects_malformed_presses(monkeypatch):
         {"presses": [{"trigger": "bad", "action": {"type": "toggle"}}]},  # trigger must be a mapping
         {"presses": [{"trigger": ["bad"], "action": {"type": "toggle"}}]},  # or a list of mappings
         {
-            "presses": [{"trigger": {"x": 1}, "action": {"type": "scene", "entity_id": "light.kok"}}]
+            "presses": [
+                {"trigger": {"platform": "device", "x": 1}, "action": {"type": "scene", "entity_id": "light.kok"}}
+            ]
         },  # scene entity_id must target a scene.* entity
         {
-            "presses": [{"trigger": {"x": 1}, "action": {"type": "service", "domain": 1, "service": "turn_on"}}]
+            "presses": [
+                {
+                    "trigger": {"platform": "device", "x": 1},
+                    "action": {"type": "service", "domain": 1, "service": "turn_on"},
+                }
+            ]
         },  # service domain must be a string
         {
-            "presses": [{"trigger": {"x": 1}, "action": {"type": "service", "domain": "light", "service": 1}}]
+            "presses": [
+                {
+                    "trigger": {"platform": "device", "x": 1},
+                    "action": {"type": "service", "domain": "light", "service": 1},
+                }
+            ]
         },  # service name must be a string
         {"presses": [{"trigger": [{}], "action": {"type": "toggle"}}]},  # empty trigger inside a list
         {
-            "presses": [{"trigger": {"x": 1}, "action": {"type": "scene", "entity_id": "scene."}}]
+            "presses": [{"trigger": {"platform": "device", "x": 1}, "action": {"type": "scene", "entity_id": "scene."}}]
         },  # scene entity_id needs a non-empty object_id
         {
-            "presses": [{"trigger": {"x": 1}, "action": {"type": "scene", "entity_id": "scene.kvall bad"}}]
+            "presses": [
+                {"trigger": {"platform": "device", "x": 1}, "action": {"type": "scene", "entity_id": "scene.kvall bad"}}
+            ]
         },  # scene entity_id must be a valid slug
         {
             "presses": [
-                {"trigger": {"x": 1}, "action": {"type": "service", "domain": "light.turn_on", "service": "turn_on"}}
+                {
+                    "trigger": {"platform": "device", "x": 1},
+                    "action": {"type": "service", "domain": "light.turn_on", "service": "turn_on"},
+                }
             ]
         },  # service domain must be a valid slug, not a dotted entity id
         {
-            "presses": [{"trigger": {"x": 1}, "action": {"type": "service", "domain": "light", "service": "turn on"}}]
+            "presses": [
+                {
+                    "trigger": {"platform": "device", "x": 1},
+                    "action": {"type": "service", "domain": "light", "service": "turn on"},
+                }
+            ]
         },  # service name must be a valid slug, no spaces
+        {"presses": [{"trigger": {"x": 1}, "action": {"type": "toggle"}}]},  # trigger needs a platform key
+        {"presses": [{"trigger": {"platform": "", "x": 1}, "action": {"type": "toggle"}}]},  # platform can't be empty
+        {"presses": [{"trigger": {"platform": 1}, "action": {"type": "toggle"}}]},  # platform must be a string
+        {
+            "presses": [
+                {"trigger": {"platform": "device", "x": 1}, "action": {"type": "scene", "entity_id": "scene._bad"}}
+            ]
+        },  # scene entity_id can't start with an underscore
+        {
+            "presses": [
+                {"trigger": {"platform": "device", "x": 1}, "action": {"type": "scene", "entity_id": "scene.bad_"}}
+            ]
+        },  # scene entity_id can't end with an underscore
+        {
+            "presses": [
+                {
+                    "trigger": {"platform": "device", "x": 1},
+                    "action": {"type": "service", "domain": "bad__domain", "service": "turn_on"},
+                }
+            ]
+        },  # service domain can't have a double underscore
     ]
     for binding in bad:
         with pytest.raises(ValueError):

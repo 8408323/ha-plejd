@@ -71,11 +71,12 @@ def _is_stopless(binding: dict) -> bool:
 # on the binding's target — the general counterpart to the hold-to-dim up/down/stop triggers.
 PRESS_ACTIONS = ("toggle", "on", "off", "scene", "service")
 
-# HA domain/object_id slugs are lowercase alphanumeric + underscore (matches HA's own
-# entity-id/service-name convention); a stricter check here catches typos that would
-# otherwise only surface as a failed hass.services.async_call when the remote fires.
-_SLUG_RE = re.compile(r"^[a-z0-9_]+$")
-_SCENE_ENTITY_RE = re.compile(r"^scene\.[a-z0-9_]+$")
+# HA's actual slug convention: lowercase alphanumeric segments joined by single
+# underscores — no leading/trailing/double underscore (matches HA's own entity-id and
+# service-name validators). A stricter check here catches typos that would otherwise
+# only surface as a failed hass.services.async_call when the remote fires.
+_SLUG_RE = re.compile(r"^[a-z0-9]+(?:_[a-z0-9]+)*$")
+_SCENE_ENTITY_RE = re.compile(r"^scene\.[a-z0-9]+(?:_[a-z0-9]+)*$")
 
 
 def _validate_presses(binding: dict) -> None:
@@ -98,6 +99,11 @@ def _validate_presses(binding: dict) -> None:
         trigger_configs = trigger if isinstance(trigger, list) else [trigger]
         if not all(isinstance(t, dict) and t for t in trigger_configs):
             raise InvalidDimBinding("binding press trigger must be a non-empty mapping (or a list of them)")
+        if not all(isinstance(t.get("platform"), str) and t.get("platform") for t in trigger_configs):
+            # HA's trigger helper reads CONF_PLATFORM to dispatch to the right trigger
+            # integration; without it, async_initialize_triggers fails and _async_attach
+            # only logs and skips the binding — save-time is where this should be caught.
+            raise InvalidDimBinding("binding press trigger must include a platform")
         action = press.get("action")
         if action is not None and not isinstance(action, dict):
             raise InvalidDimBinding("press action must be a mapping")
