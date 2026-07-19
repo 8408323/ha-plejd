@@ -76,6 +76,7 @@ from .const import (
     PLEJD_SERVICE_UUID,
     RELAY_CONFIG_HARDWARE,
     RELAY_HARDWARE,
+    ROOM_DEVICE_ID_PREFIX,
     TIME_EVENT_REP_FOREVER,
     TIME_EVENT_RESULT_SCENE,
     TRANSPORT_AUTO,
@@ -157,6 +158,10 @@ class PlejdCoordinator:
         self.devices = [PlejdCloudDevice(**{"output_index": 0, **device}) for device in entry.data[CONF_DEVICES]]
         self.scenes = [PlejdCloudScene(**scene) for scene in entry.data.get(CONF_SCENES, [])]
         self.rooms = [PlejdCloudRoom(**room) for room in entry.data.get(CONF_ROOMS, [])]
+        # CONF_ROOMS is absent (not just empty) on entries added before room-groups existed;
+        # only those need a backfill fetch (see _async_poll_faults) - a site with genuinely
+        # no rooms stores an explicit [] and must not be re-fetched every poll interval.
+        self._rooms_from_legacy_entry = CONF_ROOMS not in entry.data
         self.inputs = [PlejdCloudInput(**i) for i in entry.data.get(CONF_INPUTS, [])]
         self.motion = [PlejdCloudMotion(**m) for m in entry.data.get(CONF_MOTION, [])]
         self._motion_addresses = {m.address for m in self.motion}
@@ -495,6 +500,8 @@ class PlejdCoordinator:
         name = device.name_by_user
         if plejd_id is None or not name:
             return
+        if plejd_id.startswith(ROOM_DEVICE_ID_PREFIX):
+            return  # a room pseudo-device has no Parse cloud object to rename
         try:
             await self.async_rename_device(plejd_id, name)
         except PlejdAuthError:
@@ -581,12 +588,18 @@ class PlejdCoordinator:
     async def _async_poll_faults(self, _now: object) -> None:
         # NotifyEvents belongs to the physical device, not any one output — poll the
         # device's own mesh address (may differ from an output's outputAddress).
-        if not self._device_addresses and self._email and self._password:
+        need_device_addresses = not self._device_addresses
+        need_rooms = self._rooms_from_legacy_entry
+        if (need_device_addresses or need_rooms) and self._email and self._password:
             try:
                 session = async_get_clientsession(self.hass)
                 token = await async_login(session, self._email, self._password)
                 site = await async_get_site(session, token, self.site_id)
-                self._device_addresses = dict(site.device_addresses)
+                if need_device_addresses:
+                    self._device_addresses = dict(site.device_addresses)
+                if need_rooms:
+                    self.rooms = site.rooms
+                    self._rooms_from_legacy_entry = False
             except Exception:  # noqa: BLE001 - fault polling is best-effort; retry next interval
                 _LOGGER.debug("Plejd fault poll: could not resolve device addresses", exc_info=True)
         for address in set(self._device_addresses.values()):

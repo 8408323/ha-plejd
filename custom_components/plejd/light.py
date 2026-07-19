@@ -13,7 +13,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .cloud import PlejdCloudDevice, PlejdCloudRoom
-from .const import CATEGORY_LIGHT, DOMAIN
+from .const import CATEGORY_LIGHT, DOMAIN, ROOM_DEVICE_ID_PREFIX
 from .coordinator import PlejdCoordinator
 
 SERVICE_START_DIM = "start_dim"
@@ -118,9 +118,9 @@ class PlejdRoomLight(LightEntity):
     def __init__(self, coordinator: PlejdCoordinator, room: PlejdCloudRoom) -> None:
         self._coordinator = coordinator
         self._room = room
-        self._attr_unique_id = f"room_{room.room_id}"
+        self._attr_unique_id = f"{ROOM_DEVICE_ID_PREFIX}{room.room_id}"
         self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, f"room_{room.room_id}")},
+            identifiers={(DOMAIN, f"{ROOM_DEVICE_ID_PREFIX}{room.room_id}")},
             name=room.name,
             manufacturer="Plejd",
             model="Room",
@@ -162,8 +162,15 @@ class PlejdRoomLight(LightEntity):
         if level is None:
             # An on/off-only room has no meaningful "restore level" (HA never sends
             # brightness for ColorMode.ONOFF anyway) -> always command full, like PlejdLight.
-            # A restored level of 0 is likewise treated as unknown (see PlejdLight).
-            current = self._restore_level() if self._room.dimmable else None
+            # A partially-lit room must keep its visible brightness (only the all-off restore
+            # average is appropriate when nothing is on yet) - otherwise turning "the room" on
+            # while it's already partially lit would re-brighten/dim the already-lit members
+            # to a blended level nobody asked for (the dim-ramp path already avoids this).
+            # A restored/visible level of 0 is likewise treated as unknown (see PlejdLight).
+            if self._room.dimmable:
+                current = self.brightness if self.is_on else self._restore_level()
+            else:
+                current = None
             level = current if current else 255
         await self._coordinator.async_set_group_output(self._room.address, True, level, self._room.member_addresses)
 

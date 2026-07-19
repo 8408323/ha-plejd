@@ -9,6 +9,12 @@ from __future__ import annotations
 
 DOMAIN = "plejd"
 
+# Prefix for a room's pseudo-device identifier/unique_id (PlejdRoomLight). Rooms live in the
+# same (DOMAIN, id) identifier namespace as real Plejd devices but have no Parse cloud object
+# of their own — anything that mirrors HA device state back to the Plejd cloud by device_id
+# must recognize and skip this prefix.
+ROOM_DEVICE_ID_PREFIX = "room_"
+
 # BLE address of the mesh device discovered during the config flow.
 CONF_DISCOVERED_ADDRESS = "discovered_address"
 

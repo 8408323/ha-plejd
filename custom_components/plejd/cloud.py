@@ -521,6 +521,11 @@ def parse_site(site: dict) -> PlejdCloudSite:
     category_by_address = {d.address: d.category for d in devices if d.address is not None}
     dimmable_by_address = {d.address: d.dimmable for d in devices if d.address is not None}
     members_by_group: dict[int, list[int]] = {}
+    # Group addresses with at least one non-light member: a group command (0x0098) is
+    # unconditional and would also toggle/dim a cover, switch, etc. sharing the address,
+    # so a room with any non-light member is excluded from the aggregate light entity
+    # entirely rather than risk commanding an output it isn't meant to control.
+    non_light_groups: set[int] = set()
     for device_id, out_map in output_groups.items():
         if not isinstance(out_map, dict):
             continue  # untrusted cloud data: skip a malformed per-device group-membership map
@@ -536,20 +541,26 @@ def parse_site(site: dict) -> PlejdCloudSite:
                 addr = int(out_addr)
             except (TypeError, ValueError):
                 continue
-            if category_by_address.get(addr) != CATEGORY_LIGHT:
-                continue  # only light outputs join a room's aggregate light entity
+            is_light = category_by_address.get(addr) == CATEGORY_LIGHT
             for group in groups if isinstance(groups, list) else []:
                 try:
                     group_addr = int(group)
                 except (TypeError, ValueError):
                     continue
-                members_by_group.setdefault(group_addr, []).append(addr)
+                if is_light:
+                    members_by_group.setdefault(group_addr, []).append(addr)
+                else:
+                    non_light_groups.add(group_addr)
     rooms: list[PlejdCloudRoom] = []
     for room_id, addr in room_address.items():
         try:
             group_addr = int(addr)
         except (TypeError, ValueError):
             continue
+        if not 1 <= group_addr <= 255:
+            continue  # mesh addresses are single-byte (encode_command masks with & 0xFF); 0 is broadcast-like
+        if group_addr in non_light_groups:
+            continue  # a group command would also hit a non-light member sharing this address
         members = sorted(set(members_by_group.get(group_addr, [])))
         if not members:
             continue  # a room with no controllable outputs isn't worth a group entity

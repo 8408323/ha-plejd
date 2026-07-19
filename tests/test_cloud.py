@@ -578,19 +578,41 @@ def test_parse_site_parses_rooms_with_group_addresses():
         ],
         # r2 is absent from rooms[] -> name falls back to "Room"; r4's address is non-int -> skipped
         "roomAddress": {"r1": 14, "r2": 16, "r3": 99, "r4": "bad"},
-        # d1 (a LIGHT) belongs to both groups; d2 (a RELAY) and d3 (a COVERABLE) are listed too
-        # but must not join a room's aggregate light entity - only light outputs count.
-        # d3.0 also has no entry in outputAddress -> that membership is skipped regardless.
-        "outputGroups": {"d1": {"0": [14, 16]}, "d2": {"0": [14], "1": [16]}, "d3": {"0": [14]}},
+        # d1 (a LIGHT) belongs to both groups; both groups have only light members.
+        "outputGroups": {"d1": {"0": [14, 16]}},
     }
     rooms = parse_site(site).rooms
     by_addr = {r.address: r for r in rooms}
     assert set(by_addr) == {14, 16}  # r3 (no members) and r4 (bad address) are dropped
     assert by_addr[14].name == "Kitchen"
-    assert by_addr[14].member_addresses == [11]  # only d1.out0 (a light); d2/d3 are non-light
+    assert by_addr[14].member_addresses == [11]
     assert by_addr[14].dimmable is True
     assert by_addr[16].name == "Room"  # fallback when the room has no title entry
     assert by_addr[16].member_addresses == [11]  # d1.out0 also belongs to group 16
+
+
+def test_parse_site_excludes_room_with_non_light_member():
+    site = {
+        **_SITE,
+        "roomAddress": {"r1": 14},
+        # d1 (a LIGHT) and d2 (a RELAY) both belong to group 14 - a 0x0098 group command
+        # would also toggle the relay, so the whole room is excluded rather than silently
+        # dropping the non-light member from an otherwise-created room.
+        "outputGroups": {"d1": {"0": [14]}, "d2": {"0": [14]}},
+    }
+    assert parse_site(site).rooms == []
+
+
+def test_parse_site_rejects_out_of_range_group_address():
+    site = {
+        **_SITE,
+        # mesh addresses are single-byte (encode_command masks with & 0xFF); 0, negative,
+        # and >255 group addresses must not silently wrap onto a real device's address.
+        "roomAddress": {"r1": 0, "r2": -1, "r3": 256, "r4": 14},
+        "outputGroups": {"d1": {"0": [0, -1, 256, 14]}},
+    }
+    rooms = parse_site(site).rooms
+    assert [r.room_id for r in rooms] == ["r4"]
 
 
 def test_parse_site_skips_malformed_output_group_entries():

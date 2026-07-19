@@ -17,6 +17,7 @@ from plejd.const import (
     CONF_GATEWAYS,
     CONF_INSTALLATION_ID,
     CONF_RESOURCE_SET_ID,
+    CONF_ROOMS,
     CONF_SITE_ID,
     CONF_TRANSPORT,
     PLEJD_CHAR_DATA_UUID,
@@ -1576,6 +1577,20 @@ async def test_registry_update_ignores_missing_device_and_non_plejd(monkeypatch)
     )
 
 
+async def test_registry_update_ignores_room_pseudo_device(monkeypatch):
+    from plejd.const import DOMAIN, ROOM_DEVICE_ID_PREFIX
+
+    hass = _hass()
+    c = PlejdCoordinator(hass, _cloud_entry())
+    hass.device_registry = _FakeRegistry(_FakeDevice({(DOMAIN, f"{ROOM_DEVICE_ID_PREFIX}r1")}, "New Name"))
+
+    async def _fail(*a):
+        raise AssertionError("a room pseudo-device has no Parse cloud object to rename")
+
+    monkeypatch.setattr(c, "async_rename_device", _fail)
+    await c.async_handle_device_registry_update(_reg_event(changes={"name_by_user": "New Name"}))
+
+
 async def test_registry_update_swallows_rename_errors(monkeypatch):
     from plejd.const import DOMAIN
 
@@ -1690,7 +1705,7 @@ def test_device_address_for_resolves_cached_physical_addresses():
 async def test_poll_faults_resolves_addresses_from_cloud_when_not_cached(monkeypatch):
     """Entries added before CONF_DEVICE_ADDRESSES existed resolve it via one cloud fetch."""
     c = PlejdCoordinator(_hass(), _cloud_entry())  # has credentials, no cached device_addresses
-    site = types.SimpleNamespace(device_addresses={"d1": 5, "w1": 33})
+    site = types.SimpleNamespace(device_addresses={"d1": 5, "w1": 33}, rooms=[])
 
     async def _login(*a):
         return "tok"
@@ -1713,6 +1728,52 @@ async def test_poll_faults_resolves_addresses_from_cloud_when_not_cached(monkeyp
 
     await c._async_poll_faults(None)
     assert sorted(attempted) == [5, 5, 33, 33]  # polled again, but from the cache
+
+
+async def test_poll_faults_resolves_rooms_from_cloud_when_entry_predates_room_groups(monkeypatch):
+    """Entries added before CONF_ROOMS existed (missing key, not an empty list) backfill it via a cloud fetch."""
+    from plejd.cloud import PlejdCloudRoom
+
+    c = PlejdCoordinator(_hass(), _cloud_entry())  # has credentials, CONF_ROOMS absent from entry.data
+    assert c.rooms == [] and c._rooms_from_legacy_entry is True
+    room = PlejdCloudRoom(
+        room_id="r1", name="Kök", address=14, member_addresses=[11], dimmable=True, dimmable_addresses=[11]
+    )
+    site = types.SimpleNamespace(device_addresses={"d1": 1}, rooms=[room])
+    fetches = []
+
+    async def _login(*a):
+        return "tok"
+
+    async def _get_site(*a):
+        fetches.append(1)
+        return site
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _login)
+    monkeypatch.setattr(coordinator_mod, "async_get_site", _get_site)
+    monkeypatch.setattr(c, "_write_vector", lambda vector: asyncio.sleep(0))
+
+    await c._async_poll_faults(None)
+    assert c.rooms == [room]
+    assert c._rooms_from_legacy_entry is False
+
+    await c._async_poll_faults(None)
+    assert fetches == [1]  # cached — no repeat fetch once rooms are resolved
+
+
+async def test_poll_faults_does_not_refetch_for_a_genuinely_room_less_site(monkeypatch):
+    """CONF_ROOMS present but empty (a real site with no rooms) must not trigger a fetch every poll."""
+    entry = _cloud_entry()
+    entry.data[CONF_ROOMS] = []
+    c = PlejdCoordinator(_hass(), entry)
+    assert c._rooms_from_legacy_entry is False
+
+    async def _fail(*a):
+        raise AssertionError("must not fetch the cloud site for an already-resolved empty room list")
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _fail)
+    monkeypatch.setattr(c, "_write_vector", lambda vector: asyncio.sleep(0))
+    await c._async_poll_faults(None)
 
 
 async def test_poll_faults_swallows_cloud_fetch_failure(monkeypatch):

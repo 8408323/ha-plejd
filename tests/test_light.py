@@ -240,6 +240,18 @@ async def test_room_turn_on_without_brightness_restores_or_full():
     assert coord.commands == [(14, True, 150)]
 
 
+async def test_room_turn_on_without_brightness_partially_lit_keeps_visible_brightness():
+    # Only member 5 is on (level 200); member 6 is off but remembers a stale low level
+    # (50). Turning "on" a partially-lit room must preserve the visible brightness (200),
+    # not blend in the off member's remembered level the way the all-off restore does.
+    coord = _Coordinator(
+        [], states={5: OutputState(output=0, on=True, level=200), 6: OutputState(output=0, on=False, level=50)}
+    )
+    light = PlejdRoomLight(coord, _room(members=(5, 6)))
+    await light.async_turn_on()
+    assert coord.commands == [(14, True, 200)]
+
+
 async def test_room_turn_on_without_brightness_restores_average_of_off_members():
     coord = _Coordinator(
         [], states={5: OutputState(output=0, on=False, level=100), 6: OutputState(output=0, on=False, level=200)}
