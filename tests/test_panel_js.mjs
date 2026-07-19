@@ -182,6 +182,117 @@ test("_updateLights renders the current Plejd lights list", () => {
   assert.doesNotMatch(lights.innerHTML, /Other vendor/);
 });
 
+// ── scenes ───────────────────────────────────────────────────────────────────
+
+test("_updateScenes renders the site's Plejd scenes with an Activate button each", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const scenes = { innerHTML: "", querySelectorAll: () => [] };
+
+  panel.querySelector = (selector) => (selector === "#plejd-scenes" ? scenes : null);
+  panel._hass = {
+    states: {
+      "scene.movie_night": {
+        entity_id: "scene.movie_night",
+        state: "scening",
+        attributes: { friendly_name: "Movie Night" },
+      },
+      "scene.good_morning": {
+        entity_id: "scene.good_morning",
+        state: "scening",
+        attributes: { friendly_name: "Good Morning" },
+      },
+      "scene.other_vendor": {
+        entity_id: "scene.other_vendor",
+        state: "scening",
+        attributes: { friendly_name: "Other vendor scene" },
+      },
+    },
+    entities: {
+      "scene.movie_night": { platform: "plejd" },
+      "scene.good_morning": { platform: "plejd" },
+      "scene.other_vendor": { platform: "other" },
+    },
+  };
+
+  panel._updateScenes();
+
+  assert.match(scenes.innerHTML, />2<\/span>/);
+  assert.match(scenes.innerHTML, /Good Morning/);
+  assert.match(scenes.innerHTML, /Movie Night/);
+  assert.doesNotMatch(scenes.innerHTML, /Other vendor scene/);
+  assert.match(scenes.innerHTML, /data-activate-scene="scene\.good_morning"/);
+  assert.match(scenes.innerHTML, />Activate</);
+});
+
+test("_updateScenes renders an empty state for a site with no Plejd scenes", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const scenes = { innerHTML: "", querySelectorAll: () => [] };
+
+  panel.querySelector = (selector) => (selector === "#plejd-scenes" ? scenes : null);
+  panel._hass = { states: {}, entities: {} };
+
+  panel._updateScenes();
+
+  assert.match(scenes.innerHTML, />0<\/span>/);
+  assert.match(scenes.innerHTML, /No Plejd scenes found\./);
+  assert.doesNotMatch(scenes.innerHTML, /data-activate-scene/);
+});
+
+test("clicking Activate on a scene row calls scene.turn_on with that scene's entity_id", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const listeners = {};
+  const activateBtn = {
+    getAttribute: () => "scene.movie_night",
+    addEventListener: (ev, fn) => {
+      listeners[ev] = fn;
+    },
+  };
+  const scenes = { innerHTML: "", querySelectorAll: () => [activateBtn] };
+
+  panel.querySelector = (selector) => (selector === "#plejd-scenes" ? scenes : null);
+  panel._hass = {
+    states: {
+      "scene.movie_night": {
+        entity_id: "scene.movie_night",
+        state: "scening",
+        attributes: { friendly_name: "Movie Night" },
+      },
+    },
+    entities: { "scene.movie_night": { platform: "plejd" } },
+  };
+  let called;
+  panel._callService = (domain, service, data) => {
+    called = { domain, service, data };
+    return Promise.resolve();
+  };
+
+  panel._updateScenes();
+  const activated = listeners.click();
+
+  return activated.then(() => {
+    assert.deepEqual(plain(called), {
+      domain: "scene",
+      service: "turn_on",
+      data: { entity_id: "scene.movie_night" },
+    });
+  });
+});
+
+test("a failed scene activation surfaces an error without throwing", async () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._hass = { states: {}, entities: {} };
+  panel._updateScenes = () => {};
+  panel._callService = () => Promise.reject(new Error("service unavailable"));
+
+  await panel._activateScene("scene.movie_night");
+
+  assert.match(panel._scenesError, /service unavailable/);
+});
+
 test("deleting a binding preserves an in-progress add form", async () => {
   const PanelClass = loadPanelClass();
   const panel = new PanelClass();

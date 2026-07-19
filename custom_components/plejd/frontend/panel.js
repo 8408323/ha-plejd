@@ -1,7 +1,8 @@
 // Plejd dashboard — a custom Home Assistant sidebar panel (not a Lovelace view).
 // Home Assistant sets `hass`, `narrow`, `route`, and `panel` properties on this element.
-// It lists the site's Plejd lights and hosts the remote → light dim-binding editor:
-// map a dimmer remote's hold/release device triggers to smooth dimming of a light or area.
+// It lists the site's Plejd lights and scenes, and hosts the remote → light dim-binding
+// editor: map a dimmer remote's hold/release device triggers to smooth dimming of a
+// light or area.
 
 const CARD = `
   background: var(--card-background-color, #fff);
@@ -58,6 +59,7 @@ class PlejdPanel extends HTMLElement {
     this._error = "";
     this._notice = "";
     this._busy = false;
+    this._scenesError = "";
     this._lightsFrame = null;
     const useAnimationFrame = Boolean(
       globalThis.requestAnimationFrame && globalThis.cancelAnimationFrame,
@@ -105,6 +107,10 @@ class PlejdPanel extends HTMLElement {
 
   async _callWS(message) {
     return this._hass.callWS(message);
+  }
+
+  async _callService(domain, service, data) {
+    return this._hass.callService(domain, service, data);
   }
 
   async _loadBindings() {
@@ -252,6 +258,36 @@ class PlejdPanel extends HTMLElement {
       .sort((a, b) => a.name.localeCompare(b.name));
   }
 
+  // This site's own Plejd scenes for the Scenes list, filtered the same way _lights()
+  // restricts to Plejd lights — unlike _scenes() above, which lists every HA scene for
+  // the press-action picker (a binding can activate any scene, not just a Plejd one).
+  _plejdScenes() {
+    const hass = this._hass;
+    if (!hass) return [];
+    return Object.values(hass.states)
+      .filter(
+        (s) =>
+          s.entity_id.startsWith("scene.") &&
+          (hass.entities?.[s.entity_id]?.platform === "plejd" ||
+            s.attributes.attribution === "Plejd"),
+      )
+      .sort((a, b) =>
+        (a.attributes.friendly_name || a.entity_id).localeCompare(
+          b.attributes.friendly_name || b.entity_id,
+        ),
+      );
+  }
+
+  async _activateScene(entityId) {
+    this._scenesError = "";
+    try {
+      await this._callService("scene", "turn_on", { entity_id: entityId });
+    } catch (err) {
+      this._scenesError = `Could not activate scene: ${err.message || err}`;
+    }
+    this._updateScenes();
+  }
+
   _entityName(entityId) {
     return this._hass.states[entityId]?.attributes.friendly_name || entityId;
   }
@@ -293,8 +329,10 @@ class PlejdPanel extends HTMLElement {
       <div style="padding:16px 16px 48px;max-width:760px;margin:0 auto;color:var(--primary-text-color,#212121);font-family:var(--paper-font-body1_-_font-family,Roboto,sans-serif)">
         <h1 style="font-weight:400;margin:8px 4px 20px">Plejd</h1>
         <div id="plejd-lights" style="${CARD}"></div>
+        <div id="plejd-scenes" style="${CARD};margin-top:16px"></div>
         <div id="plejd-bindings" style="${CARD};margin-top:16px"></div>
       </div>`;
+    this._updateScenes();
     this._renderEditor();
   }
 
@@ -331,6 +369,35 @@ class PlejdPanel extends HTMLElement {
         <span style="color:var(--secondary-text-color,#727272);font-size:.9rem">${lights.length}</span>
       </div>
       ${rows || '<p style="color:var(--secondary-text-color,#727272)">No Plejd lights found.</p>'}`;
+  }
+
+  _updateScenes() {
+    const el = this.querySelector("#plejd-scenes");
+    if (!el) return;
+    const scenes = this._plejdScenes();
+    const rows = scenes
+      .map((s) => {
+        const name = s.attributes.friendly_name || s.entity_id;
+        return `
+          <div style="display:flex;align-items:center;gap:12px;padding:10px 4px;border-bottom:1px solid var(--divider-color,#e0e0e0)">
+            <span style="flex:1">${esc(name)}</span>
+            <button data-activate-scene="${esc(s.entity_id)}" style="${BTN}">Activate</button>
+          </div>`;
+      })
+      .join("");
+    const error = this._scenesError
+      ? `<p style="color:var(--error-color,#db4437);margin:8px 0 0">${esc(this._scenesError)}</p>`
+      : "";
+    el.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px">
+        <h2 style="font-weight:500;font-size:1.05rem;margin:0">Scenes</h2>
+        <span style="color:var(--secondary-text-color,#727272);font-size:.9rem">${scenes.length}</span>
+      </div>
+      ${rows || '<p style="color:var(--secondary-text-color,#727272)">No Plejd scenes found.</p>'}
+      ${error}`;
+    el.querySelectorAll("[data-activate-scene]").forEach((btn) =>
+      btn.addEventListener("click", () => this._activateScene(btn.getAttribute("data-activate-scene"))),
+    );
   }
 
   _triggerOptions(deviceId, selected) {
