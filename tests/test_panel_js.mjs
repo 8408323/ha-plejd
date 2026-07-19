@@ -866,7 +866,7 @@ test("_onSave saves a service press action that supplies its own target in its d
   assert.equal(savedBindings[0].targets, undefined);
 });
 
-test("_onSave still requires a target for a service press action with no target in its data", () => {
+test("_onSave saves a service press action with no target and no self-targeting data (e.g. a targetless service)", () => {
   const PanelClass = loadPanelClass();
   const panel = new PanelClass();
   panel._bindings = [];
@@ -876,36 +876,36 @@ test("_onSave still requires a target for a service press action with no target 
       trigger: "",
       type: "service",
       entity_id: "",
-      domain: "light",
-      service: "turn_on",
-      data: '{"brightness_pct": 50}',
+      domain: "persistent_notification",
+      service: "create",
+      data: '{"message": "hi"}',
     },
   ];
-  panel._renderEditor = () => {};
-  let saveCalled = false;
-  panel._save = () => {
-    saveCalled = true;
+  let savedBindings;
+  panel._save = (bindings) => {
+    savedBindings = bindings;
     return Promise.resolve();
   };
 
   const values = {
-    "#f-target": "",
+    "#f-target": "", // no light/room picked — persistent_notification.create takes no target
     "#f-device": "dev1",
     "#f-up": "",
     "#f-down": "",
     "#f-stop": "",
     "#f-press-trigger-0": "0",
     "#f-press-type-0": "service",
-    "#f-press-domain-0": "light",
-    "#f-press-service-0": "turn_on",
-    "#f-press-data-0": '{"brightness_pct": 50}',
+    "#f-press-domain-0": "persistent_notification",
+    "#f-press-service-0": "create",
+    "#f-press-data-0": '{"message": "hi"}',
   };
   const el = { querySelector: (sel) => (sel in values ? { value: values[sel] } : null) };
 
   panel._onSave(el);
 
-  assert.equal(saveCalled, false);
-  assert.match(panel._error, /Pick a light or room/);
+  assert.equal(panel._error, "");
+  assert.equal(savedBindings.length, 1);
+  assert.equal(savedBindings[0].targets, undefined);
 });
 
 test("_onSave fails when neither a dim trigger nor any press action is configured", () => {

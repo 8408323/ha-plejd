@@ -692,18 +692,13 @@ class PlejdPanel extends HTMLElement {
     }
 
     // A target (light/room) only matters to the actions that actually need it: dim
-    // up/down and toggle/on/off always do; scene never does (bindings.py calls
-    // scene.turn_on with just the scene's own entity_id); a service action doesn't
-    // either if its JSON data already supplies its own entity/device/area (bindings.py
-    // calls the service with {**target, **data}, and explicit data wins).
-    const pressNeedsTarget = (press) => {
-      if (press.action.type === "scene") return false;
-      if (press.action.type === "service") {
-        const data = press.action.data || {};
-        return !(data.entity_id || data.device_id || data.area_id);
-      }
-      return true;
-    };
+    // up/down and toggle/on/off no-op without one (bindings.py's toggle/on/off path
+    // and DimRamp both bail out on an empty target). Scene and service never require
+    // one — scene.turn_on only uses the scene's own entity_id, and a service call
+    // merges {**target, **data} with an empty target fine. Some services take no
+    // target at all (persistent_notification.create, homeassistant.restart, ...); the
+    // client can't know which, so it's on the user to supply what their service needs.
+    const pressNeedsTarget = (press) => !["scene", "service"].includes(press.action.type);
     const needsTarget = Boolean(up || down) || presses.some(pressNeedsTarget);
     const targets = this._targetFromForm();
     if (needsTarget && !targets) return this._fail("Pick a light or room.");
