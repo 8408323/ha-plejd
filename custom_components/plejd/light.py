@@ -156,12 +156,14 @@ class PlejdRoomLight(LightEntity):
     async def async_turn_on(self, **kwargs: Any) -> None:
         level = kwargs.get(ATTR_BRIGHTNESS)
         if level is None:
-            current = self._restore_level()
+            # An on/off-only room has no meaningful "restore level" (HA never sends
+            # brightness for ColorMode.ONOFF anyway) -> always command full, like PlejdLight.
+            current = self._restore_level() if self._room.dimmable else None
             level = current if current is not None else 255
-        await self._coordinator.async_set_output(self._room.address, True, level)
+        await self._coordinator.async_set_group_output(self._room.address, True, level, self._room.member_addresses)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
-        await self._coordinator.async_set_output(self._room.address, False, 0)
+        await self._coordinator.async_set_group_output(self._room.address, False, 0, self._room.member_addresses)
 
     async def async_start_dim(self, direction: str) -> None:
         """Start a smooth hold-to-dim ramp across the room's group address (entity service)."""

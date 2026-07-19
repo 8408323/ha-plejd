@@ -609,6 +609,19 @@ def test_parse_site_skips_malformed_output_group_entries():
     assert rooms[0].member_addresses == [11]  # only d1.out0 survives
 
 
+def test_parse_site_skips_non_list_output_group_value():
+    site = {
+        **_SITE,
+        "roomAddress": {"r1": 14},
+        # d1's own group membership is a scalar, not a list of group addresses -> must be
+        # skipped instead of raising (an int isn't iterable; a dict would silently iterate
+        # its keys instead of the intended group addresses).
+        "outputGroups": {"d1": {"0": 14}},
+    }
+    rooms = parse_site(site).rooms
+    assert rooms == []  # the malformed membership yields no members -> room dropped
+
+
 def test_parse_site_room_not_dimmable_when_no_member_is_dimmable():
     site = {
         **_SITE,

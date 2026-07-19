@@ -523,7 +523,7 @@ def parse_site(site: dict) -> PlejdCloudSite:
                 continue
             if category_by_address.get(addr) != CATEGORY_LIGHT:
                 continue  # only light outputs join a room's aggregate light entity
-            for group in groups or []:
+            for group in groups if isinstance(groups, list) else []:
                 try:
                     group_addr = int(group)
                 except (TypeError, ValueError):

@@ -44,6 +44,7 @@ class _Coordinator:
         self._states = states or {}  # address -> OutputState, for room aggregation
         self.rooms = rooms or []
         self.commands = []
+        self.group_calls = []  # (address, on, level, member_addresses) via async_set_group_output
         self.listeners = []
         self.available = True
         self.dim_ramp = _SpyRamp()
@@ -59,6 +60,10 @@ class _Coordinator:
 
     async def async_set_output(self, address, on, level):
         self.commands.append((address, on, level))
+
+    async def async_set_group_output(self, address, on, level, member_addresses):
+        self.commands.append((address, on, level))
+        self.group_calls.append((address, on, level, list(member_addresses)))
 
 
 async def test_setup_entry_creates_lights_only_for_light_devices():
@@ -247,6 +252,32 @@ async def test_room_turn_off_sends_group_off():
     light = PlejdRoomLight(coord, _room(address=16))
     await light.async_turn_off()
     assert coord.commands == [(16, False, 0)]
+
+
+async def test_room_turn_on_without_brightness_defaults_full_when_not_dimmable():
+    # An on/off-only room never gets a brightness kwarg from HA (ColorMode.ONOFF), and
+    # must not "restore" a possibly-zero known level either -> always command full, like
+    # PlejdLight does for a non-dimmable device.
+    coord = _Coordinator(
+        [], states={5: OutputState(output=0, on=False, level=0), 6: OutputState(output=0, on=False, level=0)}
+    )
+    light = PlejdRoomLight(coord, _room(members=(5, 6), dimmable=False))
+    await light.async_turn_on()
+    assert coord.commands == [(14, True, 255)]
+
+
+async def test_room_turn_on_forwards_member_addresses_for_optimistic_update():
+    coord = _Coordinator([], rooms=[_room()])
+    light = PlejdRoomLight(coord, _room(address=14, members=(5, 6)))
+    await light.async_turn_on(**{ATTR_BRIGHTNESS: 120})
+    assert coord.group_calls == [(14, True, 120, [5, 6])]
+
+
+async def test_room_turn_off_forwards_member_addresses_for_optimistic_update():
+    coord = _Coordinator([], rooms=[_room()])
+    light = PlejdRoomLight(coord, _room(address=16, members=(7, 8)))
+    await light.async_turn_off()
+    assert coord.group_calls == [(16, False, 0, [7, 8])]
 
 
 def test_room_is_on_true_if_any_member_on():

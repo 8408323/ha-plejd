@@ -172,6 +172,28 @@ async def test_set_output_without_connection_raises():
         await c.async_set_output(5, True, 1)
 
 
+async def test_set_group_output_writes_group_command_and_reflects_member_state(monkeypatch):
+    from plejd.protocol import decode_command
+
+    client = _FakeClient()
+    _patch_connect(monkeypatch, client)
+    ble = types.SimpleNamespace(address="01:02:03:04:05:a0")
+    hass = _hass([_info("01:02:03:04:05:a0")], {"01:02:03:04:05:a0": ble})
+    c = PlejdCoordinator(hass, _entry(discovered=None))
+    await c.async_start()
+    seen = []
+    c.async_add_listener(lambda: seen.append(1))
+    await c.async_set_group_output(14, True, 120, [5, 6])
+    # the single command was written to the room's group address...
+    cmd = decode_command(c._connection.mesh.decrypt(client.writes[-1][1]))
+    assert cmd.address == 14
+    # ...and each member's own state is reflected immediately, without waiting on its
+    # own notification (a group command's echo is keyed by the group address, not them)
+    assert c.state_for(5).on is True and c.state_for(5).level == 120
+    assert c.state_for(6).on is True and c.state_for(6).level == 120
+    assert seen == [1]  # listeners notified of the optimistic update
+
+
 async def test_execute_scene_broadcasts(monkeypatch):
     client = _FakeClient()
     _patch_connect(monkeypatch, client)
@@ -478,6 +500,9 @@ class _FakeGateway:
     def state_for(self, address):
         return self.state.get(address)
 
+    def set_state(self, address, state):
+        self.state[address] = state
+
     async def disconnect(self):
         self.disconnected = True
         self.connected = False
@@ -514,6 +539,20 @@ async def test_gateway_is_preferred_and_routes_commands(monkeypatch):
     assert c.state_for(11).level == 80
     await c.async_set_output(11, True, 80)
     assert c._gateway.writes[-1] == set_group_state_and_level(11, True, 80)
+
+
+async def test_gateway_set_group_output_reflects_member_state(monkeypatch):
+    from plejd.protocol import set_group_state_and_level
+
+    monkeypatch.setattr(coordinator_mod, "PlejdGatewayConnection", _FakeGateway)
+    hass = _hass()
+    hass.session = object()
+    c = PlejdCoordinator(hass, _gateway_entry())
+    await c.async_start()
+    await c.async_set_group_output(14, True, 90, [5, 6])
+    assert c._gateway.writes[-1] == set_group_state_and_level(14, True, 90)
+    assert c.state_for(5).on is True and c.state_for(5).level == 90
+    assert c.state_for(6).on is True and c.state_for(6).level == 90
 
 
 async def test_gateway_connect_starts_fault_polling(monkeypatch):

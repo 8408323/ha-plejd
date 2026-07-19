@@ -731,6 +731,25 @@ class PlejdCoordinator:
         """
         await self._write_vector(protocol.set_group_state_and_level(address, on, level))
 
+    async def async_set_group_output(self, address: int, on: bool, level: int, member_addresses: list[int]) -> None:
+        """Send a group command (a Plejd room), then reflect it in each member's own state.
+
+        A group command's own ack/echo is keyed by the group address, not by any
+        member's address, so member outputs would otherwise show stale state until
+        each one separately reports its own change over the mesh/gateway.
+        """
+        await self.async_set_output(address, on, level)
+        state = OutputState(output=0, on=on, level=level)
+        for member in member_addresses:
+            self._record_output_state(member, state)
+        self._notify_outputs()
+
+    def _record_output_state(self, address: int, state: OutputState) -> None:
+        if self._active == "gateway" and self._gateway is not None:
+            self._gateway.set_state(address, state)
+        elif self._connection.mesh is not None:
+            self._connection.mesh.set_state(address, state)
+
     async def async_set_output_min_level(self, address: int, output: int, fraction: float) -> None:
         """Set an output's minimum dim level (0-1 fraction)."""
         await self._write_vector(protocol.set_output_min_level(address, output, fraction))
