@@ -278,27 +278,30 @@ async def test_start_drops_a_malformed_persisted_deadline_without_leaking_the_ti
     assert manager.is_running is True  # the timer is still correctly owned, not leaked
 
 
-async def test_stop_clears_stale_store_data_when_it_wins_a_race_with_a_slow_start():
-    # A stop landing while async_start() is still awaiting its own load sees an empty
-    # in-memory _on_until (nothing to turn off) — but any stale deadlines already
-    # persisted from a previous run must still be cleared, not left to be wrongly
-    # resurrected on the next start.
+async def test_start_recovers_from_a_load_that_raises():
     hass = _hass()
-    hass.data[("store", STORE_KEY)] = {"light.stale": _local(19, 0).isoformat()}
     manager = PlejdHolidayMode(hass, _entry())
-    real_load = manager._store.async_load
 
-    async def _load_then_stop():
-        result = await real_load()
-        await manager.async_stop()  # wins the race: stops first, while this load is still in flight
-        return result
+    async def _boom():
+        raise OSError("disk full")
 
-    manager._store.async_load = _load_then_stop
+    manager._store.async_load = _boom
 
-    await manager.async_start()
+    await manager.async_start()  # must not raise, and must not abandon the timer it just registered
 
-    assert hass.data[("store", STORE_KEY)] == {}
     assert manager._on_until == {}
+    assert manager.is_running is True
+
+
+async def test_start_recovers_from_a_non_dict_payload():
+    hass = _hass()
+    hass.data[("store", STORE_KEY)] = ["not", "a", "dict"]
+    manager = PlejdHolidayMode(hass, _entry())
+
+    await manager.async_start()  # must not raise
+
+    assert manager._on_until == {}
+    assert manager.is_running is True
 
 
 # ── _async_tick: active-window gating ─────────────────────────────────────────
@@ -519,34 +522,6 @@ async def test_stop_gives_up_after_exhausting_retries_but_keeps_tracking():
 # ── race conditions: stop-while-in-flight, overlapping starts ──────────────────
 
 
-async def test_turn_on_is_undone_if_stopped_while_the_call_was_in_flight():
-    # If async_stop() finishes (cancelling the timer) while a turn_on for this same
-    # light is still awaiting its service call, the light must not be adopted — there's
-    # no timer left to ever expire it.
-    options = {CONF_HOLIDAY_LIGHTS: ["light.a"]}
-    manager = PlejdHolidayMode(_hass(), _entry(options=options), rng=_FakeRandom(["light.a"]))
-    manager._unsub = lambda: None  # pretend the schedule is already running
-
-    class _StoppingServices:
-        def __init__(self):
-            self.calls: list[tuple[str, str, dict]] = []
-
-        async def async_call(self, domain, service, data, blocking=False):
-            self.calls.append((domain, service, data))
-            if service == "turn_on":
-                manager._unsub = None  # simulate async_stop() completing mid-flight
-
-    manager._hass.services = _StoppingServices()
-
-    await manager._async_turn_on_new(_local(20, 0))
-
-    assert manager._hass.services.calls == [
-        ("light", "turn_on", {"entity_id": "light.a"}),
-        ("light", "turn_off", {"entity_id": "light.a"}),  # undone, not adopted
-    ]
-    assert manager._on_until == {}
-
-
 async def test_concurrent_starts_register_only_one_timer(monkeypatch):
     registrations = []
 
@@ -569,56 +544,41 @@ async def test_concurrent_starts_register_only_one_timer(monkeypatch):
 
     await asyncio.gather(manager.async_start(), manager.async_start())
 
-    assert registrations == [True]  # the second call saw _unsub already set and returned
+    assert registrations == [True]  # the lock serialized them: the second saw _unsub already set
 
 
-async def test_start_skips_restoring_deadlines_if_stopped_while_load_was_in_flight():
-    hass = _hass()
-    hass.data[("store", STORE_KEY)] = {"light.a": _local(21, 0).isoformat()}
-    manager = PlejdHolidayMode(hass, _entry())
-    real_load = manager._store.async_load
+async def test_a_concurrent_stop_waits_for_an_in_flight_tick_to_fully_finish(monkeypatch):
+    # async_start()/async_stop()/each tick's apply share one lock, so they can never
+    # interleave — this is what makes the whole earlier family of races (a tick
+    # persisting after stop already cleared the store, a light adopted right as stop
+    # cancels the timer, ...) structurally impossible, instead of needing a bespoke
+    # check for each one.
+    monkeypatch.setattr(dt_util, "now", lambda: _local(20, 0))  # inside the default 18:00-23:00 window
+    options = {CONF_HOLIDAY_LIGHTS: ["light.a"]}
+    manager = _manager(_hass(), _entry(options=options), rng=_FakeRandom(["light.a"], uniform_value=10.0))
+    release_turn_on = asyncio.Event()
 
-    async def _load_then_stop():
-        result = await real_load()
-        manager._unsub = None  # simulate async_stop() completing while this await was in flight
-        return result
-
-    manager._store.async_load = _load_then_stop
-
-    await manager.async_start()
-
-    assert manager._on_until == {}  # not repopulated after being stopped mid-load
-
-
-async def test_turn_off_expired_is_safe_if_the_entity_was_already_removed_concurrently():
-    # Simulates async_stop() removing the same entity_id first, from a concurrently
-    # awaited light.turn_off — the tick's own cleanup must not raise a KeyError.
-    hass = _hass()
-    manager = PlejdHolidayMode(hass, _entry())
-    manager._on_until["light.a"] = _local(19, 0)
-
-    class _RemovingServices:
+    class _BlockingServices:
         def __init__(self):
             self.calls: list[tuple[str, str, dict]] = []
 
         async def async_call(self, domain, service, data, blocking=False):
             self.calls.append((domain, service, data))
-            manager._on_until.pop(data["entity_id"], None)
+            if service == "turn_on":
+                await release_turn_on.wait()  # held open until the test explicitly releases it
 
-    hass.services = _RemovingServices()
+    manager._hass.services = _BlockingServices()
 
-    await manager._async_turn_off_expired(_local(20, 0))  # must not raise
+    tick_task = asyncio.ensure_future(manager._async_tick(None))
+    await asyncio.sleep(0)  # let the tick acquire the lock and reach the blocked turn_on call
 
-    assert manager._on_until == {}
+    stop_task = asyncio.ensure_future(manager.async_stop())
+    await asyncio.sleep(0)
+    assert not stop_task.done()  # blocked: waiting for the tick to release the lock
 
+    release_turn_on.set()  # let the tick's turn_on call return, and the tick finish
+    await tick_task
+    await stop_task
 
-async def test_turn_on_new_issues_no_calls_once_already_stopped():
-    hass = _hass()
-    options = {CONF_HOLIDAY_LIGHTS: ["light.a"]}
-    manager = PlejdHolidayMode(hass, _entry(options=options), rng=_FakeRandom(["light.a"]))
-    # manager._unsub left at its default None: never started (or already stopped).
-
-    await manager._async_turn_on_new(_local(20, 0))
-
-    assert hass.services.calls == []
-    assert manager._on_until == {}
+    assert manager._hass.services.calls[-1] == ("light", "turn_off", {"entity_id": "light.a"})
+    assert manager._on_until == {}  # stop cleaned up the light the tick had just turned on

@@ -10,6 +10,7 @@ only Plejd ones.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import random
 from collections.abc import Callable
@@ -60,7 +61,14 @@ def _in_window(now: time, start: time, end: time) -> bool:
 
 
 class PlejdHolidayMode:
-    """Randomly varies target lights on a recurring schedule, only within an active window."""
+    """Randomly varies target lights on a recurring schedule, only within an active window.
+
+    async_start()/async_stop()/each tick's apply all run under a single lock, so they
+    can never interleave — a start fully completes (or a stop fully completes) before
+    the other begins. That removes an entire class of races (a tick persisting after
+    stop already cleared the store, a light picked up right as stop cancels the timer,
+    ...) rather than requiring a bespoke check for each one.
+    """
 
     def __init__(
         self,
@@ -75,41 +83,19 @@ class PlejdHolidayMode:
         self._unsub: Callable[[], None] | None = None
         self._on_until: dict[str, datetime] = {}
         self._store: Store = Store(hass, STORE_VERSION, STORE_KEY)
+        self._lock = asyncio.Lock()
 
     @property
     def is_running(self) -> bool:
         return self._unsub is not None
 
     async def async_start(self) -> None:
-        """Begin the recurring schedule, restoring deadlines persisted before a restart (idempotent).
-
-        Registers the timer (a synchronous call) before the first `await`, so two
-        overlapping calls can't both pass the guard and each register their own timer —
-        the second sees `_unsub` already set and returns immediately.
-        """
-        if self._unsub is not None:
-            return
-        unsub = async_track_time_interval(self._hass, self._async_tick, CHECK_INTERVAL)
-        self._unsub = unsub
-        stored = await self._store.async_load() or {}
-        if self._unsub is not unsub:
-            return  # stopped (or restarted) while the load was in flight; don't clobber that
-        self._on_until = self._parse_stored_deadlines(stored)
-
-    @staticmethod
-    def _parse_stored_deadlines(stored: dict) -> dict[str, datetime]:
-        """Parse persisted deadlines, dropping (not raising on) any malformed entry.
-
-        A parse failure here must never propagate: it would abort async_start() after
-        the timer is already registered, leaking it with no owning switch state.
-        """
-        parsed: dict[str, datetime] = {}
-        for entity_id, deadline in stored.items():
-            try:
-                parsed[entity_id] = datetime.fromisoformat(deadline)
-            except (TypeError, ValueError):
-                _LOGGER.warning("Plejd holiday mode: dropping a malformed persisted deadline for %s", entity_id)
-        return parsed
+        """Begin the recurring schedule, restoring deadlines persisted before a restart (idempotent)."""
+        async with self._lock:
+            if self._unsub is not None:
+                return
+            self._on_until = await self._async_load_deadlines()
+            self._unsub = async_track_time_interval(self._hass, self._async_tick, CHECK_INTERVAL)
 
     async def async_stop(self) -> None:
         """Stop the recurring schedule and turn off any lights it turned on (idempotent).
@@ -117,18 +103,42 @@ class PlejdHolidayMode:
         Awaited directly by callers (the switch entity, and __init__.py's unload, before
         the light platform is torn down) rather than fired-and-forgotten, so the cleanup
         reliably completes while the target entities/connection still exist. Always
-        persists afterward (even with nothing to turn off) so a stop landing while
-        async_start() is still awaiting its own load — leaving `_on_until` empty here —
-        still clears any stale deadlines already on disk, rather than leaving them for
-        the next start to (wrongly) resurrect.
+        persists afterward (even with nothing to turn off), so it correctly clears the
+        store when nothing was ever restored/tracked this session.
         """
-        if self._unsub is not None:
-            self._unsub()
-            self._unsub = None
-        for entity_id in list(self._on_until):
-            if await self._async_turn_off_with_retry(entity_id):
-                self._on_until.pop(entity_id, None)  # pop, not del: a concurrent tick may race this
-        await self._async_persist()
+        async with self._lock:
+            if self._unsub is not None:
+                self._unsub()
+                self._unsub = None
+            for entity_id in list(self._on_until):
+                if await self._async_turn_off_with_retry(entity_id):
+                    del self._on_until[entity_id]
+            await self._async_persist()
+
+    async def _async_load_deadlines(self) -> dict[str, datetime]:
+        """Best-effort load of persisted deadlines.
+
+        Must never raise: this runs before the timer is registered, so a failure here
+        would otherwise abort async_start() and leave the caller unable to tell whether
+        it's actually running. A corrupt/unreadable store, or one holding a payload of
+        the wrong shape, means "start with none"; a single malformed deadline just drops
+        that one entry rather than discarding everything else that parsed fine.
+        """
+        try:
+            stored = await self._store.async_load() or {}
+        except Exception:  # noqa: BLE001 - a corrupt/unreadable store must never block starting
+            _LOGGER.warning("Plejd holiday mode: could not load persisted deadlines; starting with none", exc_info=True)
+            return {}
+        if not isinstance(stored, dict):
+            _LOGGER.warning("Plejd holiday mode: persisted deadlines had an unexpected shape; starting with none")
+            return {}
+        parsed: dict[str, datetime] = {}
+        for entity_id, deadline in stored.items():
+            try:
+                parsed[entity_id] = datetime.fromisoformat(deadline)
+            except (TypeError, ValueError):
+                _LOGGER.warning("Plejd holiday mode: dropping a malformed persisted deadline for %s", entity_id)
+        return parsed
 
     async def _async_turn_off_with_retry(self, entity_id: str, attempts: int = 2) -> bool:
         """Turn off `entity_id`, retrying once — stopping cancels the timer, so a single
@@ -182,7 +192,8 @@ class PlejdHolidayMode:
         return True
 
     async def _async_tick(self, _now: object) -> None:
-        await self._async_apply(dt_util.now())
+        async with self._lock:
+            await self._async_apply(dt_util.now())
 
     async def _async_apply(self, now_local: datetime) -> None:
         # Expire our own on-lights on every tick, even outside the active window — a light
@@ -202,15 +213,8 @@ class PlejdHolidayMode:
             return
         count = min(len(off_lights), max(1, round(len(off_lights) * TOGGLE_FRACTION)))
         for entity_id in self._rng.sample(off_lights, count):
-            if self._unsub is None:
-                return  # stopped while we were selecting/turning on candidates: stop issuing more
             if not await self._async_turn_on(entity_id):
                 continue  # not adopted as ours: safe to retry on the next tick
-            if self._unsub is None:
-                # Stopped while the above await was in flight: don't adopt it as ours (no
-                # timer is left to ever expire it) — undo instead of leaking it on.
-                await self._async_turn_off(entity_id)
-                continue
             minutes = self._rng.uniform(MIN_ON_MINUTES, MAX_ON_MINUTES)
             self._on_until[entity_id] = now_local + timedelta(minutes=minutes)
 
@@ -218,5 +222,4 @@ class PlejdHolidayMode:
         expired = [entity_id for entity_id, deadline in self._on_until.items() if deadline <= now_local]
         for entity_id in expired:
             if await self._async_turn_off(entity_id):
-                # pop, not del: a concurrent async_stop() cleanup may race this same entity_id.
-                self._on_until.pop(entity_id, None)
+                del self._on_until[entity_id]
