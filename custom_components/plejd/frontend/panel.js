@@ -311,7 +311,7 @@ class PlejdPanel extends HTMLElement {
           <div><label style="${LABEL}">Dim down (hold)</label><select id="f-down" style="${INPUT}">${this._triggerOptions(this._form.device, this._form.down)}</select></div>
           <div><label style="${LABEL}">Release (stop)</label><select id="f-stop" style="${INPUT}">${this._triggerOptions(this._form.device, this._form.stop)}</select></div>
         </div>
-        ${(this._triggers[this._form.device] || []).length === 0 ? '<p style="color:var(--secondary-text-color,#727272);font-size:.85rem;margin:8px 0 0">This device exposes no triggers.</p>' : ""}`
+        ${this._form.device in this._triggers && this._triggers[this._form.device].length === 0 ? '<p style="color:var(--secondary-text-color,#727272);font-size:.85rem;margin:8px 0 0">This device exposes no triggers.</p>' : ""}`
       : "";
 
     const feedback = this._error
