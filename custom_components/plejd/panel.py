@@ -15,7 +15,10 @@ from homeassistant.core import HomeAssistant
 from .const import DOMAIN
 
 PANEL_URL_PATH = "plejd"
-PANEL_STATIC_URL = "/plejd_dashboard/panel.js"
+# A URL prefix mapped to the frontend/ *directory* (HA static paths serve directories);
+# the panel module is then served as a file within it.
+PANEL_STATIC_URL = "/plejd_dashboard"
+PANEL_MODULE_URL = f"{PANEL_STATIC_URL}/panel.js"
 PANEL_TITLE = "Plejd"
 PANEL_ICON = "mdi:lightbulb-group"
 
@@ -26,8 +29,10 @@ _PANEL_KEY = f"{DOMAIN}_panel_registered"
 async def async_register_panel(hass: HomeAssistant) -> None:
     """Serve the panel JS (once) and add the Plejd entry to the sidebar."""
     if not hass.data.get(_STATIC_KEY):
-        module = str(Path(__file__).parent / "frontend" / "panel.js")
-        await hass.http.async_register_static_paths([StaticPathConfig(PANEL_STATIC_URL, module, cache_headers=False)])
+        frontend_dir = str(Path(__file__).parent / "frontend")
+        await hass.http.async_register_static_paths(
+            [StaticPathConfig(PANEL_STATIC_URL, frontend_dir, cache_headers=False)]
+        )
         hass.data[_STATIC_KEY] = True
     if hass.data.get(_PANEL_KEY):
         return  # already in the sidebar
@@ -37,7 +42,7 @@ async def async_register_panel(hass: HomeAssistant) -> None:
         webcomponent_name="plejd-panel",
         sidebar_title=PANEL_TITLE,
         sidebar_icon=PANEL_ICON,
-        module_url=PANEL_STATIC_URL,
+        module_url=PANEL_MODULE_URL,
         require_admin=False,
     )
     hass.data[_PANEL_KEY] = True

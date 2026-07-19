@@ -10,6 +10,13 @@ const CARD = `
   padding: 16px;
 `;
 
+// Entity names are user-controlled; escape before interpolating into innerHTML.
+const esc = (s) =>
+  String(s).replace(
+    /[&<>"']/g,
+    (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c],
+  );
+
 class PlejdPanel extends HTMLElement {
   set hass(hass) {
     this._hass = hass;
@@ -54,7 +61,7 @@ class PlejdPanel extends HTMLElement {
         return `
           <div style="display:flex;align-items:center;gap:12px;padding:10px 4px;border-bottom:1px solid var(--divider-color,#e0e0e0)">
             <span style="width:10px;height:10px;border-radius:50%;background:${dot};flex:none"></span>
-            <span style="flex:1">${name}</span>
+            <span style="flex:1">${esc(name)}</span>
             <span style="color:var(--secondary-text-color,#727272)">${level}</span>
           </div>`;
       })
