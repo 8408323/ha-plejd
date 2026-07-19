@@ -333,9 +333,9 @@ class PlejdPanel extends HTMLElement {
     const triggerRow = this._form.device
       ? `
         <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:12px">
-          <div><label style="${LABEL}">Dim up (hold)</label><select id="f-up" style="${INPUT}">${this._triggerOptions(this._form.device, this._form.up)}</select></div>
-          <div><label style="${LABEL}">Dim down (hold)</label><select id="f-down" style="${INPUT}">${this._triggerOptions(this._form.device, this._form.down)}</select></div>
-          <div><label style="${LABEL}">Release (stop)</label><select id="f-stop" style="${INPUT}">${this._triggerOptions(this._form.device, this._form.stop)}</select></div>
+          <div><label for="f-up" style="${LABEL}">Dim up (hold)</label><select id="f-up" style="${INPUT}">${this._triggerOptions(this._form.device, this._form.up)}</select></div>
+          <div><label for="f-down" style="${LABEL}">Dim down (hold)</label><select id="f-down" style="${INPUT}">${this._triggerOptions(this._form.device, this._form.down)}</select></div>
+          <div><label for="f-stop" style="${LABEL}">Release (stop)</label><select id="f-stop" style="${INPUT}">${this._triggerOptions(this._form.device, this._form.stop)}</select></div>
         </div>
         ${this._form.device in this._triggers && this._triggers[this._form.device].length === 0 ? '<p style="color:var(--secondary-text-color,#727272);font-size:.85rem;margin:8px 0 0">This device exposes no triggers.</p>' : ""}`
       : "";
@@ -356,7 +356,7 @@ class PlejdPanel extends HTMLElement {
         <h3 style="font-weight:500;font-size:.95rem;margin:0 0 12px">Add a binding</h3>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
           <div>
-            <label style="${LABEL}">Light or room</label>
+            <label for="f-target" style="${LABEL}">Light or room</label>
             <select id="f-target" style="${INPUT}">
               <option value="">Select a target…</option>
               <optgroup label="Lights">${lightOpts}</optgroup>
@@ -364,7 +364,7 @@ class PlejdPanel extends HTMLElement {
             </select>
           </div>
           <div>
-            <label style="${LABEL}">Remote</label>
+            <label for="f-device" style="${LABEL}">Remote</label>
             <select id="f-device" style="${INPUT}">
               <option value="">Select a remote…</option>
               ${deviceOpts}
