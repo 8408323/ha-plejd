@@ -249,3 +249,30 @@ test("first hass assignment loads area and device registries over websocket", as
   assert.equal(panel._areaName("area.kitchen"), "Kitchen");
   assert.equal(panel._deviceName("dev.remote"), "Remote Hall");
 });
+
+test("registry loading failure keeps registries empty and logs a warning", async () => {
+  const warnings = [];
+  const PanelClass = loadPanelClass({
+    console: { ...console, warn: (...args) => warnings.push(args) },
+  });
+  const panel = new PanelClass();
+
+  panel._renderShell = () => {};
+  panel._loadBindings = () => {};
+  panel._scheduleLightsUpdate = () => {};
+  panel._renderEditor = () => {};
+
+  panel.hass = {
+    states: {},
+    callWS() {
+      return Promise.reject(new Error("boom"));
+    },
+  };
+
+  await panel._registriesPromise;
+
+  assert.equal(panel._registriesLoaded, false);
+  assert.equal(panel._areas().length, 0);
+  assert.equal(panel._devices().length, 0);
+  assert.equal(warnings.length, 1);
+});

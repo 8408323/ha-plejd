@@ -132,7 +132,9 @@ class PlejdPanel extends HTMLElement {
   }
 
   async _loadRegistries() {
-    if (this._registriesLoaded || this._registriesPromise) return;
+    if (typeof this._hass?.callWS !== "function") return;
+    if (this._registriesLoaded) return;
+    if (this._registriesPromise) return this._registriesPromise;
     this._registriesPromise = (async () => {
       try {
         const [areas, devices] = await Promise.all([
@@ -146,14 +148,16 @@ class PlejdPanel extends HTMLElement {
           (devices || []).map((d) => [d.id, d.name_by_user || d.name || d.id]),
         );
         this._registriesLoaded = true;
-        this._renderEditor();
-      } catch (_err) {
+      } catch (err) {
         this._areasById = {};
         this._devicesById = {};
+        console.warn("Plejd panel: failed to load area/device registries", err);
       } finally {
         this._registriesPromise = null;
+        this._renderEditor();
       }
     })();
+    return this._registriesPromise;
   }
 
   async _save(bindings, resetForm = false) {
