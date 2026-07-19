@@ -451,3 +451,32 @@ async def test_setup_survives_panel_registration_failure(monkeypatch):
     # A url-path clash must NOT abort setup — the mesh/lights still load.
     assert await async_setup_entry(hass, entry) is True
     assert entry.runtime_data.started is True
+
+
+# ── Dim bindings wiring ───────────────────────────────────────────────────────
+
+
+async def test_setup_loads_bindings_and_registers_ws(monkeypatch):
+    from plejd.dim_binding_ws import DATA_BINDINGS
+
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    _FakeCoordinator.instances.clear()
+    hass, entry = _hass(), _entry()
+    await async_setup_entry(hass, entry)
+    assert DATA_BINDINGS in hass.data  # bindings manager available for the WS API
+    assert "ws_commands" in hass.data  # WS commands registered
+
+
+async def test_unload_cleans_up_bindings(monkeypatch):
+    from plejd.dim_binding_ws import DATA_BINDINGS
+
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    _FakeCoordinator.instances.clear()
+    hass, entry = _hass(), _entry()
+    unloads: list = []
+    entry.async_on_unload = unloads.append
+    await async_setup_entry(hass, entry)
+    assert DATA_BINDINGS in hass.data
+    for unload in unloads:
+        unload()
+    assert DATA_BINDINGS not in hass.data
