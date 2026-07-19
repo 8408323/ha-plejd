@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-07-19
+
 ### Added
 - **Remote → light dim bindings (backend).** The integration can store "hold a
   remote to dim a light/room" bindings and attach any remote's HA **device
