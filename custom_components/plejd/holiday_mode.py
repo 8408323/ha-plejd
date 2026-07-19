@@ -81,12 +81,17 @@ class PlejdHolidayMode:
         return self._unsub is not None
 
     async def async_start(self) -> None:
-        """Begin the recurring schedule, restoring deadlines persisted before a restart (idempotent)."""
+        """Begin the recurring schedule, restoring deadlines persisted before a restart (idempotent).
+
+        Registers the timer (a synchronous call) before the first `await`, so two
+        overlapping calls can't both pass the guard and each register their own timer —
+        the second sees `_unsub` already set and returns immediately.
+        """
         if self._unsub is not None:
             return
+        self._unsub = async_track_time_interval(self._hass, self._async_tick, CHECK_INTERVAL)
         stored = await self._store.async_load() or {}
         self._on_until = {entity_id: datetime.fromisoformat(deadline) for entity_id, deadline in stored.items()}
-        self._unsub = async_track_time_interval(self._hass, self._async_tick, CHECK_INTERVAL)
 
     async def async_stop(self) -> None:
         """Stop the recurring schedule and turn off any lights it turned on (idempotent).
@@ -101,9 +106,17 @@ class PlejdHolidayMode:
         if not self._on_until:
             return
         for entity_id in list(self._on_until):
-            if await self._async_turn_off(entity_id):
+            if await self._async_turn_off_with_retry(entity_id):
                 del self._on_until[entity_id]
         await self._async_persist()
+
+    async def _async_turn_off_with_retry(self, entity_id: str, attempts: int = 2) -> bool:
+        """Turn off `entity_id`, retrying once — stopping cancels the timer, so a single
+        transient failure here would otherwise leave the light with no later retry."""
+        for _ in range(attempts):
+            if await self._async_turn_off(entity_id):
+                return True
+        return False
 
     def _window(self) -> tuple[time, time]:
         options = self._entry.options
@@ -118,7 +131,11 @@ class PlejdHolidayMode:
             return list(configured)
         registry = er.async_get(self._hass)
         reg_entries = er.async_entries_for_config_entry(registry, self._entry.entry_id)
-        return [reg_entry.entity_id for reg_entry in reg_entries if reg_entry.entity_id.startswith("light.")]
+        return [
+            reg_entry.entity_id
+            for reg_entry in reg_entries
+            if reg_entry.entity_id.startswith("light.") and reg_entry.disabled_by is None
+        ]
 
     def _is_currently_on(self, entity_id: str) -> bool:
         """True if HA reports this light already on for a reason holiday mode didn't track."""
@@ -167,6 +184,11 @@ class PlejdHolidayMode:
         for entity_id in self._rng.sample(off_lights, count):
             if not await self._async_turn_on(entity_id):
                 continue  # not adopted as ours: safe to retry on the next tick
+            if self._unsub is None:
+                # Stopped while the above await was in flight: don't adopt it as ours (no
+                # timer is left to ever expire it) — undo instead of leaking it on.
+                await self._async_turn_off(entity_id)
+                continue
             minutes = self._rng.uniform(MIN_ON_MINUTES, MAX_ON_MINUTES)
             self._on_until[entity_id] = now_local + timedelta(minutes=minutes)
 

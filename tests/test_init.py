@@ -151,11 +151,13 @@ async def test_setup_shuts_down_when_forward_fails(monkeypatch):
     assert _FakeCoordinator.instances[-1].shutdown is True
 
 
-async def test_setup_cleans_up_holiday_mode_when_forward_fails(monkeypatch):
+async def test_setup_stops_holiday_mode_when_forward_fails(monkeypatch):
     from plejd.holiday_mode import DATA_HOLIDAY_MODE
 
     monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    monkeypatch.setattr(plejd, "PlejdHolidayMode", _FakeHolidayMode)
     _FakeCoordinator.instances.clear()
+    _FakeHolidayMode.instances.clear()
     hass, entry = _hass(), _entry()
 
     async def _boom(entry, platforms):
@@ -165,6 +167,9 @@ async def test_setup_cleans_up_holiday_mode_when_forward_fails(monkeypatch):
     with pytest.raises(RuntimeError, match="platform setup failed"):
         await async_setup_entry(hass, entry)
     assert DATA_HOLIDAY_MODE not in hass.data  # no stale manager left for a later retry
+    # A platform forwarded before the failure could have already started it (e.g. a
+    # restored-on holiday switch) — its timer must not be left running (#89 review).
+    assert _FakeHolidayMode.instances[-1].stopped is True
 
 
 async def test_unload_shuts_down_coordinator(monkeypatch):
@@ -575,3 +580,23 @@ async def test_unload_without_holiday_mode_registered_is_a_noop(monkeypatch):
     entry.runtime_data = _FakeCoordinator(None, entry)
     hass = _hass()
     assert await async_unload_entry(hass, entry) is True
+
+
+async def test_unload_failure_keeps_holiday_mode_registered_for_a_retry(monkeypatch):
+    from plejd.holiday_mode import DATA_HOLIDAY_MODE
+
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    monkeypatch.setattr(plejd, "PlejdHolidayMode", _FakeHolidayMode)
+    _FakeCoordinator.instances.clear()
+    _FakeHolidayMode.instances.clear()
+    hass, entry = _hass(), _entry()
+    await async_setup_entry(hass, entry)
+    hass.config_entries.unload_result = False  # some other platform refuses to unload
+
+    assert await async_unload_entry(hass, entry) is False
+
+    # Still stopped/cleaned up (it's this integration's own resource to own)...
+    assert _FakeHolidayMode.instances[-1].stopped is True
+    # ...but not removed from hass.data: the entry stays loaded, and a later unload
+    # retry must still be able to find it (#89 review).
+    assert DATA_HOLIDAY_MODE in hass.data

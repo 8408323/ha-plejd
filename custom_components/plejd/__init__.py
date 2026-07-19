@@ -79,8 +79,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     try:
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     except Exception:
-        # Don't leak the BLE connection (or a stale holiday-mode manager) if platform setup fails.
-        hass.data.pop(DATA_HOLIDAY_MODE, None)
+        # Don't leak the BLE connection, or a running holiday-mode timer, if platform setup
+        # fails partway — a platform forwarded before the failure (e.g. a restored-on
+        # holiday switch) may have already started it.
+        holiday_mode = hass.data.pop(DATA_HOLIDAY_MODE, None)
+        if holiday_mode is not None:
+            await holiday_mode.async_stop()
         await coordinator.async_shutdown()
         raise
     entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
@@ -147,10 +151,14 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # longer exist / a mesh that can no longer reach them. Unlike the coordinator below,
     # this runs unconditionally (not gated on unload_ok): its own timer/state is this
     # integration's alone to own, independent of whether some other platform's unload fails.
-    holiday_mode = hass.data.pop(DATA_HOLIDAY_MODE, None)
+    # Only *remove* it from hass.data once the unload actually succeeds, though — if a
+    # platform refuses to unload, the entry stays loaded and a later retry must still be
+    # able to find it (async_stop() is idempotent, so re-running it then is a no-op).
+    holiday_mode = hass.data.get(DATA_HOLIDAY_MODE)
     if holiday_mode is not None:
         await holiday_mode.async_stop()
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
+        hass.data.pop(DATA_HOLIDAY_MODE, None)
         await entry.runtime_data.async_shutdown()
     return unload_ok
