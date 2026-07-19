@@ -601,6 +601,56 @@ test("_pressesFromForm rejects invalid JSON in a service action's data field", (
   assert.throws(() => panel._pressesFromForm(), /valid JSON/i);
 });
 
+test("_pressesFromForm rejects service data that is valid JSON but not an object", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._form.device = "dev1";
+  panel._triggers = { dev1: [{ type: "button_short_press" }] };
+
+  for (const data of ['"just a string"', "[1, 2, 3]", "42", "null"]) {
+    panel._form.presses = [
+      { trigger: "0", type: "service", entity_id: "", domain: "light", service: "turn_on", data },
+    ];
+    assert.throws(() => panel._pressesFromForm(), /JSON object/i, `data=${data}`);
+  }
+});
+
+test("_pressesFromForm accepts a JSON object for service data", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._form.device = "dev1";
+  panel._triggers = { dev1: [{ type: "button_short_press" }] };
+  panel._form.presses = [
+    {
+      trigger: "0",
+      type: "service",
+      entity_id: "",
+      domain: "light",
+      service: "turn_on",
+      data: '{"brightness_pct": 50}',
+    },
+  ];
+
+  const presses = plain(panel._pressesFromForm());
+
+  assert.deepEqual(presses[0].action.data, { brightness_pct: 50 });
+});
+
+test("_pressesFromForm ignores a stale hidden field on a row the user visibly cleared back to blank", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._form.device = "dev1";
+  panel._triggers = { dev1: [{ type: "button_short_press" }] };
+  // Simulates: user picked "service", typed a domain, then switched the action back to
+  // "" (blank) — _readForm preserves the hidden domain value, but the row now looks
+  // empty (no trigger, no visible action), so it must be silently skipped, not rejected.
+  panel._form.presses = [
+    { trigger: "", type: "", entity_id: "", domain: "light", service: "", data: "" },
+  ];
+
+  assert.deepEqual(plain(panel._pressesFromForm()), []);
+});
+
 test("_pressesFromForm assembles a full set of toggle/scene/service rows", () => {
   const PanelClass = loadPanelClass();
   const panel = new PanelClass();
@@ -672,6 +722,72 @@ test("_onSave saves a press-only binding without requiring a dim up/down/stop tr
   assert.deepEqual(plain(savedBindings[0].presses), [
     { trigger: { type: "button_short_press" }, action: { type: "toggle" } },
   ]);
+});
+
+test("_onSave saves a scene-only press binding without requiring a light/room target", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._bindings = [];
+  panel._triggers = { dev1: [{ type: "button_short_press" }] };
+  panel._form.presses = [
+    { trigger: "", type: "scene", entity_id: "scene.movie_night", domain: "", service: "", data: "" },
+  ];
+  let savedBindings;
+  panel._save = (bindings) => {
+    savedBindings = bindings;
+    return Promise.resolve();
+  };
+
+  const values = {
+    "#f-target": "", // no light/room picked — a scene press ignores the target entirely
+    "#f-device": "dev1",
+    "#f-up": "",
+    "#f-down": "",
+    "#f-stop": "",
+    "#f-press-trigger-0": "0",
+    "#f-press-type-0": "scene",
+    "#f-press-entity-0": "scene.movie_night",
+  };
+  const el = { querySelector: (sel) => (sel in values ? { value: values[sel] } : null) };
+
+  panel._onSave(el);
+
+  assert.equal(panel._error, "");
+  assert.equal(savedBindings.length, 1);
+  assert.equal(savedBindings[0].targets, undefined);
+  assert.deepEqual(plain(savedBindings[0].presses), [
+    { trigger: { type: "button_short_press" }, action: { type: "scene", entity_id: "scene.movie_night" } },
+  ]);
+});
+
+test("_onSave still requires a target for a non-scene press action (e.g. toggle)", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._bindings = [];
+  panel._triggers = { dev1: [{ type: "button_short_press" }] };
+  panel._form.presses = [{ trigger: "", type: "toggle", entity_id: "", domain: "", service: "", data: "" }];
+  panel._renderEditor = () => {};
+  let saveCalled = false;
+  panel._save = () => {
+    saveCalled = true;
+    return Promise.resolve();
+  };
+
+  const values = {
+    "#f-target": "",
+    "#f-device": "dev1",
+    "#f-up": "",
+    "#f-down": "",
+    "#f-stop": "",
+    "#f-press-trigger-0": "0",
+    "#f-press-type-0": "toggle",
+  };
+  const el = { querySelector: (sel) => (sel in values ? { value: values[sel] } : null) };
+
+  panel._onSave(el);
+
+  assert.equal(saveCalled, false);
+  assert.match(panel._error, /Pick a light or room/);
 });
 
 test("_onSave fails when neither a dim trigger nor any press action is configured", () => {

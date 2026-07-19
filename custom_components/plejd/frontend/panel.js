@@ -622,8 +622,17 @@ class PlejdPanel extends HTMLElement {
     this._form.presses.forEach((row, i) => {
       const trigger = this._triggerByIndex(this._form.device, row.trigger);
       const type = row.type;
-      const hasAnyInput =
-        trigger || type || row.entity_id || row.domain || row.service || (row.data && row.data.trim());
+      // _readForm deliberately keeps a hidden field's last value when the row's type
+      // changes away from it (so switching back doesn't lose it) — only count a field
+      // as "input" when it's the one the currently selected type actually shows, so a
+      // row a user visibly cleared back to blank isn't treated as still filled in.
+      const relevantExtra =
+        type === "scene"
+          ? row.entity_id
+          : type === "service"
+            ? row.domain || row.service || (row.data && row.data.trim())
+            : false;
+      const hasAnyInput = trigger || type || relevantExtra;
       if (!hasAnyInput) return;
 
       if (!trigger) throw new Error(`Press action ${i + 1}: pick a trigger.`);
@@ -640,11 +649,19 @@ class PlejdPanel extends HTMLElement {
         action.domain = row.domain.trim();
         action.service = row.service.trim();
         if (row.data && row.data.trim()) {
+          let data;
           try {
-            action.data = JSON.parse(row.data);
+            data = JSON.parse(row.data);
           } catch {
             throw new Error(`Press action ${i + 1}: data must be valid JSON.`);
           }
+          // The backend merges this into the service call with `**data`, which needs a
+          // mapping — a JSON array/string/number would raise there instead of calling
+          // the service when the trigger fires.
+          if (typeof data !== "object" || data === null || Array.isArray(data)) {
+            throw new Error(`Press action ${i + 1}: data must be a JSON object.`);
+          }
+          action.data = data;
         }
       }
       presses.push({ trigger, action });
@@ -657,8 +674,6 @@ class PlejdPanel extends HTMLElement {
     this._readForm(el);
     this._error = this._notice = "";
 
-    const targets = this._targetFromForm();
-    if (!targets) return this._fail("Pick a light or room.");
     if (!this._form.device) return this._fail("Pick a remote.");
 
     const up = this._triggerByIndex(this._form.device, this._form.up);
@@ -676,7 +691,16 @@ class PlejdPanel extends HTMLElement {
       return this._fail("Pick a dim up/down trigger or add at least one press action.");
     }
 
-    const binding = { targets };
+    // A target (light/room) only matters to the actions that actually act on it: dim
+    // up/down, toggle/on/off, and service (as an optional merge base). A scene action
+    // ignores the target entirely (bindings.py calls scene.turn_on with just the scene's
+    // own entity_id), so an all-scene binding shouldn't be forced to pick an unrelated one.
+    const needsTarget = Boolean(up || down) || presses.some((p) => p.action.type !== "scene");
+    const targets = this._targetFromForm();
+    if (needsTarget && !targets) return this._fail("Pick a light or room.");
+
+    const binding = {};
+    if (targets) binding.targets = targets;
     if (up) binding.up = up;
     if (down) binding.down = down;
     if (stop) binding.stop = stop;
