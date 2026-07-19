@@ -14,6 +14,7 @@ from homeassistant.helpers import device_registry
 from .add_device import async_add_device
 from .const import DOMAIN
 from .coordinator import PlejdCoordinator
+from .dim_ramp import PlejdDimRamp, resolve_addresses
 from .discovery import async_bluetooth_available, async_scan_unprovisioned
 
 _LOGGER = logging.getLogger(__name__)
@@ -35,6 +36,18 @@ PLATFORMS: list[Platform] = [
 
 SERVICE_ADD_DEVICE = "add_device"
 SERVICE_SCAN_DEVICES = "scan_new_devices"
+SERVICE_START_DIM = "start_dim"
+SERVICE_STOP_DIM = "stop_dim"
+
+_ID_LIST = vol.All(vol.Any(str, [str]), lambda v: [v] if isinstance(v, str) else v)
+# Standard HA target: any of entity / area / device. Area = "a whole Plejd room".
+_DIM_TARGET = {
+    vol.Optional("entity_id", default=list): _ID_LIST,
+    vol.Optional("area_id", default=list): _ID_LIST,
+    vol.Optional("device_id", default=list): _ID_LIST,
+}
+_START_DIM_SCHEMA = vol.Schema({**_DIM_TARGET, vol.Required("direction"): vol.In(["up", "down"])})
+_STOP_DIM_SCHEMA = vol.Schema(dict(_DIM_TARGET))
 
 _INPUT_SETTING_SCHEMA = vol.Schema({vol.Required("input"): int, vol.Required("button_type"): str})
 
@@ -98,6 +111,30 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     entry.async_on_unload(lambda: hass.services.async_remove(DOMAIN, SERVICE_ADD_DEVICE))
     hass.services.async_register(DOMAIN, SERVICE_SCAN_DEVICES, _async_handle_scan_devices)
     entry.async_on_unload(lambda: hass.services.async_remove(DOMAIN, SERVICE_SCAN_DEVICES))
+
+    # Remote hold-to-dim: bind a dimmer remote's move/stop actions to these services and
+    # the ramp walks the light smoothly over the gateway (#76). Remote-agnostic — the
+    # caller supplies any Plejd light entity_id.
+    ramp = PlejdDimRamp(hass, coordinator)
+    entry.async_on_unload(ramp.shutdown)
+
+    async def _async_handle_start_dim(call) -> None:
+        direction = 1 if call.data["direction"] == "up" else -1
+        for address in resolve_addresses(
+            hass, coordinator, call.data["entity_id"], call.data["area_id"], call.data["device_id"]
+        ):
+            ramp.start(address, direction)
+
+    async def _async_handle_stop_dim(call) -> None:
+        for address in resolve_addresses(
+            hass, coordinator, call.data["entity_id"], call.data["area_id"], call.data["device_id"]
+        ):
+            ramp.stop(address)
+
+    hass.services.async_register(DOMAIN, SERVICE_START_DIM, _async_handle_start_dim, schema=_START_DIM_SCHEMA)
+    entry.async_on_unload(lambda: hass.services.async_remove(DOMAIN, SERVICE_START_DIM))
+    hass.services.async_register(DOMAIN, SERVICE_STOP_DIM, _async_handle_stop_dim, schema=_STOP_DIM_SCHEMA)
+    entry.async_on_unload(lambda: hass.services.async_remove(DOMAIN, SERVICE_STOP_DIM))
     return True
 
 
