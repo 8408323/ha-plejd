@@ -47,6 +47,14 @@ _TARGET_KEYS = ("entity_id", "device_id", "area_id")
 _ERR_STOPLESS_BINDING = "dim binding has a start trigger but no stop trigger"
 
 
+class InvalidDimBinding(ValueError):
+    """A dim binding is structurally invalid (e.g. a start trigger with no stop trigger).
+
+    A distinct type so the WebSocket layer can surface these as client-input errors
+    without also catching unrelated ValueErrors from deeper in the save path.
+    """
+
+
 def _target(binding: dict) -> dict[str, Any]:
     """The HA service target from a binding (entity/device/area), non-empty keys only."""
     targets = binding.get("targets") or {}
@@ -183,7 +191,7 @@ class PlejdDimBindings:
                 # Reject before persisting: a hold with no release is invalid, and
                 # _async_attach would otherwise swallow the per-binding error and still
                 # report a saved-but-non-functional binding to the client.
-                raise ValueError(_ERR_STOPLESS_BINDING)
+                raise InvalidDimBinding(_ERR_STOPLESS_BINDING)
         _ensure_ids(bindings)
         # Serialize the whole save→swap→re-attach so two overlapping saves can't interleave
         # and leave both trigger sets live. Save first so the in-memory list and the live
@@ -209,9 +217,14 @@ class PlejdDimBindings:
         DimRamp, so a replace must stop them explicitly or a held light rides to its bound.
         """
         for binding in bindings:
-            light = self._plejd_light(binding)
-            if light is not None:
-                await self._hass.services.async_call(DOMAIN, SERVICE_STOP_DIM, {"entity_id": [light]}, blocking=True)
+            try:
+                light = self._plejd_light(binding)
+                if light is not None:
+                    await self._hass.services.async_call(
+                        DOMAIN, SERVICE_STOP_DIM, {"entity_id": [light]}, blocking=True
+                    )
+            except Exception:  # noqa: BLE001 - best-effort cleanup; a bad/old record mustn't abort the replace
+                _LOGGER.warning("Plejd: could not stop native ramp for a replaced binding", exc_info=True)
 
     async def _async_attach(self) -> None:
         for binding in self._bindings:
@@ -226,7 +239,7 @@ class PlejdDimBindings:
         if _is_stopless(binding):
             # Load-path safety net for legacy/hand-edited storage (async_replace rejects
             # these before saving): a hold with no release would ramp to DIM_MAX_DURATION.
-            raise ValueError(_ERR_STOPLESS_BINDING)
+            raise InvalidDimBinding(_ERR_STOPLESS_BINDING)
         plejd_light = self._plejd_light(binding)
         # Attach atomically: if any trigger fails, roll back the ones already attached for
         # this binding, so we never leave a ramp that can start but not stop.
@@ -259,10 +272,7 @@ class PlejdDimBindings:
         if list(target) != ["entity_id"] or not isinstance(entities, list) or len(entities) != 1:
             return None
         entity_id = entities[0]
-        # Tolerate malformed legacy/hand-edited storage (e.g. entity_id [null]): a non-string
-        # here must return None, not raise — this runs during replace's old-ramp cleanup too,
-        # where an exception would abort the whole replacement.
-        if not isinstance(entity_id, str) or not entity_id.startswith("light."):
+        if not entity_id.startswith("light."):
             return None
         entry = er.async_get(self._hass).async_get(entity_id)
         return entity_id if entry is not None and entry.platform == DOMAIN else None

@@ -5,7 +5,7 @@ from __future__ import annotations
 import types
 
 from plejd import dim_binding_ws
-from plejd.bindings import _ERR_STOPLESS_BINDING
+from plejd.bindings import _ERR_STOPLESS_BINDING, InvalidDimBinding
 from plejd.dim_binding_ws import DATA_BINDINGS
 
 
@@ -98,9 +98,27 @@ class _FailingBindings:
         raise RuntimeError("storage down")
 
 
+class _ValueErroringBindings:
+    bindings: list = []
+
+    async def async_replace(self, items):
+        raise ValueError("an internal ValueError, not client input")
+
+
 async def test_save_returns_error_when_replace_fails():
     hass = _hass()
     hass.data[DATA_BINDINGS] = _FailingBindings()
+    conn = _Conn()
+    await dim_binding_ws.ws_save(hass, conn, {"id": 3, "bindings": [{}]})
+    assert conn.error[0] == 3 and conn.error[1] == "save_failed"
+    assert conn.result is None
+
+
+async def test_save_maps_plain_valueerror_to_generic_error():
+    # A ValueError that isn't InvalidDimBinding is an internal fault, not client input:
+    # it must not be surfaced as "invalid_binding" (nor leak its message).
+    hass = _hass()
+    hass.data[DATA_BINDINGS] = _ValueErroringBindings()
     conn = _Conn()
     await dim_binding_ws.ws_save(hass, conn, {"id": 3, "bindings": [{}]})
     assert conn.error[0] == 3 and conn.error[1] == "save_failed"
@@ -111,7 +129,7 @@ class _RejectingBindings:
     bindings: list = []
 
     async def async_replace(self, items):
-        raise ValueError(_ERR_STOPLESS_BINDING)
+        raise InvalidDimBinding(_ERR_STOPLESS_BINDING)
 
 
 async def test_save_rejects_invalid_binding_with_reason():

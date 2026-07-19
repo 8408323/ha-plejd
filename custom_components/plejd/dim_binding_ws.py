@@ -13,6 +13,7 @@ from homeassistant.components import websocket_api
 from homeassistant.components.device_automation import DeviceAutomationType, async_get_device_automations
 from homeassistant.core import HomeAssistant
 
+from .bindings import InvalidDimBinding
 from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
@@ -38,8 +39,9 @@ async def ws_save(hass: HomeAssistant, connection, msg) -> None:
         return
     try:
         await bindings.async_replace(msg["bindings"])
-    except ValueError as err:
-        # Invalid client input (e.g. a start trigger with no stop) — safe to surface the reason.
+    except InvalidDimBinding as err:
+        # A known validation failure (e.g. a start trigger with no stop) — safe to surface
+        # the reason. Only this specific type, so an unrelated ValueError can't leak internals.
         connection.send_error(msg["id"], "invalid_binding", str(err))
         return
     except Exception:  # noqa: BLE001 - log the detail server-side, return a stable generic message
