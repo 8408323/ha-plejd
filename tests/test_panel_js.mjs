@@ -724,6 +724,40 @@ test("_onSave saves a press-only binding without requiring a dim up/down/stop tr
   ]);
 });
 
+test("_onSave drops a picked stop trigger when no dim up/down direction is configured", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._bindings = [];
+  panel._triggers = { dev1: [{ type: "button_short_press" }, { type: "button_release" }] };
+  panel._form.presses = [{ trigger: "", type: "", entity_id: "", domain: "", service: "", data: "" }];
+  let savedBindings;
+  panel._save = (bindings) => {
+    savedBindings = bindings;
+    return Promise.resolve();
+  };
+
+  const values = {
+    "#f-target": "light:light.a",
+    "#f-device": "dev1",
+    "#f-up": "",
+    "#f-down": "",
+    "#f-stop": "1", // a release trigger was picked, but no dim up/down direction was
+    "#f-press-trigger-0": "0",
+    "#f-press-type-0": "toggle",
+  };
+  const el = { querySelector: (sel) => (sel in values ? { value: values[sel] } : null) };
+
+  panel._onSave(el);
+
+  assert.equal(panel._error, "");
+  assert.equal(savedBindings.length, 1);
+  // A stray stop trigger with no matching start would still attach plejd.stop_dim and
+  // could cancel an unrelated binding's ramp on the same light — must not be saved.
+  assert.equal(savedBindings[0].stop, undefined);
+  assert.equal(savedBindings[0].up, undefined);
+  assert.equal(savedBindings[0].down, undefined);
+});
+
 test("_onSave saves a scene-only press binding without requiring a light/room target", () => {
   const PanelClass = loadPanelClass();
   const panel = new PanelClass();
@@ -781,6 +815,90 @@ test("_onSave still requires a target for a non-scene press action (e.g. toggle)
     "#f-stop": "",
     "#f-press-trigger-0": "0",
     "#f-press-type-0": "toggle",
+  };
+  const el = { querySelector: (sel) => (sel in values ? { value: values[sel] } : null) };
+
+  panel._onSave(el);
+
+  assert.equal(saveCalled, false);
+  assert.match(panel._error, /Pick a light or room/);
+});
+
+test("_onSave saves a service press action that supplies its own target in its data, without a light/room picked", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._bindings = [];
+  panel._triggers = { dev1: [{ type: "button_short_press" }] };
+  panel._form.presses = [
+    {
+      trigger: "",
+      type: "service",
+      entity_id: "",
+      domain: "script",
+      service: "turn_on",
+      data: '{"entity_id": "script.my_script"}',
+    },
+  ];
+  let savedBindings;
+  panel._save = (bindings) => {
+    savedBindings = bindings;
+    return Promise.resolve();
+  };
+
+  const values = {
+    "#f-target": "", // no light/room picked — the service call's data already targets it
+    "#f-device": "dev1",
+    "#f-up": "",
+    "#f-down": "",
+    "#f-stop": "",
+    "#f-press-trigger-0": "0",
+    "#f-press-type-0": "service",
+    "#f-press-domain-0": "script",
+    "#f-press-service-0": "turn_on",
+    "#f-press-data-0": '{"entity_id": "script.my_script"}',
+  };
+  const el = { querySelector: (sel) => (sel in values ? { value: values[sel] } : null) };
+
+  panel._onSave(el);
+
+  assert.equal(panel._error, "");
+  assert.equal(savedBindings.length, 1);
+  assert.equal(savedBindings[0].targets, undefined);
+});
+
+test("_onSave still requires a target for a service press action with no target in its data", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._bindings = [];
+  panel._triggers = { dev1: [{ type: "button_short_press" }] };
+  panel._form.presses = [
+    {
+      trigger: "",
+      type: "service",
+      entity_id: "",
+      domain: "light",
+      service: "turn_on",
+      data: '{"brightness_pct": 50}',
+    },
+  ];
+  panel._renderEditor = () => {};
+  let saveCalled = false;
+  panel._save = () => {
+    saveCalled = true;
+    return Promise.resolve();
+  };
+
+  const values = {
+    "#f-target": "",
+    "#f-device": "dev1",
+    "#f-up": "",
+    "#f-down": "",
+    "#f-stop": "",
+    "#f-press-trigger-0": "0",
+    "#f-press-type-0": "service",
+    "#f-press-domain-0": "light",
+    "#f-press-service-0": "turn_on",
+    "#f-press-data-0": '{"brightness_pct": 50}',
   };
   const el = { querySelector: (sel) => (sel in values ? { value: values[sel] } : null) };
 

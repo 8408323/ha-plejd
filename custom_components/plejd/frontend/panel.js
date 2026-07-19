@@ -691,11 +691,20 @@ class PlejdPanel extends HTMLElement {
       return this._fail("Pick a dim up/down trigger or add at least one press action.");
     }
 
-    // A target (light/room) only matters to the actions that actually act on it: dim
-    // up/down, toggle/on/off, and service (as an optional merge base). A scene action
-    // ignores the target entirely (bindings.py calls scene.turn_on with just the scene's
-    // own entity_id), so an all-scene binding shouldn't be forced to pick an unrelated one.
-    const needsTarget = Boolean(up || down) || presses.some((p) => p.action.type !== "scene");
+    // A target (light/room) only matters to the actions that actually need it: dim
+    // up/down and toggle/on/off always do; scene never does (bindings.py calls
+    // scene.turn_on with just the scene's own entity_id); a service action doesn't
+    // either if its JSON data already supplies its own entity/device/area (bindings.py
+    // calls the service with {**target, **data}, and explicit data wins).
+    const pressNeedsTarget = (press) => {
+      if (press.action.type === "scene") return false;
+      if (press.action.type === "service") {
+        const data = press.action.data || {};
+        return !(data.entity_id || data.device_id || data.area_id);
+      }
+      return true;
+    };
+    const needsTarget = Boolean(up || down) || presses.some(pressNeedsTarget);
     const targets = this._targetFromForm();
     if (needsTarget && !targets) return this._fail("Pick a light or room.");
 
@@ -703,7 +712,10 @@ class PlejdPanel extends HTMLElement {
     if (targets) binding.targets = targets;
     if (up) binding.up = up;
     if (down) binding.down = down;
-    if (stop) binding.stop = stop;
+    // A stop trigger only matters alongside a start (up/down already required it above);
+    // a stray one attached to a press-only binding would still fire plejd.stop_dim for a
+    // single-Plejd-light target and could cancel an unrelated binding's ramp on that light.
+    if (up || down) binding.stop = stop;
     if (presses.length) binding.presses = presses;
     this._save([...this._bindings, binding], true); // reset the add form after a successful add
   }
