@@ -219,7 +219,7 @@ class PlejdPanel extends HTMLElement {
   }
 
   _scheduleLightsUpdate() {
-    if (this._lightsFrame != null) return;
+    if (this._lightsFrame !== null) return;
     this._lightsFrame = (globalThis.requestAnimationFrame || ((cb) => globalThis.setTimeout(cb, 0)))(
       () => {
         this._lightsFrame = null;

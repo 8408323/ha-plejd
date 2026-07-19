@@ -5,7 +5,7 @@ import test from "node:test";
 import vm from "node:vm";
 
 const PANEL_PATH = path.resolve(
-  process.env.PANEL_PATH || "custom_components/plejd/frontend/panel.js",
+  process.env.PANEL_PATH || path.join("custom_components", "plejd", "frontend", "panel.js"),
 );
 
 function loadPanelClass(globals = {}) {
