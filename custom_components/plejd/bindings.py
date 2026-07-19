@@ -53,9 +53,7 @@ def _ensure_ids(bindings: list[dict]) -> bool:
         if (bid := binding.get("id")) and bid not in seen:
             seen.add(bid)
             continue
-        bid = uuid4().hex
-        while bid in seen:
-            bid = uuid4().hex
+        bid = uuid4().hex  # unique by construction, so it also breaks any duplicate
         binding["id"] = bid
         seen.add(bid)
         assigned = True
