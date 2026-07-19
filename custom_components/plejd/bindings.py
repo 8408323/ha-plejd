@@ -41,12 +41,17 @@ def _target(binding: dict) -> dict[str, Any]:
     return {key: targets[key] for key in _TARGET_KEYS if targets.get(key)}
 
 
-def _ensure_ids(bindings: list[dict]) -> list[dict]:
-    """Give every binding a stable unique id so ramps never collide under a shared key."""
+def _ensure_ids(bindings: list[dict]) -> bool:
+    """Give every binding a stable unique id (so ramps never collide under a shared key).
+
+    Mutates in place; returns True if any id was newly assigned.
+    """
+    assigned = False
     for binding in bindings:
         if not binding.get("id"):
             binding["id"] = uuid4().hex
-    return bindings
+            assigned = True
+    return assigned
 
 
 class DimRamp:
@@ -128,12 +133,15 @@ class PlejdDimBindings:
         return self._bindings
 
     async def async_load(self) -> None:
-        self._bindings = _ensure_ids(await self._store.async_load() or [])
+        self._bindings = await self._store.async_load() or []
+        if _ensure_ids(self._bindings):
+            await self._store.async_save(self._bindings)  # persist ids assigned to legacy data
         await self._async_attach()
 
     async def async_replace(self, bindings: list[dict]) -> None:
         """Persist the full set of bindings and re-attach their triggers."""
-        self._bindings = _ensure_ids(bindings)
+        self._bindings = bindings
+        _ensure_ids(self._bindings)
         await self._store.async_save(self._bindings)
         self._detach()
         await self._async_attach()
@@ -188,6 +196,6 @@ class PlejdDimBindings:
             unsub()
         self._unsubs = []
 
-    def async_shutdown(self) -> None:
+    def shutdown(self) -> None:
         self._detach()
         self._ramp.shutdown()

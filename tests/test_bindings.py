@@ -220,7 +220,7 @@ async def test_shutdown_detaches_and_stops_ramp(monkeypatch):
     pb = PlejdDimBindings(hass)
     pb._ramp = _SpyRamp()
     await pb.async_load()
-    pb.async_shutdown()
+    pb.shutdown()
     assert ("unsub",) in captured and ("shutdown",) in pb._ramp.calls
 
 
@@ -257,3 +257,13 @@ async def test_replace_assigns_missing_ids(monkeypatch):
     await pb.async_replace([{"targets": {"entity_id": ["light.a"]}}])  # no id supplied
     assert pb.bindings[0]["id"]  # assigned
     assert hass.data[("store", bindings_mod.STORE_KEY)][0]["id"]  # and persisted
+
+
+async def test_load_persists_ids_assigned_to_legacy_data(monkeypatch):
+    monkeypatch.setattr(bindings_mod, "async_initialize_triggers", _spy_triggers([]))
+    hass = _hass()
+    hass.data[("store", bindings_mod.STORE_KEY)] = [{"targets": {"entity_id": ["light.a"]}}]  # no id
+    pb = PlejdDimBindings(hass)
+    await pb.async_load()
+    assert pb.bindings[0]["id"]  # assigned
+    assert hass.data[("store", bindings_mod.STORE_KEY)][0]["id"]  # and saved back, so it's stable

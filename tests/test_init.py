@@ -493,7 +493,7 @@ async def test_setup_survives_binding_load_failure(monkeypatch):
         async def async_load(self):
             raise ValueError("corrupt store")
 
-        def async_shutdown(self):
+        def shutdown(self):
             return None
 
     monkeypatch.setattr(plejd, "PlejdDimBindings", _BadBindings)

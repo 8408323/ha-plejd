@@ -122,7 +122,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         _LOGGER.warning("Plejd: could not load dim bindings; continuing without them", exc_info=True)
     hass.data[dim_binding_ws.DATA_BINDINGS] = dim_bindings
     entry.async_on_unload(lambda: hass.data.pop(dim_binding_ws.DATA_BINDINGS, None))
-    entry.async_on_unload(dim_bindings.async_shutdown)
+    entry.async_on_unload(dim_bindings.shutdown)
     if not hass.data.get(_WS_REGISTERED):
         dim_binding_ws.async_register(hass)  # hass-global commands; register once
         hass.data[_WS_REGISTERED] = True

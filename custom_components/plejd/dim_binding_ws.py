@@ -6,12 +6,16 @@ so the panel can offer a picker for any remote (device triggers from any integra
 
 from __future__ import annotations
 
+import logging
+
 import voluptuous as vol
 from homeassistant.components import websocket_api
 from homeassistant.components.device_automation import DeviceAutomationType, async_get_device_automations
 from homeassistant.core import HomeAssistant
 
 from .const import DOMAIN
+
+_LOGGER = logging.getLogger(__name__)
 
 DATA_BINDINGS = f"{DOMAIN}_dim_bindings"
 
@@ -34,8 +38,9 @@ async def ws_save(hass: HomeAssistant, connection, msg) -> None:
         return
     try:
         await bindings.async_replace(msg["bindings"])
-    except Exception as err:  # noqa: BLE001 - return a structured error the dashboard can show
-        connection.send_error(msg["id"], "save_failed", str(err))
+    except Exception:  # noqa: BLE001 - log the detail server-side, return a stable generic message
+        _LOGGER.exception("Plejd: failed to save dim bindings")
+        connection.send_error(msg["id"], "save_failed", "Could not save bindings")
         return
     connection.send_result(msg["id"], {"bindings": bindings.bindings})
 
