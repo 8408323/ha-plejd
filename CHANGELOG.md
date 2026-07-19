@@ -12,7 +12,8 @@ All notable changes to this project are documented here. The format follows
   triggers** (IKEA, Hue, ZHA, Zigbee2MQTT — any trigger) to a smooth
   brightness-step ramp. Targets **any** Home Assistant light or a whole **area**,
   not only Plejd (each step still rides Plejd's acked path for Plejd lights).
-  Managed over a WebSocket API; the dashboard editor UI comes next (#76).
+  Managed over a WebSocket API and configured from the Plejd dashboard editor
+  (see the dashboard entry below) (#76).
 - **Plejd dashboard (sidebar panel).** A custom Plejd panel in the Home Assistant
   sidebar — its own web code, not a Lovelace view. It lists the site's Plejd lights
   and hosts the **remote dim-binding editor**: pick a light or a whole room, pick a
