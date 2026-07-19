@@ -89,8 +89,11 @@ class PlejdHolidayMode:
         """
         if self._unsub is not None:
             return
-        self._unsub = async_track_time_interval(self._hass, self._async_tick, CHECK_INTERVAL)
+        unsub = async_track_time_interval(self._hass, self._async_tick, CHECK_INTERVAL)
+        self._unsub = unsub
         stored = await self._store.async_load() or {}
+        if self._unsub is not unsub:
+            return  # stopped (or restarted) while the load was in flight; don't clobber that
         self._on_until = {entity_id: datetime.fromisoformat(deadline) for entity_id, deadline in stored.items()}
 
     async def async_stop(self) -> None:
@@ -107,7 +110,7 @@ class PlejdHolidayMode:
             return
         for entity_id in list(self._on_until):
             if await self._async_turn_off_with_retry(entity_id):
-                del self._on_until[entity_id]
+                self._on_until.pop(entity_id, None)  # pop, not del: a concurrent tick may race this
         await self._async_persist()
 
     async def _async_turn_off_with_retry(self, entity_id: str, attempts: int = 2) -> bool:
@@ -182,6 +185,8 @@ class PlejdHolidayMode:
             return
         count = min(len(off_lights), max(1, round(len(off_lights) * TOGGLE_FRACTION)))
         for entity_id in self._rng.sample(off_lights, count):
+            if self._unsub is None:
+                return  # stopped while we were selecting/turning on candidates: stop issuing more
             if not await self._async_turn_on(entity_id):
                 continue  # not adopted as ours: safe to retry on the next tick
             if self._unsub is None:
@@ -196,4 +201,5 @@ class PlejdHolidayMode:
         expired = [entity_id for entity_id, deadline in self._on_until.items() if deadline <= now_local]
         for entity_id in expired:
             if await self._async_turn_off(entity_id):
-                del self._on_until[entity_id]  # only drop tracking once the light is confirmed off
+                # pop, not del: a concurrent async_stop() cleanup may race this same entity_id.
+                self._on_until.pop(entity_id, None)

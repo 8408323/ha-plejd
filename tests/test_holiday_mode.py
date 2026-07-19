@@ -532,3 +532,55 @@ async def test_concurrent_starts_register_only_one_timer(monkeypatch):
     await asyncio.gather(manager.async_start(), manager.async_start())
 
     assert registrations == [True]  # the second call saw _unsub already set and returned
+
+
+async def test_start_skips_restoring_deadlines_if_stopped_while_load_was_in_flight():
+    hass = _hass()
+    hass.data[("store", STORE_KEY)] = {"light.a": _local(21, 0).isoformat()}
+    manager = PlejdHolidayMode(hass, _entry())
+    real_load = manager._store.async_load
+
+    async def _load_then_stop():
+        result = await real_load()
+        manager._unsub = None  # simulate async_stop() completing while this await was in flight
+        return result
+
+    manager._store.async_load = _load_then_stop
+
+    await manager.async_start()
+
+    assert manager._on_until == {}  # not repopulated after being stopped mid-load
+
+
+async def test_turn_off_expired_is_safe_if_the_entity_was_already_removed_concurrently():
+    # Simulates async_stop() removing the same entity_id first, from a concurrently
+    # awaited light.turn_off — the tick's own cleanup must not raise a KeyError.
+    hass = _hass()
+    manager = PlejdHolidayMode(hass, _entry())
+    manager._on_until["light.a"] = _local(19, 0)
+
+    class _RemovingServices:
+        def __init__(self):
+            self.calls: list[tuple[str, str, dict]] = []
+
+        async def async_call(self, domain, service, data, blocking=False):
+            self.calls.append((domain, service, data))
+            manager._on_until.pop(data["entity_id"], None)
+
+    hass.services = _RemovingServices()
+
+    await manager._async_turn_off_expired(_local(20, 0))  # must not raise
+
+    assert manager._on_until == {}
+
+
+async def test_turn_on_new_issues_no_calls_once_already_stopped():
+    hass = _hass()
+    options = {CONF_HOLIDAY_LIGHTS: ["light.a"]}
+    manager = PlejdHolidayMode(hass, _entry(options=options), rng=_FakeRandom(["light.a"]))
+    # manager._unsub left at its default None: never started (or already stopped).
+
+    await manager._async_turn_on_new(_local(20, 0))
+
+    assert hass.services.calls == []
+    assert manager._on_until == {}
