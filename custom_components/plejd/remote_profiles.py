@@ -19,15 +19,12 @@ generic) and is what `dim_binding_ws.ws_device_triggers` calls.
 from __future__ import annotations
 
 import asyncio
-import logging
 from typing import Any
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 
 from .const import DOMAIN
-
-_LOGGER = logging.getLogger(__name__)
 
 STORE_VERSION = 1
 STORE_KEY = f"{DOMAIN}.remote_profiles"
