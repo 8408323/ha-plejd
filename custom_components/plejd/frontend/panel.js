@@ -247,13 +247,16 @@ class PlejdPanel extends HTMLElement {
     return d?.name_by_user || d?.name || deviceId;
   }
 
-  // A stored binding's target -> a short human string.
+  // A stored binding's target(s) -> a human string. Lists every target (a binding can
+  // hold multiple entities/areas/devices) so a Delete's scope isn't misread.
   _targetName(binding) {
     const t = binding.targets || {};
-    if (t.entity_id?.length) return this._entityName([].concat(t.entity_id)[0]);
-    if (t.area_id?.length) return this._areaName([].concat(t.area_id)[0]);
-    if (t.device_id?.length) return this._deviceName([].concat(t.device_id)[0]);
-    return "—";
+    const names = [
+      ...[].concat(t.entity_id || []).map((id) => this._entityName(id)),
+      ...[].concat(t.area_id || []).map((id) => this._areaName(id)),
+      ...[].concat(t.device_id || []).map((id) => this._deviceName(id)),
+    ];
+    return names.length ? names.join(", ") : "—";
   }
 
   // The remote device behind a binding's triggers (up/down/stop are device-trigger dicts).

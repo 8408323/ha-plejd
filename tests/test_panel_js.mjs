@@ -320,3 +320,20 @@ test("registry loading failure keeps registries empty and logs a warning", async
   assert.equal(panel._devices().length, 0);
   assert.equal(warnings.length, 1);
 });
+
+test("_targetName lists every target of a multi-target binding", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._hass = {
+    states: {
+      "light.a": { attributes: { friendly_name: "Light A" } },
+      "light.b": { attributes: { friendly_name: "Light B" } },
+    },
+    areas: { kitchen: { name: "Kitchen" } },
+    devices: {},
+  };
+
+  const name = panel._targetName({ targets: { entity_id: ["light.a", "light.b"], area_id: ["kitchen"] } });
+
+  assert.equal(name, "Light A, Light B, Kitchen");
+});
