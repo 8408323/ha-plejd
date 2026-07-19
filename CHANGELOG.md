@@ -7,6 +7,12 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Covers on the Plejd dashboard.** The panel now lists every Plejd cover
+  (JAL/MTR blind) alongside the lights, with **Open / Close / Stop** buttons
+  calling the standard `cover.open_cover` / `cover.close_cover` /
+  `cover.stop_cover` services. A cover that supports setting an exact position
+  also gets a slider that sends `cover.set_cover_position` only on release,
+  not on every drag tick, to avoid flooding the mesh.
 - **Remote bindings: any trigger → any action.** Beyond hold-to-dim, a binding
   can now map *any* remote trigger (any button, short/long press, hold,
   release, click, …) to an instantaneous action on its target: **toggle**,

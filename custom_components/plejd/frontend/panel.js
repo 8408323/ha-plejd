@@ -34,6 +34,10 @@ const triggerLabel = (t) => {
   return t.subtype ? `${type} · ${t.subtype}` : type;
 };
 
+// CoverEntityFeature.SET_POSITION bit (homeassistant.components.cover) — mirrors cover.py's
+// supported_features so the panel can tell a position-capable cover apart without importing HA.
+const COVER_FEATURE_SET_POSITION = 4;
+
 // Instantaneous press-action types a trigger can map to (mirrors bindings.py PRESS_ACTIONS).
 const PRESS_ACTIONS = ["toggle", "on", "off", "scene", "service"];
 const PRESS_ACTION_LABELS = {
@@ -59,6 +63,7 @@ class PlejdPanel extends HTMLElement {
     this._notice = "";
     this._busy = false;
     this._lightsFrame = null;
+    this._coversFrame = null;
     const useAnimationFrame = Boolean(
       globalThis.requestAnimationFrame && globalThis.cancelAnimationFrame,
     );
@@ -78,9 +83,10 @@ class PlejdPanel extends HTMLElement {
       this._loadBindings();
       this._loadRegistries();
     }
-    // Only the live lights list tracks state; leave the editor DOM (and any in-progress
-    // form entry) untouched on the frequent hass state updates.
+    // Only the live lights/covers lists track state; leave the editor DOM (and any
+    // in-progress form entry) untouched on the frequent hass state updates.
     this._scheduleLightsUpdate();
+    this._scheduleCoversUpdate();
   }
 
   set panel(panel) {
@@ -88,23 +94,33 @@ class PlejdPanel extends HTMLElement {
   }
 
   connectedCallback() {
-    // On (re)connect, rebuild only if the shell is gone; otherwise refresh the live lights
-    // list and leave the editor DOM — and any in-progress form entry — untouched.
+    // On (re)connect, rebuild only if the shell is gone; otherwise refresh the live lists
+    // and leave the editor DOM — and any in-progress form entry — untouched.
     if (!this._hass) return;
     if (!this.querySelector("#plejd-lights")) this._renderShell();
     this._scheduleLightsUpdate();
+    this._scheduleCoversUpdate();
   }
 
   disconnectedCallback() {
-    if (this._lightsFrame === null) return;
-    this._cancelLightsFrame(this._lightsFrame);
-    this._lightsFrame = null;
+    if (this._lightsFrame !== null) {
+      this._cancelLightsFrame(this._lightsFrame);
+      this._lightsFrame = null;
+    }
+    if (this._coversFrame !== null) {
+      this._cancelLightsFrame(this._coversFrame);
+      this._coversFrame = null;
+    }
   }
 
   // ── data ──────────────────────────────────────────────────────────────────
 
   async _callWS(message) {
     return this._hass.callWS(message);
+  }
+
+  async _callService(domain, service, data) {
+    return this._hass.callService(domain, service, data);
   }
 
   async _loadBindings() {
@@ -209,6 +225,23 @@ class PlejdPanel extends HTMLElement {
       );
   }
 
+  _covers() {
+    const hass = this._hass;
+    if (!hass) return [];
+    return Object.values(hass.states)
+      .filter(
+        (s) =>
+          s.entity_id.startsWith("cover.") &&
+          (hass.entities?.[s.entity_id]?.platform === "plejd" ||
+            s.attributes.attribution === "Plejd"),
+      )
+      .sort((a, b) =>
+        (a.attributes.friendly_name || a.entity_id).localeCompare(
+          b.attributes.friendly_name || b.entity_id,
+        ),
+      );
+  }
+
   _allLights() {
     const hass = this._hass;
     return Object.values(hass.states)
@@ -293,6 +326,7 @@ class PlejdPanel extends HTMLElement {
       <div style="padding:16px 16px 48px;max-width:760px;margin:0 auto;color:var(--primary-text-color,#212121);font-family:var(--paper-font-body1_-_font-family,Roboto,sans-serif)">
         <h1 style="font-weight:400;margin:8px 4px 20px">Plejd</h1>
         <div id="plejd-lights" style="${CARD}"></div>
+        <div id="plejd-covers" style="${CARD};margin-top:16px"></div>
         <div id="plejd-bindings" style="${CARD};margin-top:16px"></div>
       </div>`;
     this._renderEditor();
@@ -331,6 +365,80 @@ class PlejdPanel extends HTMLElement {
         <span style="color:var(--secondary-text-color,#727272);font-size:.9rem">${lights.length}</span>
       </div>
       ${rows || '<p style="color:var(--secondary-text-color,#727272)">No Plejd lights found.</p>'}`;
+  }
+
+  _scheduleCoversUpdate() {
+    if (this._coversFrame !== null) return;
+    this._coversFrame = this._scheduleLightsFrame(() => {
+      this._coversFrame = null;
+      this._updateCovers();
+    });
+  }
+
+  _updateCovers() {
+    const el = this.querySelector("#plejd-covers");
+    if (!el) return;
+    const covers = this._covers();
+    const rows = covers
+      .map((s) => {
+        const name = s.attributes.friendly_name || s.entity_id;
+        const canSetPosition = Boolean((s.attributes.supported_features || 0) & COVER_FEATURE_SET_POSITION);
+        const position = s.attributes.current_position;
+        const positionLabel = position != null ? `${position}%` : s.state;
+        const slider = canSetPosition
+          ? `<input type="range" min="0" max="100" value="${position != null ? position : 0}" data-cover-position="${esc(s.entity_id)}" style="flex:1">`
+          : "";
+        return `
+          <div style="padding:10px 4px;border-bottom:1px solid var(--divider-color,#e0e0e0)">
+            <div style="display:flex;align-items:center;gap:12px">
+              <span style="flex:1">${esc(name)}</span>
+              <span style="color:var(--secondary-text-color,#727272)">${esc(positionLabel)}</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;margin-top:8px">
+              <button data-cover-open="${esc(s.entity_id)}" type="button" style="${BTN}">Open</button>
+              <button data-cover-stop="${esc(s.entity_id)}" type="button" style="${BTN};background:var(--secondary-text-color,#727272)">Stop</button>
+              <button data-cover-close="${esc(s.entity_id)}" type="button" style="${BTN}">Close</button>
+              ${slider}
+            </div>
+          </div>`;
+      })
+      .join("");
+    el.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px">
+        <h2 style="font-weight:500;font-size:1.05rem;margin:0">Covers</h2>
+        <span style="color:var(--secondary-text-color,#727272);font-size:.9rem">${covers.length}</span>
+      </div>
+      ${rows || '<p style="color:var(--secondary-text-color,#727272)">No Plejd covers found.</p>'}`;
+    this._wireCovers(el);
+  }
+
+  _wireCovers(el) {
+    el.querySelectorAll("[data-cover-open]").forEach((btn) =>
+      btn.addEventListener("click", () => this._onCoverAction(btn.getAttribute("data-cover-open"), "open_cover")),
+    );
+    el.querySelectorAll("[data-cover-close]").forEach((btn) =>
+      btn.addEventListener("click", () => this._onCoverAction(btn.getAttribute("data-cover-close"), "close_cover")),
+    );
+    el.querySelectorAll("[data-cover-stop]").forEach((btn) =>
+      btn.addEventListener("click", () => this._onCoverAction(btn.getAttribute("data-cover-stop"), "stop_cover")),
+    );
+    // The "change" event (not "input") only fires once the user releases the slider, so a
+    // drag sends a single command instead of flooding the mesh with one per tick.
+    el.querySelectorAll("[data-cover-position]").forEach((input) =>
+      input.addEventListener("change", (e) => {
+        const entityId = e.target.getAttribute("data-cover-position");
+        this._callService("cover", "set_cover_position", {
+          entity_id: entityId,
+          position: Number(e.target.value),
+        }).catch((err) => console.warn(`Plejd panel: set_cover_position failed for ${entityId}`, err));
+      }),
+    );
+  }
+
+  _onCoverAction(entityId, service) {
+    this._callService("cover", service, { entity_id: entityId }).catch((err) =>
+      console.warn(`Plejd panel: ${service} failed for ${entityId}`, err),
+    );
   }
 
   _triggerOptions(deviceId, selected) {
