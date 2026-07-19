@@ -34,6 +34,7 @@ from .const import (
     CONF_RESOURCE_SET_ID,
     CONF_SCENES,
     CONF_SCHEDULES,
+    CONF_SHOW_PANEL,
     CONF_SITE_ID,
     CONF_TRANSPORT,
     DOMAIN,
@@ -226,7 +227,18 @@ class PlejdOptionsFlow(OptionsFlow):
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Entry point: a menu, not tied to any particular device (works with or without a gateway)."""
-        return self.async_show_menu(step_id="init", menu_options=["schedules", "add_device"])
+        return self.async_show_menu(step_id="init", menu_options=["schedules", "dashboard", "add_device"])
+
+    async def async_step_dashboard(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """Show or hide the Plejd dashboard in the sidebar."""
+        if user_input is not None:
+            return self.async_create_entry(
+                title="", data={**self._entry.options, CONF_SHOW_PANEL: user_input[CONF_SHOW_PANEL]}
+            )
+        show = self._entry.options.get(CONF_SHOW_PANEL, True)
+        return self.async_show_form(
+            step_id="dashboard", data_schema=vol.Schema({vol.Required(CONF_SHOW_PANEL, default=show): bool})
+        )
 
     async def async_step_schedules(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         schedules: list[dict] = list(self._entry.options.get(CONF_SCHEDULES, []))
@@ -273,6 +285,7 @@ class PlejdOptionsFlow(OptionsFlow):
                 return self.async_create_entry(
                     title="",
                     data={
+                        **self._entry.options,  # preserve other options (e.g. show_panel)
                         CONF_SCHEDULES: kept,
                         "next_schedule_id": next_id,
                         # Reset a stale gateway-only preference to auto when there's no usable gateway.

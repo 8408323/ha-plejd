@@ -75,6 +75,10 @@ class _FakeBus:
         return lambda: None
 
 
+async def _register_static_paths(configs):
+    return None
+
+
 def _hass():
     h = types.SimpleNamespace(config_entries=_FakeConfigEntries())
     h.services = _FakeServices()
@@ -82,6 +86,8 @@ def _hass():
     h.session = None
     h.ble_devices = {}
     h.service_infos = []
+    h.http = types.SimpleNamespace(async_register_static_paths=_register_static_paths)
+    h.data = {}
     return h
 
 
@@ -380,3 +386,54 @@ async def test_scan_fires_event_with_empty_list_when_no_devices(monkeypatch):
     handler = hass.services._handlers[f"plejd.{SERVICE_SCAN_DEVICES}"]
     await handler(types.SimpleNamespace(data={}))
     assert hass.bus.fired[0] == ("plejd_new_devices_found", {"devices": []})
+
+
+# ── Dashboard panel ───────────────────────────────────────────────────────────
+
+
+async def test_setup_registers_panel_by_default(monkeypatch):
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    _FakeCoordinator.instances.clear()
+    calls = []
+
+    async def _reg(hass):
+        calls.append(hass)
+
+    monkeypatch.setattr(plejd.panel, "async_register_panel", _reg)
+    hass, entry = _hass(), _entry()
+    await async_setup_entry(hass, entry)
+    assert calls == [hass]  # dashboard registered by default
+
+
+async def test_setup_skips_panel_when_disabled(monkeypatch):
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    _FakeCoordinator.instances.clear()
+    calls = []
+
+    async def _reg(hass):
+        calls.append(hass)
+
+    monkeypatch.setattr(plejd.panel, "async_register_panel", _reg)
+    hass, entry = _hass(), _entry()
+    entry.options = {"show_panel": False}
+    await async_setup_entry(hass, entry)
+    assert calls == []  # hidden → not registered
+
+
+async def test_unload_removes_panel(monkeypatch):
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    _FakeCoordinator.instances.clear()
+    monkeypatch.setattr(plejd.panel, "async_register_panel", _noop_async)
+    removed = []
+    monkeypatch.setattr(plejd.panel, "async_unregister_panel", lambda hass: removed.append(hass))
+    hass, entry = _hass(), _entry()
+    unloads: list = []
+    entry.async_on_unload = unloads.append
+    await async_setup_entry(hass, entry)
+    for unload in unloads:
+        unload()
+    assert removed == [hass]  # sidebar entry removed on unload/reload
+
+
+async def _noop_async(hass):
+    return None

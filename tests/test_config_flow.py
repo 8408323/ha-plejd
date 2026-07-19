@@ -421,7 +421,7 @@ async def test_options_no_free_slots_errors():
 async def test_options_init_shows_menu():
     res = await _opt_flow().async_step_init()
     assert res["type"] == "menu" and res["step_id"] == "init"
-    assert res["menu_options"] == ["schedules", "add_device"]
+    assert res["menu_options"] == ["schedules", "dashboard", "add_device"]
 
 
 # ── Options flow: add a device ─────────────────────────────────────────────────
@@ -521,3 +521,35 @@ async def test_add_device_details_shows_error_on_failure(monkeypatch):
 
     assert res["errors"] == {"base": "add_device_failed"}
     assert res["description_placeholders"]["error"] == "Plejd device not found in Bluetooth range"
+
+
+# ── Options: dashboard show/hide ──────────────────────────────────────────────
+
+
+async def test_options_init_menu_includes_dashboard():
+    res = await _opt_flow().async_step_init()
+    assert "dashboard" in res["menu_options"]
+
+
+async def test_options_dashboard_shows_toggle():
+    res = await _opt_flow(options={"show_panel": True}).async_step_dashboard()
+    assert res["type"] == "form" and res["step_id"] == "dashboard"
+    assert "show_panel" in _schema_keys(res)
+
+
+async def test_options_dashboard_saves_and_preserves_other_options():
+    res = await _opt_flow(
+        options={"schedules": [{"slot": 0}], "transport": "gateway", "show_panel": True}
+    ).async_step_dashboard({"show_panel": False})
+    assert res["type"] == "create_entry"
+    assert res["data"]["show_panel"] is False
+    assert res["data"]["schedules"] == [{"slot": 0}]  # other options preserved
+    assert res["data"]["transport"] == "gateway"
+
+
+async def test_options_schedules_preserves_show_panel():
+    res = await _opt_flow(options={"show_panel": False, "schedules": []}).async_step_schedules(
+        {"name": "", "delete": []}
+    )
+    assert res["type"] == "create_entry"
+    assert res["data"]["show_panel"] is False  # kept through an unrelated (schedules) save

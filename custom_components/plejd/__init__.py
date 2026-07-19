@@ -11,8 +11,9 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry
 
+from . import panel
 from .add_device import async_add_device
-from .const import DOMAIN
+from .const import CONF_SHOW_PANEL, DOMAIN
 from .coordinator import PlejdCoordinator
 from .discovery import async_bluetooth_available, async_scan_unprovisioned
 
@@ -98,6 +99,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     entry.async_on_unload(lambda: hass.services.async_remove(DOMAIN, SERVICE_ADD_DEVICE))
     hass.services.async_register(DOMAIN, SERVICE_SCAN_DEVICES, _async_handle_scan_devices)
     entry.async_on_unload(lambda: hass.services.async_remove(DOMAIN, SERVICE_SCAN_DEVICES))
+
+    # Plejd dashboard in the sidebar (toggle via the integration options).
+    if entry.options.get(CONF_SHOW_PANEL, True):
+        await panel.async_register_panel(hass)
+    entry.async_on_unload(lambda: panel.async_unregister_panel(hass))
     return True
 
 
