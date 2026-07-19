@@ -63,7 +63,7 @@ class PlejdPanel extends HTMLElement {
 
   connectedCallback() {
     if (this._hass) {
-      this._renderShell();
+      if (!this.querySelector("#plejd-lights")) this._renderShell();
       this._updateLights();
       this._renderEditor();
     }
@@ -375,6 +375,7 @@ class PlejdPanel extends HTMLElement {
   }
 
   _onSave(el) {
+    if (this._busy) return;
     this._readForm(el);
     this._error = this._notice = "";
 
@@ -395,7 +396,8 @@ class PlejdPanel extends HTMLElement {
   }
 
   _onDelete(id) {
-    this._save(this._bindings.filter((b) => b.id !== id));
+    if (this._busy) return;
+    this._save(this._bindings.filter((b) => String(b.id) !== String(id)));
   }
 
   _fail(message) {
