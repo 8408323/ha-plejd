@@ -21,6 +21,17 @@ All notable changes to this project are documented here. The format follows
   a `buttons` key (grouped view, custom override > built-in profile > generic)
   alongside the unchanged `triggers` key. Backend-only; frontend consumption is a
   follow-up.
+- **Remote bindings: any trigger → any action.** Beyond hold-to-dim, a binding
+  can now map *any* remote trigger (any button, short/long press, hold,
+  release, click, …) to an instantaneous action on its target: **toggle**,
+  **turn on**, **turn off**, **activate a scene**, or **call any service**
+  (an escape hatch that merges the target in). Stored as a `presses` list on the
+  binding and validated before saving. The dashboard editor's "Add a binding"
+  form gained a **Press actions** section: add any number of trigger → action
+  rows (reusing the same remote's device triggers as the dim up/down/release
+  pickers), with conditional fields per action type and client-side validation
+  before saving. The bindings list also now shows a "N press action(s)"
+  summary alongside each binding's up/down/stop.
 
 ## [0.10.0] - 2026-07-19
 
