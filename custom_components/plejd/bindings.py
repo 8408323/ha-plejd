@@ -73,10 +73,20 @@ PRESS_ACTIONS = ("toggle", "on", "off", "scene", "service")
 
 def _validate_presses(binding: dict) -> None:
     """Reject a binding whose press mappings are malformed (raised before persisting)."""
-    for press in binding.get("presses") or []:
+    presses = binding.get("presses")
+    if presses is None:
+        return
+    if not isinstance(presses, list):
+        raise InvalidDimBinding("binding presses must be a list")
+    for press in presses:
+        if not isinstance(press, dict):
+            raise InvalidDimBinding("each press entry must be a mapping")
         if not press.get("trigger"):
             raise InvalidDimBinding("binding press has no trigger")
-        action = press.get("action") or {}
+        action = press.get("action")
+        if action is not None and not isinstance(action, dict):
+            raise InvalidDimBinding("press action must be a mapping")
+        action = action or {}
         atype = action.get("type")
         if atype not in PRESS_ACTIONS:
             raise InvalidDimBinding(f"unknown press action type: {atype!r}")
@@ -261,6 +271,7 @@ class PlejdDimBindings:
             # Load-path safety net for legacy/hand-edited storage (async_replace rejects
             # these before saving): a hold with no release would ramp to DIM_MAX_DURATION.
             raise InvalidDimBinding(_ERR_STOPLESS_BINDING)
+        _validate_presses(binding)  # load-path guard: malformed presses log + skip this binding
         plejd_light = self._plejd_light(binding)
         # Attach atomically: if any trigger fails, roll back the ones already attached for
         # this binding, so we never leave a ramp that can start but not stop.

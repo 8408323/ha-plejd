@@ -505,9 +505,9 @@ async def test_start_action_noops_after_close(monkeypatch):
     pb._ramp = _SpyRamp()
     await pb.async_load()
     start_action = captured[0][1]  # the "up" start action
-    pb._closed = True  # integration unloaded
+    pb.shutdown()
     await start_action()
-    assert pb._ramp.calls == []  # a trigger firing after teardown starts no ramp
+    assert not any(c[0] == "start" for c in pb._ramp.calls)  # a trigger firing after teardown starts no ramp
 
 
 async def test_replace_cancels_live_ramps(monkeypatch):
@@ -711,7 +711,7 @@ async def test_press_action_noops_after_close(monkeypatch):
             "presses": [{"trigger": {"x": 1}, "action": {"type": "toggle"}}],
         },
     )
-    pb._closed = True
+    pb.shutdown()
     await captured[0][1]()
     assert hass.services.calls == []  # a trigger firing after teardown runs nothing
 
@@ -725,7 +725,28 @@ async def test_replace_rejects_malformed_presses(monkeypatch):
         {"presses": [{"trigger": {"x": 1}, "action": {"type": "bogus"}}]},  # unknown type
         {"presses": [{"trigger": {"x": 1}, "action": {"type": "scene"}}]},  # scene w/o entity_id
         {"presses": [{"trigger": {"x": 1}, "action": {"type": "service", "domain": "light"}}]},  # no service
+        {"presses": "not-a-list"},  # wrong type for presses
+        {"presses": [{"trigger": {"x": 1}, "action": "not-a-dict"}]},  # wrong type for action
+        {"presses": ["not-a-dict"]},  # wrong type for a press entry
     ]
     for binding in bad:
         with pytest.raises(ValueError):
             await pb.async_replace([{"id": "b1", "targets": {"entity_id": ["light.a"]}, **binding}])
+
+
+async def test_load_skips_binding_with_malformed_presses(monkeypatch):
+    captured = []
+    monkeypatch.setattr(bindings_mod, "async_initialize_triggers", _spy_triggers(captured))
+    logged = []
+    monkeypatch.setattr(bindings_mod._LOGGER, "warning", lambda *a, **k: logged.append(a[0] % a[1:] if len(a) > 1 else a[0]))
+    hass = _hass()
+    hass.data[("store", bindings_mod.STORE_KEY)] = [
+        {"id": "b1", "targets": {"entity_id": ["light.a"]}, "presses": "not-a-list"},
+        {"id": "b2", "targets": {"entity_id": ["light.b"]}, "up": {"x": 1}, "stop": {"s": 1}},
+    ]
+    pb = PlejdDimBindings(hass)
+    await pb.async_load()
+    # b1 has malformed presses — logged as a warning, no triggers attached for it
+    assert any("b1" in w for w in logged)
+    # b2 is well-formed and attached normally (up + stop = 2 triggers)
+    assert len(captured) == 2
