@@ -1,7 +1,8 @@
 // Plejd dashboard — a custom Home Assistant sidebar panel (not a Lovelace view).
 // Home Assistant sets `hass`, `narrow`, `route`, and `panel` properties on this element.
-// It lists the site's Plejd lights and hosts the remote → light dim-binding editor:
-// map a dimmer remote's hold/release device triggers to smooth dimming of a light or area.
+// It lists the site's Plejd lights (tap to toggle, drag to dim) and hosts the remote →
+// light dim-binding editor: map a dimmer remote's hold/release device triggers to smooth
+// dimming of a light or area.
 
 const CARD = `
   background: var(--card-background-color, #fff);
@@ -59,6 +60,7 @@ class PlejdPanel extends HTMLElement {
     this._notice = "";
     this._busy = false;
     this._lightsFrame = null;
+    this._draggingEntity = null; // entity_id of a brightness slider mid-drag, else null
     const useAnimationFrame = Boolean(
       globalThis.requestAnimationFrame && globalThis.cancelAnimationFrame,
     );
@@ -192,6 +194,22 @@ class PlejdPanel extends HTMLElement {
     }
   }
 
+  async _toggleLight(entityId, turnOn) {
+    try {
+      await this._hass.callService("light", turnOn ? "turn_on" : "turn_off", { entity_id: entityId });
+    } catch (err) {
+      console.warn("Plejd panel: failed to toggle light", entityId, err);
+    }
+  }
+
+  async _setLightBrightness(entityId, pct) {
+    try {
+      await this._hass.callService("light", "turn_on", { entity_id: entityId, brightness_pct: pct });
+    } catch (err) {
+      console.warn("Plejd panel: failed to set brightness", entityId, err);
+    }
+  }
+
   _lights() {
     const hass = this._hass;
     if (!hass) return [];
@@ -309,19 +327,33 @@ class PlejdPanel extends HTMLElement {
   _updateLights() {
     const el = this.querySelector("#plejd-lights");
     if (!el) return;
+    // A slider mid-drag owns its own DOM node (native pointer capture); replacing the
+    // whole list via innerHTML would kill the drag. Skip this refresh and pick it back
+    // up once the drag ends and the next hass update schedules one.
+    if (this._draggingEntity) return;
     const lights = this._lights();
     const rows = lights
       .map((s) => {
         const name = s.attributes.friendly_name || s.entity_id;
         const on = s.state === "on";
         const bri = s.attributes.brightness;
-        const level = on && bri != null ? `${Math.round((bri / 255) * 100)}%` : on ? "on" : "off";
+        const pct = bri != null ? Math.round((bri / 255) * 100) : 100;
+        const level = on && bri != null ? `${pct}%` : on ? "on" : "off";
         const dot = on ? "var(--state-light-active-color, #fdd835)" : "var(--disabled-text-color, #9e9e9e)";
+        const dimmable = Array.isArray(s.attributes.supported_color_modes)
+          ? s.attributes.supported_color_modes.includes("brightness")
+          : bri != null;
+        const slider = dimmable
+          ? `<input type="range" min="1" max="100" value="${pct}" data-brightness="${esc(s.entity_id)}" style="width:100%;margin-top:6px;accent-color:var(--primary-color,#03a9f4)">`
+          : "";
         return `
-          <div style="display:flex;align-items:center;gap:12px;padding:10px 4px;border-bottom:1px solid var(--divider-color,#e0e0e0)">
-            <span style="width:10px;height:10px;border-radius:50%;background:${dot};flex:none"></span>
-            <span style="flex:1">${esc(name)}</span>
-            <span style="color:var(--secondary-text-color,#727272)">${level}</span>
+          <div style="padding:10px 4px;border-bottom:1px solid var(--divider-color,#e0e0e0)">
+            <div style="display:flex;align-items:center;gap:12px">
+              <span style="width:10px;height:10px;border-radius:50%;background:${dot};flex:none"></span>
+              <span data-toggle="${esc(s.entity_id)}" style="flex:1;cursor:pointer">${esc(name)}</span>
+              <span data-level="${esc(s.entity_id)}" style="color:var(--secondary-text-color,#727272)">${level}</span>
+            </div>
+            ${slider}
           </div>`;
       })
       .join("");
@@ -331,6 +363,32 @@ class PlejdPanel extends HTMLElement {
         <span style="color:var(--secondary-text-color,#727272);font-size:.9rem">${lights.length}</span>
       </div>
       ${rows || '<p style="color:var(--secondary-text-color,#727272)">No Plejd lights found.</p>'}`;
+    this._wireLights(el);
+  }
+
+  _wireLights(el) {
+    el.querySelectorAll("[data-toggle]").forEach((span) => {
+      const entityId = span.getAttribute("data-toggle");
+      span.addEventListener("click", () => {
+        const isOn = this._hass.states[entityId]?.state === "on";
+        this._toggleLight(entityId, !isOn);
+      });
+    });
+    el.querySelectorAll("[data-brightness]").forEach((slider) => {
+      const entityId = slider.getAttribute("data-brightness");
+      // 'input' fires on every drag tick (live label only, no command); 'change' fires
+      // once on release/keystroke — that's when we actually send brightness_pct, so
+      // dragging never floods the mesh with commands.
+      slider.addEventListener("input", () => {
+        this._draggingEntity = entityId;
+        const levelEl = el.querySelector(`[data-level="${entityId}"]`);
+        if (levelEl) levelEl.textContent = `${slider.value}%`;
+      });
+      slider.addEventListener("change", () => {
+        this._draggingEntity = null;
+        this._setLightBrightness(entityId, Number(slider.value));
+      });
+    });
   }
 
   _triggerOptions(deviceId, selected) {

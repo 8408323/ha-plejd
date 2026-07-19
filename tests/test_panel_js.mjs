@@ -145,7 +145,7 @@ test("disconnect cancels a queued setTimeout fallback when requestAnimationFrame
 test("_updateLights renders the current Plejd lights list", () => {
   const PanelClass = loadPanelClass();
   const panel = new PanelClass();
-  const lights = { innerHTML: "" };
+  const lights = { innerHTML: "", querySelector: () => null, querySelectorAll: () => [] };
 
   panel.querySelector = (selector) => (selector === "#plejd-lights" ? lights : null);
   panel._hass = {
@@ -180,6 +180,175 @@ test("_updateLights renders the current Plejd lights list", () => {
   assert.match(lights.innerHTML, /50%/);
   assert.match(lights.innerHTML, /Patio/);
   assert.doesNotMatch(lights.innerHTML, /Other vendor/);
+});
+
+test("_updateLights renders a brightness slider only for dimmable lights", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const lights = { innerHTML: "", querySelector: () => null, querySelectorAll: () => [] };
+
+  panel.querySelector = (selector) => (selector === "#plejd-lights" ? lights : null);
+  panel._hass = {
+    states: {
+      "light.kitchen": {
+        entity_id: "light.kitchen",
+        state: "on",
+        attributes: { friendly_name: "Kitchen", brightness: 128, supported_color_modes: ["brightness"] },
+      },
+      "light.hallway": {
+        entity_id: "light.hallway",
+        state: "on",
+        attributes: { friendly_name: "Hallway", supported_color_modes: ["onoff"] },
+      },
+    },
+    entities: {
+      "light.kitchen": { platform: "plejd" },
+      "light.hallway": { platform: "plejd" },
+    },
+  };
+
+  panel._updateLights();
+
+  assert.match(lights.innerHTML, /data-brightness="light\.kitchen"/);
+  assert.doesNotMatch(lights.innerHTML, /data-brightness="light\.hallway"/);
+});
+
+test("_updateLights skips rebuilding the list while a slider is mid-drag", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const lights = { innerHTML: "unchanged", querySelector: () => null, querySelectorAll: () => [] };
+
+  panel.querySelector = (selector) => (selector === "#plejd-lights" ? lights : null);
+  panel._hass = { states: {}, entities: {} };
+  panel._draggingEntity = "light.kitchen";
+
+  panel._updateLights();
+
+  assert.equal(lights.innerHTML, "unchanged");
+});
+
+test("clicking a light row's name calls light.turn_off when the light is on", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const calls = [];
+  panel._hass = {
+    states: { "light.kitchen": { state: "on" } },
+    callService: (domain, service, data) => {
+      calls.push({ domain, service, data });
+      return Promise.resolve();
+    },
+  };
+
+  const listeners = {};
+  const nameSpan = {
+    getAttribute: (name) => (name === "data-toggle" ? "light.kitchen" : null),
+    addEventListener: (ev, fn) => {
+      listeners[ev] = fn;
+    },
+  };
+  const el = { querySelectorAll: (sel) => (sel === "[data-toggle]" ? [nameSpan] : []) };
+
+  panel._wireLights(el);
+  listeners.click();
+
+  assert.equal(calls.length, 1);
+  assert.deepEqual(plain(calls[0]), { domain: "light", service: "turn_off", data: { entity_id: "light.kitchen" } });
+});
+
+test("clicking a light row's name calls light.turn_on when the light is off", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const calls = [];
+  panel._hass = {
+    states: { "light.kitchen": { state: "off" } },
+    callService: (domain, service, data) => {
+      calls.push({ domain, service, data });
+      return Promise.resolve();
+    },
+  };
+
+  const listeners = {};
+  const nameSpan = {
+    getAttribute: (name) => (name === "data-toggle" ? "light.kitchen" : null),
+    addEventListener: (ev, fn) => {
+      listeners[ev] = fn;
+    },
+  };
+  const el = { querySelectorAll: (sel) => (sel === "[data-toggle]" ? [nameSpan] : []) };
+
+  panel._wireLights(el);
+  listeners.click();
+
+  assert.equal(calls.length, 1);
+  assert.deepEqual(plain(calls[0]), { domain: "light", service: "turn_on", data: { entity_id: "light.kitchen" } });
+});
+
+test("dragging a brightness slider updates the live label without calling a service, and release commits brightness_pct once", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const calls = [];
+  panel._hass = {
+    states: {},
+    callService: (domain, service, data) => {
+      calls.push({ domain, service, data });
+      return Promise.resolve();
+    },
+  };
+
+  const listeners = {};
+  const levelSpan = { textContent: "40%" };
+  const slider = {
+    value: "40",
+    getAttribute: (name) => (name === "data-brightness" ? "light.kitchen" : null),
+    addEventListener: (ev, fn) => {
+      listeners[ev] = fn;
+    },
+  };
+  const el = {
+    querySelectorAll: (sel) => (sel === "[data-brightness]" ? [slider] : []),
+    querySelector: (sel) => (sel === '[data-level="light.kitchen"]' ? levelSpan : null),
+  };
+
+  panel._wireLights(el);
+
+  slider.value = "72";
+  listeners.input();
+
+  assert.equal(levelSpan.textContent, "72%");
+  assert.equal(calls.length, 0); // dragging never sends a command
+  assert.equal(panel._draggingEntity, "light.kitchen");
+
+  listeners.change();
+
+  assert.equal(calls.length, 1);
+  assert.deepEqual(plain(calls[0]), {
+    domain: "light",
+    service: "turn_on",
+    data: { entity_id: "light.kitchen", brightness_pct: 72 },
+  });
+  assert.equal(panel._draggingEntity, null);
+});
+
+test("a failed toggle service call is caught and logged, not thrown", async () => {
+  const warnings = [];
+  const PanelClass = loadPanelClass({ console: { ...console, warn: (...args) => warnings.push(args) } });
+  const panel = new PanelClass();
+  panel._hass = { states: { "light.kitchen": { state: "off" } }, callService: () => Promise.reject(new Error("boom")) };
+
+  await panel._toggleLight("light.kitchen", true);
+
+  assert.equal(warnings.length, 1);
+});
+
+test("a failed brightness service call is caught and logged, not thrown", async () => {
+  const warnings = [];
+  const PanelClass = loadPanelClass({ console: { ...console, warn: (...args) => warnings.push(args) } });
+  const panel = new PanelClass();
+  panel._hass = { states: {}, callService: () => Promise.reject(new Error("boom")) };
+
+  await panel._setLightBrightness("light.kitchen", 50);
+
+  assert.equal(warnings.length, 1);
 });
 
 test("deleting a binding preserves an in-progress add form", async () => {
