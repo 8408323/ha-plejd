@@ -467,6 +467,22 @@ except ImportError:
     _dr.async_get = _dr_async_get  # type: ignore[attr-defined]
     sys.modules.setdefault("homeassistant.helpers.device_registry", _dr)
 
+    _er = types.ModuleType("homeassistant.helpers.entity_registry")
+
+    class _EntityRegistry:
+        def __init__(self, entities=None):
+            self._entities = entities or {}
+
+        def async_get(self, entity_id):
+            return self._entities.get(entity_id)
+
+    def _er_async_get(hass):
+        return getattr(hass, "entity_registry", None) or _EntityRegistry()
+
+    _er.async_get = _er_async_get  # type: ignore[attr-defined]
+    _er.EntityRegistry = _EntityRegistry  # type: ignore[attr-defined]
+    sys.modules.setdefault("homeassistant.helpers.entity_registry", _er)
+
     _ep = types.ModuleType("homeassistant.helpers.entity_platform")
     _ep.AddEntitiesCallback = object  # type: ignore[attr-defined]
 
@@ -503,3 +519,56 @@ except ImportError:
 
     _http.StaticPathConfig = _StaticPathConfig  # type: ignore[attr-defined]
     sys.modules.setdefault("homeassistant.components.http", _http)
+
+    _storage = types.ModuleType("homeassistant.helpers.storage")
+
+    class _Store:
+        def __init__(self, hass, version, key):
+            self._hass = hass
+            self._key = ("store", key)
+
+        async def async_load(self):
+            return (getattr(self._hass, "data", None) or {}).get(self._key)
+
+        async def async_save(self, data):
+            self._hass.data[self._key] = data
+
+    _storage.Store = _Store  # type: ignore[attr-defined]
+    sys.modules.setdefault("homeassistant.helpers.storage", _storage)
+
+    _trigger = types.ModuleType("homeassistant.helpers.trigger")
+
+    async def _async_initialize_triggers(hass, trigger_config, action, domain, name, log_cb, **kwargs):
+        return lambda: None  # tests monkeypatch this to capture (config, action)
+
+    _trigger.async_initialize_triggers = _async_initialize_triggers  # type: ignore[attr-defined]
+    sys.modules.setdefault("homeassistant.helpers.trigger", _trigger)
+
+    _wsapi = types.ModuleType("homeassistant.components.websocket_api")
+
+    def _identity_decorator(arg=None):
+        # Usable both as @require_admin/@async_response and as @websocket_command({...}).
+        if callable(arg):
+            return arg
+        return lambda func: func
+
+    def _ws_async_register_command(hass, func):
+        hass.data.setdefault("ws_commands", []).append(func)
+
+    _wsapi.require_admin = _identity_decorator  # type: ignore[attr-defined]
+    _wsapi.async_response = _identity_decorator  # type: ignore[attr-defined]
+    _wsapi.websocket_command = _identity_decorator  # type: ignore[attr-defined]
+    _wsapi.async_register_command = _ws_async_register_command  # type: ignore[attr-defined]
+    sys.modules.setdefault("homeassistant.components.websocket_api", _wsapi)
+
+    _devauto = types.ModuleType("homeassistant.components.device_automation")
+
+    class _DeviceAutomationType:
+        TRIGGER = "trigger"
+
+    async def _async_get_device_automations(hass, automation_type, device_ids):
+        return getattr(hass, "device_automations", {})
+
+    _devauto.DeviceAutomationType = _DeviceAutomationType  # type: ignore[attr-defined]
+    _devauto.async_get_device_automations = _async_get_device_automations  # type: ignore[attr-defined]
+    sys.modules.setdefault("homeassistant.components.device_automation", _devauto)

@@ -11,11 +11,14 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry
 
-from . import panel
+from . import dim_binding_ws, panel
 from .add_device import async_add_device
+from .bindings import PlejdDimBindings
 from .const import CONF_SHOW_PANEL, DOMAIN
 from .coordinator import PlejdCoordinator
 from .discovery import async_bluetooth_available, async_scan_unprovisioned
+
+_WS_REGISTERED = f"{DOMAIN}_ws_registered"
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -109,6 +112,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     entry.async_on_unload(lambda: hass.services.async_remove(DOMAIN, SERVICE_ADD_DEVICE))
     hass.services.async_register(DOMAIN, SERVICE_SCAN_DEVICES, _async_handle_scan_devices)
     entry.async_on_unload(lambda: hass.services.async_remove(DOMAIN, SERVICE_SCAN_DEVICES))
+
+    # Remote → light dim bindings (managed from the dashboard via the WebSocket API).
+    # Optional, like the panel: a storage error must not stop the mesh/lights loading.
+    dim_bindings = PlejdDimBindings(hass)
+    try:
+        await dim_bindings.async_load()
+    except Exception:  # noqa: BLE001 - bindings are optional; continue with an empty manager
+        _LOGGER.warning("Plejd: could not load dim bindings; continuing without them", exc_info=True)
+    hass.data[dim_binding_ws.DATA_BINDINGS] = dim_bindings
+    entry.async_on_unload(lambda: hass.data.pop(dim_binding_ws.DATA_BINDINGS, None))
+    entry.async_on_unload(dim_bindings.shutdown)
+    if not hass.data.get(_WS_REGISTERED):
+        dim_binding_ws.async_register(hass)  # hass-global commands; register once
+        hass.data[_WS_REGISTERED] = True
     return True
 
 
