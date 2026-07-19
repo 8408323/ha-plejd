@@ -123,6 +123,7 @@ TIME_EVENT_RESULT_SCENE = 0
 TIME_EVENT_REP_FOREVER = 0xFFFFFFFF
 WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 CONF_SCHEDULES = "schedules"  # entry.options: list of time-event schedule dicts
+CONF_SHOW_PANEL = "show_panel"  # entry.options: show the Plejd dashboard in the sidebar (default True)
 CMD_INPUT_STATE_AND_LEVEL = 0x0195  # state notification: channel, state, level[2]
 CMD_SYSTEM_TIME = 0x001B
 CMD_DEVICE_TYPE = 0x0000
