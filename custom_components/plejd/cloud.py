@@ -505,15 +505,19 @@ def parse_site(site: dict) -> PlejdCloudSite:
     # Rooms carry a group mesh address (roomAddress: roomId -> address); outputGroups maps
     # each output to the group addresses it belongs to. Dimming a room = one 0x0098 to its
     # group address (every member responds at once), the way the app controls a room.
-    room_address = site.get("roomAddress") or {}
-    output_groups = site.get("outputGroups") or {}
+    room_address = site.get("roomAddress")
+    room_address = room_address if isinstance(room_address, dict) else {}
+    output_groups = site.get("outputGroups")
+    output_groups = output_groups if isinstance(output_groups, dict) else {}
     room_titles = {r.get("roomId"): (r.get("title") or "").strip() for r in site.get("rooms") or []}
     category_by_address = {d.address: d.category for d in devices if d.address is not None}
     dimmable_by_address = {d.address: d.dimmable for d in devices if d.address is not None}
     members_by_group: dict[int, list[int]] = {}
     for device_id, out_map in output_groups.items():
+        if not isinstance(out_map, dict):
+            continue  # untrusted cloud data: skip a malformed per-device group-membership map
         dev_out_addr = output_address.get(device_id) or {}
-        for out_idx, groups in (out_map or {}).items():
+        for out_idx, groups in out_map.items():
             out_addr = dev_out_addr.get(str(out_idx))
             if out_addr is None:
                 continue

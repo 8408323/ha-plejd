@@ -189,8 +189,8 @@ async def test_set_group_output_writes_group_command_and_reflects_member_state(m
     assert cmd.address == 14
     # ...and each member's own state is reflected immediately, without waiting on its
     # own notification (a group command's echo is keyed by the group address, not them)
-    assert c.state_for(5).on is True and c.state_for(5).level == 120
-    assert c.state_for(6).on is True and c.state_for(6).level == 120
+    assert c.state_for(5).on is True and c.state_for(5).level == 120 and c.state_for(5).output == 5
+    assert c.state_for(6).on is True and c.state_for(6).level == 120 and c.state_for(6).output == 6
     assert seen == [1]  # listeners notified of the optimistic update
 
 
@@ -551,8 +551,8 @@ async def test_gateway_set_group_output_reflects_member_state(monkeypatch):
     await c.async_start()
     await c.async_set_group_output(14, True, 90, [5, 6])
     assert c._gateway.writes[-1] == set_group_state_and_level(14, True, 90)
-    assert c.state_for(5).on is True and c.state_for(5).level == 90
-    assert c.state_for(6).on is True and c.state_for(6).level == 90
+    assert c.state_for(5).on is True and c.state_for(5).level == 90 and c.state_for(5).output == 5
+    assert c.state_for(6).on is True and c.state_for(6).level == 90 and c.state_for(6).output == 6
 
 
 async def test_gateway_connect_starts_fault_polling(monkeypatch):

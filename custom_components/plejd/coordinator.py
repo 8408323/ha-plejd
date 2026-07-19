@@ -739,9 +739,8 @@ class PlejdCoordinator:
         each one separately reports its own change over the mesh/gateway.
         """
         await self.async_set_output(address, on, level)
-        state = OutputState(output=0, on=on, level=level)
         for member in member_addresses:
-            self._record_output_state(member, state)
+            self._record_output_state(member, OutputState(output=member, on=on, level=level))
         self._notify_outputs()
 
     def _record_output_state(self, address: int, state: OutputState) -> None:

@@ -622,6 +622,22 @@ def test_parse_site_skips_non_list_output_group_value():
     assert rooms == []  # the malformed membership yields no members -> room dropped
 
 
+def test_parse_site_tolerates_non_dict_room_and_group_fields():
+    site = {**_SITE, "roomAddress": ["not", "a", "dict"], "outputGroups": ["also", "not", "a", "dict"]}
+    assert parse_site(site).rooms == []  # both malformed top-level fields are treated as absent
+
+
+def test_parse_site_skips_non_dict_output_group_membership_map():
+    site = {
+        **_SITE,
+        "roomAddress": {"r1": 14},
+        # d1's whole membership map is a scalar, not {outputIdx: [groups]} -> skipped
+        # entirely instead of raising on a bad .items() call.
+        "outputGroups": {"d1": "not-a-dict"},
+    }
+    assert parse_site(site).rooms == []
+
+
 def test_parse_site_room_not_dimmable_when_no_member_is_dimmable():
     site = {
         **_SITE,
