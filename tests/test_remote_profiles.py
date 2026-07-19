@@ -73,6 +73,24 @@ def test_group_generic_falls_back_to_generic_label_when_type_and_platform_missin
     assert groups[0]["label"] == "Trigger"
 
 
+def test_group_generic_prefers_subtype_label_when_type_is_the_zigbee2mqtt_action_placeholder():
+    # Zigbee2MQTT device triggers all use type="action"; the real value is in subtype —
+    # every trigger must not collapse to the same "Action" label.
+    triggers = [
+        {"type": "action", "subtype": "on"},
+        {"type": "action", "subtype": "brightness_move_up"},
+    ]
+    groups = group_generic(triggers)
+    labels = {t["label"] for group in groups for t in group["triggers"]}
+    assert labels == {"On", "Brightness Move Up"}
+
+
+def test_group_generic_action_type_with_no_subtype_falls_back_to_type_label():
+    triggers = [{"type": "action"}]
+    groups = group_generic(triggers)
+    assert groups[0]["label"] == "Action"
+
+
 def test_group_generic_every_trigger_is_represented_exactly_once():
     triggers = [
         {"type": "a", "subtype": "x"},
@@ -117,6 +135,18 @@ def test_match_builtin_profile_unknown_device_returns_none():
 
 def test_match_builtin_profile_none_manufacturer_and_model():
     assert match_builtin_profile(None, None) is None
+
+
+def test_match_builtin_profile_falls_back_to_model_id_when_model_does_not_match():
+    # Some integrations report the human-readable name in `model` (unrecognized here) and
+    # the vendor product code in the separate `model_id` field.
+    assert match_builtin_profile("IKEA", "some unrelated friendly name", model_id="E1743") is not None
+
+
+def test_match_builtin_profile_prefers_model_over_model_id_when_both_present():
+    profile = match_builtin_profile("IKEA", "TRADFRI on/off switch", model_id="not-a-real-model-id")
+    assert profile is not None
+    assert profile["device_type"] == "IKEA TRADFRI on/off switch"
 
 
 # ── build_buttons_view precedence and matching ──────────────────────────────
@@ -179,6 +209,13 @@ def test_build_buttons_view_no_manufacturer_or_model_falls_back_to_generic():
     assert view["source"] == "generic"
 
 
+def test_build_buttons_view_matches_via_model_id():
+    triggers = [{"type": "action", "subtype": "on"}]
+    view = build_buttons_view(triggers, manufacturer="IKEA", model="unrecognized", model_id="E1743")
+    assert view["source"] == "profile"
+    assert view["device_type"] == "IKEA TRADFRI on/off switch"
+
+
 # ── PlejdRemoteProfiles (Store-backed custom overrides) ─────────────────────
 
 
@@ -235,6 +272,7 @@ async def test_async_delete_nonexistent_device_is_a_noop():
         {"buttons": []},
         {"buttons": "not-a-list"},
         {"buttons": [{"triggers": [{"type": "on"}]}]},  # missing name
+        {"buttons": [{"name": 42, "triggers": [{"type": "on"}]}]},  # non-string name
         {"buttons": [{"name": "b1", "triggers": []}]},  # empty triggers
         {"buttons": [{"name": "b1", "triggers": "not-a-list"}]},
         {"buttons": [{"name": "b1", "triggers": [{"subtype": "x"}]}]},  # trigger missing type

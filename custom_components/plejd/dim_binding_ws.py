@@ -80,17 +80,23 @@ async def ws_device_triggers(hass: HomeAssistant, connection, msg) -> None:
         connection.send_error(msg["id"], "triggers_failed", "Could not load device triggers")
         return
     device_triggers = triggers.get(device_id, [])
-    manufacturer, model = _device_manufacturer_model(hass, device_id)
+    manufacturer, model, model_id = _device_manufacturer_model(hass, device_id)
     remote_profiles = hass.data.get(DATA_REMOTE_PROFILES)
     custom_profile = remote_profiles.get(device_id) if remote_profiles is not None else None
-    buttons = build_buttons_view(device_triggers, manufacturer=manufacturer, model=model, custom_profile=custom_profile)
+    buttons = build_buttons_view(
+        device_triggers, manufacturer=manufacturer, model=model, model_id=model_id, custom_profile=custom_profile
+    )
     connection.send_result(msg["id"], {"triggers": device_triggers, "buttons": buttons})
 
 
-def _device_manufacturer_model(hass: HomeAssistant, device_id: str) -> tuple[str | None, str | None]:
+def _device_manufacturer_model(hass: HomeAssistant, device_id: str) -> tuple[str | None, str | None, str | None]:
     registry = dr.async_get(hass)
     device = registry.async_get(device_id) if registry is not None else None
-    return (device.manufacturer, device.model) if device is not None else (None, None)
+    if device is None:
+        return None, None, None
+    # model_id (the vendor product code, distinct from the human-readable model name) was
+    # added to HA's device registry later — read it defensively for older HA versions.
+    return device.manufacturer, device.model, getattr(device, "model_id", None)
 
 
 def async_register(hass: HomeAssistant) -> None:

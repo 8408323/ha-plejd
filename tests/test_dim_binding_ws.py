@@ -90,9 +90,11 @@ async def test_device_triggers_empty_for_unknown_device():
 
 
 class _Device:
-    def __init__(self, manufacturer, model):
+    def __init__(self, manufacturer, model, model_id=None):
         self.manufacturer = manufacturer
         self.model = model
+        if model_id is not None:
+            self.model_id = model_id
 
 
 class _Registry:
@@ -125,6 +127,19 @@ async def test_device_triggers_buttons_uses_builtin_profile_from_device_registry
     trigs = [{"type": "action", "subtype": "on"}, {"type": "action", "subtype": "off"}]
     hass = _hass(device_automations={"dev1": trigs})
     hass.device_registry = _Registry(_Device("IKEA", "E1743"))
+    conn = _Conn()
+    await dim_binding_ws.ws_device_triggers(hass, conn, {"id": 5, "device_id": "dev1"})
+    _, payload = conn.result
+    assert payload["buttons"]["source"] == "profile"
+    assert payload["buttons"]["device_type"] == "IKEA TRADFRI on/off switch"
+
+
+async def test_device_triggers_buttons_matches_builtin_profile_via_model_id():
+    # Some integrations report the vendor product code in the registry's separate
+    # model_id field rather than in model itself.
+    trigs = [{"type": "action", "subtype": "on"}]
+    hass = _hass(device_automations={"dev1": trigs})
+    hass.device_registry = _Registry(_Device("IKEA", "unrecognized friendly name", model_id="E1743"))
     conn = _Conn()
     await dim_binding_ws.ws_device_triggers(hass, conn, {"id": 5, "device_id": "dev1"})
     _, payload = conn.result

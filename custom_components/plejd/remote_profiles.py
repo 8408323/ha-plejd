@@ -42,6 +42,14 @@ def humanize(value: str) -> str:
 
 def _trigger_label(trigger: dict[str, Any]) -> str:
     type_ = trigger.get("type")
+    subtype = trigger.get("subtype")
+    # Zigbee2MQTT's convention uses the literal type "action" as a placeholder — the
+    # meaningful value (which action fired) is in subtype, so prefer it there or every
+    # trigger in a group would be labelled just "Action".
+    if type_ and str(type_) != "action":
+        return humanize(str(type_))
+    if subtype:
+        return humanize(str(subtype))
     if type_:
         return humanize(str(type_))
     platform = trigger.get("platform")
@@ -256,8 +264,15 @@ def _build_index() -> dict[tuple[str, str], dict[str, Any]]:
 _BUILT_IN_INDEX = _build_index()
 
 
-def match_builtin_profile(manufacturer: str | None, model: str | None) -> dict[str, Any] | None:
-    return _BUILT_IN_INDEX.get((_normalize(manufacturer), _normalize(model)))
+def match_builtin_profile(
+    manufacturer: str | None, model: str | None, model_id: str | None = None
+) -> dict[str, Any] | None:
+    profile = _BUILT_IN_INDEX.get((_normalize(manufacturer), _normalize(model)))
+    if profile is not None:
+        return profile
+    # Some integrations report the vendor's product code (e.g. "E1743") in the device
+    # registry's separate model_id field rather than in model itself.
+    return _BUILT_IN_INDEX.get((_normalize(manufacturer), _normalize(model_id)))
 
 
 def _apply_profile(triggers: list[dict[str, Any]], profile: dict[str, Any], *, source: str) -> dict[str, Any]:
@@ -287,12 +302,13 @@ def build_buttons_view(
     *,
     manufacturer: str | None = None,
     model: str | None = None,
+    model_id: str | None = None,
     custom_profile: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """The grouped-and-humanized "buttons" view: custom override > built-in > generic."""
     if custom_profile is not None:
         return _apply_profile(triggers, custom_profile, source="custom")
-    profile = match_builtin_profile(manufacturer, model)
+    profile = match_builtin_profile(manufacturer, model, model_id)
     if profile is not None:
         return _apply_profile(triggers, profile, source="profile")
     return {"device_type": None, "source": "generic", "groups": group_generic(triggers)}
@@ -303,8 +319,8 @@ def _validate_profile(profile: dict[str, Any]) -> None:
     if not isinstance(buttons, list) or not buttons:
         raise InvalidRemoteProfile("a profile needs at least one button")
     for button in buttons:
-        if not isinstance(button, dict) or not button.get("name"):
-            raise InvalidRemoteProfile("every button needs a name")
+        if not isinstance(button, dict) or not isinstance(button.get("name"), str) or not button.get("name"):
+            raise InvalidRemoteProfile("every button needs a string name")
         triggers = button.get("triggers")
         if not isinstance(triggers, list) or not triggers:
             raise InvalidRemoteProfile(f"button {button['name']!r} needs at least one trigger")
