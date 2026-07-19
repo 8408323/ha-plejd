@@ -94,7 +94,7 @@ class _FailingBindings:
     bindings: list = []
 
     async def async_replace(self, items):
-        raise ValueError("bad payload")
+        raise RuntimeError("storage down")
 
 
 async def test_save_returns_error_when_replace_fails():
@@ -103,6 +103,23 @@ async def test_save_returns_error_when_replace_fails():
     conn = _Conn()
     await dim_binding_ws.ws_save(hass, conn, {"id": 3, "bindings": [{}]})
     assert conn.error[0] == 3 and conn.error[1] == "save_failed"
+    assert conn.result is None
+
+
+class _RejectingBindings:
+    bindings: list = []
+
+    async def async_replace(self, items):
+        raise ValueError("dim binding has a start trigger but no stop trigger")
+
+
+async def test_save_rejects_invalid_binding_with_reason():
+    hass = _hass()
+    hass.data[DATA_BINDINGS] = _RejectingBindings()
+    conn = _Conn()
+    await dim_binding_ws.ws_save(hass, conn, {"id": 4, "bindings": [{"up": {"x": 1}}]})
+    assert conn.error[0] == 4 and conn.error[1] == "invalid_binding"
+    assert "stop trigger" in conn.error[2]  # the reason is surfaced to the client
     assert conn.result is None
 
 

@@ -38,6 +38,10 @@ async def ws_save(hass: HomeAssistant, connection, msg) -> None:
         return
     try:
         await bindings.async_replace(msg["bindings"])
+    except ValueError as err:
+        # Invalid client input (e.g. a start trigger with no stop) — safe to surface the reason.
+        connection.send_error(msg["id"], "invalid_binding", str(err))
+        return
     except Exception:  # noqa: BLE001 - log the detail server-side, return a stable generic message
         _LOGGER.exception("Plejd: failed to save dim bindings")
         connection.send_error(msg["id"], "save_failed", "Could not save bindings")

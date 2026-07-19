@@ -51,6 +51,11 @@ def _target(binding: dict) -> dict[str, Any]:
     return {key: targets[key] for key in _TARGET_KEYS if targets.get(key)}
 
 
+def _is_stopless(binding: dict) -> bool:
+    """True if the binding has a start trigger (up/down) but no stop trigger to release it."""
+    return bool((binding.get("up") or binding.get("down")) and not binding.get("stop"))
+
+
 def _ensure_ids(bindings: list[dict]) -> bool:
     """Give every binding a stable unique id (so ramps never collide under a shared key).
 
@@ -171,6 +176,12 @@ class PlejdDimBindings:
 
     async def async_replace(self, bindings: list[dict]) -> None:
         """Persist the full set of bindings and re-attach their triggers."""
+        for binding in bindings:
+            if _is_stopless(binding):
+                # Reject before persisting: a hold with no release is invalid, and
+                # _async_attach would otherwise swallow the per-binding error and still
+                # report a saved-but-non-functional binding to the client.
+                raise ValueError("dim binding has a start trigger but no stop trigger")
         _ensure_ids(bindings)
         # Serialize the whole save→swap→re-attach so two overlapping saves can't interleave
         # and leave both trigger sets live. Save first so the in-memory list and the live
@@ -178,14 +189,27 @@ class PlejdDimBindings:
         # rather than raising, so we can't promise the on-disk copy beyond that.
         async with self._lock:
             await self._store.async_save(bindings)
+            previous = self._bindings
             self._bindings = bindings
             self._detach()
-            self._ramp.shutdown()  # a live ramp's stop trigger may be gone now; don't let it run on
+            self._ramp.shutdown()  # cancel generic live ramps whose stop trigger may be gone
+            await self._stop_native_ramps(previous)  # and the coordinator-owned Plejd ramps
             if self._closed:
                 return
             await self._async_attach()
             if self._closed:  # unload raced this save → don't leave triggers live past teardown
                 self._detach()
+
+    async def _stop_native_ramps(self, bindings: list[dict]) -> None:
+        """Stop any in-flight Plejd-native ramp for these bindings' single-light targets.
+
+        Those ramps are owned by the coordinator (via plejd.start_dim), not the generic
+        DimRamp, so a replace must stop them explicitly or a held light rides to its bound.
+        """
+        for binding in bindings:
+            light = self._plejd_light(binding)
+            if light is not None:
+                await self._hass.services.async_call(DOMAIN, SERVICE_STOP_DIM, {"entity_id": [light]}, blocking=True)
 
     async def _async_attach(self) -> None:
         for binding in self._bindings:
@@ -197,9 +221,9 @@ class PlejdDimBindings:
     async def _attach(self, binding: dict) -> None:
         bid = binding["id"]  # guaranteed by _ensure_ids
         target = _target(binding)
-        if (binding.get("up") or binding.get("down")) and not binding.get("stop"):
-            # A hold with no release path would ramp to DIM_MAX_DURATION on every press;
-            # reject the whole binding rather than attach start triggers that can't stop.
+        if _is_stopless(binding):
+            # Load-path safety net for legacy/hand-edited storage (async_replace rejects
+            # these before saving): a hold with no release would ramp to DIM_MAX_DURATION.
             raise ValueError("dim binding has a start trigger but no stop trigger")
         plejd_light = self._plejd_light(binding)
         # Attach atomically: if any trigger fails, roll back the ones already attached for
