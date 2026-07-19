@@ -100,8 +100,8 @@ class PlejdHolidayMode:
         if configured:
             return list(configured)
         registry = er.async_get(self._hass)
-        entries = er.async_entries_for_config_entry(registry, self._entry.entry_id)
-        return [entry.entity_id for entry in entries if entry.entity_id.startswith("light.")]
+        reg_entries = er.async_entries_for_config_entry(registry, self._entry.entry_id)
+        return [reg_entry.entity_id for reg_entry in reg_entries if reg_entry.entity_id.startswith("light.")]
 
     async def _async_tick(self, _now: object) -> None:
         now_local = dt_util.now()
