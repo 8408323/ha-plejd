@@ -13,13 +13,14 @@ All notable changes to this project are documented here. The format follows
   brightness-step ramp. Targets **any** Home Assistant light or a whole **area**,
   not only Plejd. A binding on a single **Plejd** light rides Plejd's native ramp
   over the site's chosen transport (gateway or BLE, per the transport option);
-  everything else uses the generic ramp. Managed over a WebSocket API; the
-  dashboard editor UI comes next (#76).
+  everything else uses the generic ramp. Managed over a WebSocket API and
+  configured from the Plejd dashboard editor (see the dashboard entry below) (#76).
 - **Plejd dashboard (sidebar panel).** A custom Plejd panel in the Home Assistant
-  sidebar — its own web code, not a Lovelace view. It currently lists the site's
-  Plejd lights; the remote dim-binding editor lands here next. Show or hide it in
-  the left navbar via **Settings → Devices & Services → Plejd → Configure → Show or
-  hide the dashboard** (#76).
+  sidebar — its own web code, not a Lovelace view. It lists the site's Plejd lights
+  and hosts the **remote dim-binding editor**: pick a light or a whole room, pick a
+  dimmer remote, and map its hold/release **device triggers** (dim up / dim down /
+  release) — no YAML. Show or hide the panel in the left navbar via **Settings →
+  Devices & Services → Plejd → Configure → Show or hide the dashboard** (#76).
 - **Remote hold-to-dim (`plejd.start_dim` / `plejd.stop_dim`).** Bind a dimmer
   remote's "move while held / stop on release" actions (IKEA/Hue style) to these
   services and the light ramps smoothly over the gateway — reliable since the ack
