@@ -40,6 +40,10 @@ class PlejdPanel extends HTMLElement {
     this._bindings = null; // loaded list, null until the first WS list resolves (or a failed load)
     this._loadFailed = false; // a list load errored — block saving so it can't overwrite storage
     this._triggers = {}; // device_id -> its device triggers (only successful loads are cached)
+    this._areasById = {};
+    this._devicesById = {};
+    this._registriesLoaded = false;
+    this._registriesPromise = null;
     this._form = { target: "", device: "", up: "", down: "", stop: "" };
     this._error = "";
     this._notice = "";
@@ -62,6 +66,7 @@ class PlejdPanel extends HTMLElement {
     if (first) {
       this._renderShell();
       this._loadBindings();
+      this._loadRegistries();
     }
     // Only the live lights list tracks state; leave the editor DOM (and any in-progress
     // form entry) untouched on the frequent hass state updates.
@@ -126,6 +131,31 @@ class PlejdPanel extends HTMLElement {
     }
   }
 
+  async _loadRegistries() {
+    if (this._registriesLoaded || this._registriesPromise) return;
+    this._registriesPromise = (async () => {
+      try {
+        const [areas, devices] = await Promise.all([
+          this._callWS({ type: "config/area_registry/list" }),
+          this._callWS({ type: "config/device_registry/list" }),
+        ]);
+        this._areasById = Object.fromEntries(
+          (areas || []).map((a) => [a.area_id, a.name || a.area_id]),
+        );
+        this._devicesById = Object.fromEntries(
+          (devices || []).map((d) => [d.id, d.name_by_user || d.name || d.id]),
+        );
+        this._registriesLoaded = true;
+        this._renderEditor();
+      } catch (_err) {
+        this._areasById = {};
+        this._devicesById = {};
+      } finally {
+        this._registriesPromise = null;
+      }
+    })();
+  }
+
   async _save(bindings, resetForm = false) {
     this._busy = true;
     this._error = "";
@@ -174,15 +204,26 @@ class PlejdPanel extends HTMLElement {
   }
 
   _areas() {
+    if (this._registriesLoaded) {
+      return Object.entries(this._areasById)
+        .map(([id, name]) => ({ id, name }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+    }
     const hass = this._hass;
-    return Object.values(hass.areas || {})
+    return Object.values(hass?.areas || {})
       .map((a) => ({ id: a.area_id, name: a.name || a.area_id }))
       .sort((a, b) => a.name.localeCompare(b.name));
   }
 
   _devices() {
+    if (this._registriesLoaded) {
+      return Object.entries(this._devicesById)
+        .map(([id, name]) => ({ id, name }))
+        .filter((d) => d.name)
+        .sort((a, b) => a.name.localeCompare(b.name));
+    }
     const hass = this._hass;
-    return Object.values(hass.devices || {})
+    return Object.values(hass?.devices || {})
       .map((d) => ({ id: d.id, name: d.name_by_user || d.name || d.id }))
       .filter((d) => d.name)
       .sort((a, b) => a.name.localeCompare(b.name));
@@ -193,10 +234,11 @@ class PlejdPanel extends HTMLElement {
   }
 
   _areaName(areaId) {
-    return this._hass.areas?.[areaId]?.name || areaId;
+    return this._areasById[areaId] || this._hass.areas?.[areaId]?.name || areaId;
   }
 
   _deviceName(deviceId) {
+    if (this._devicesById[deviceId]) return this._devicesById[deviceId];
     const d = this._hass.devices?.[deviceId];
     return d?.name_by_user || d?.name || deviceId;
   }

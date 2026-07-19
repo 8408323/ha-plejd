@@ -212,3 +212,40 @@ test("adding a binding resets the add form on success", async () => {
   assert.equal(panel._form.down, "");
   assert.equal(panel._form.stop, "");
 });
+
+test("first hass assignment loads area and device registries over websocket", async () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const calls = [];
+
+  panel._renderShell = () => {};
+  panel._loadBindings = () => {};
+  panel._scheduleLightsUpdate = () => {};
+  panel._renderEditor = () => {};
+
+  panel.hass = {
+    states: {},
+    callWS(msg) {
+      calls.push(msg.type);
+      if (msg.type === "config/area_registry/list") {
+        return Promise.resolve([{ area_id: "area.kitchen", name: "Kitchen" }]);
+      }
+      if (msg.type === "config/device_registry/list") {
+        return Promise.resolve([{ id: "dev.remote", name: "Remote Hall" }]);
+      }
+      throw new Error(`unexpected ws call: ${msg.type}`);
+    },
+  };
+
+  await panel._registriesPromise;
+
+  assert.deepEqual(calls.sort(), ["config/area_registry/list", "config/device_registry/list"]);
+  assert.equal(panel._areas().length, 1);
+  assert.equal(panel._areas()[0].id, "area.kitchen");
+  assert.equal(panel._areas()[0].name, "Kitchen");
+  assert.equal(panel._devices().length, 1);
+  assert.equal(panel._devices()[0].id, "dev.remote");
+  assert.equal(panel._devices()[0].name, "Remote Hall");
+  assert.equal(panel._areaName("area.kitchen"), "Kitchen");
+  assert.equal(panel._deviceName("dev.remote"), "Remote Hall");
+});
