@@ -728,6 +728,19 @@ class PlejdCoordinator:
         """
         await self._write_vector(protocol.set_group_state_and_level(address, on, level))
 
+    async def async_all_off(self) -> None:
+        """Turn off every light output in the site (mirrors the Plejd app's "all off")."""
+        seen: set[int] = set()
+        for device in self.devices:
+            if device.category != CATEGORY_LIGHT or device.address is None or device.address in seen:
+                continue
+            seen.add(device.address)
+            try:
+                await self.async_set_output(device.address, False, 0)
+            except Exception:  # noqa: BLE001 - one output failing must not abort turning off the rest
+                _LOGGER.warning("Plejd all_off: failed to turn off output %s", device.address, exc_info=True)
+                continue
+
     async def async_set_output_min_level(self, address: int, output: int, fraction: float) -> None:
         """Set an output's minimum dim level (0-1 fraction)."""
         await self._write_vector(protocol.set_output_min_level(address, output, fraction))

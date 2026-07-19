@@ -93,6 +93,9 @@
     "button": {
       "sync_clock": {
         "name": "Sync clock"
+      },
+      "all_off": {
+        "name": "All lights off"
       }
     },
     "sensor": {
