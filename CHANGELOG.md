@@ -6,6 +6,17 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **Holiday mode (presence simulation).** The Home Assistant equivalent of the
+  Plejd app's "Semesterläge": a **Holiday mode** switch that, while on and within
+  a configurable active time-of-day window (default 18:00-23:00, may cross
+  midnight), periodically turns a random subset of lights on for a randomized
+  duration to make the home look occupied while away. Targets a configurable list
+  of lights, or every Plejd light if none are picked — drives plain
+  `light.turn_on`/`light.turn_off`, so any Home Assistant light works, not only
+  Plejd's. Configure target lights and the active window from **Settings →
+  Devices & Services → Plejd → Configure → Holiday mode**.
+
 ## [0.10.0] - 2026-07-19
 
 ### Added

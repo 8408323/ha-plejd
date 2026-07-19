@@ -17,6 +17,7 @@ from .bindings import PlejdDimBindings
 from .const import CONF_SHOW_PANEL, DOMAIN
 from .coordinator import PlejdCoordinator
 from .discovery import async_bluetooth_available, async_scan_unprovisioned
+from .holiday_mode import DATA_HOLIDAY_MODE, PlejdHolidayMode
 
 _WS_REGISTERED = f"{DOMAIN}_ws_registered"
 
@@ -70,6 +71,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             _LOGGER.warning("Plejd dashboard panel could not be registered; continuing without it", exc_info=True)
     entry.async_on_unload(lambda: panel.async_unregister_panel(hass))
     await coordinator.async_start()
+
+    # Holiday mode (presence simulation) — constructed before platform forwarding so the
+    # switch platform can look it up; the switch entity itself controls start/stop.
+    holiday_mode = PlejdHolidayMode(hass, entry)
+    hass.data[DATA_HOLIDAY_MODE] = holiday_mode
+    entry.async_on_unload(lambda: hass.data.pop(DATA_HOLIDAY_MODE, None))
+    entry.async_on_unload(holiday_mode.stop)
+
     try:
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     except Exception:

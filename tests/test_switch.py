@@ -5,8 +5,9 @@ from __future__ import annotations
 import types
 
 from plejd.cloud import PlejdCloudDevice
+from plejd.holiday_mode import DATA_HOLIDAY_MODE, PlejdHolidayMode
 from plejd.protocol import OutputState
-from plejd.switch import PlejdScheduleSwitch, PlejdSwitch, async_setup_entry
+from plejd.switch import PlejdHolidaySwitch, PlejdScheduleSwitch, PlejdSwitch, async_setup_entry
 
 
 def _device(category="switch", address=7):
@@ -57,13 +58,19 @@ class _Coordinator:
 _SCHEDULE = {"id": 0, "slot": 1, "name": "Evening", "days": [0, 6], "time": "18:30:00", "scene": 4, "fade": 0}
 
 
+def _holiday_manager():
+    return PlejdHolidayMode(types.SimpleNamespace(), types.SimpleNamespace(options={}, entry_id="e1"))
+
+
 async def test_setup_creates_switches_and_schedule_switches():
     coord = _Coordinator([_device(), _device(category="light"), _device(address=None)])
     entry = types.SimpleNamespace(runtime_data=coord, options={"schedules": [_SCHEDULE]})
+    hass = types.SimpleNamespace(data={DATA_HOLIDAY_MODE: _holiday_manager()})
     added = []
-    await async_setup_entry(None, entry, lambda entities: added.extend(entities))
-    assert len(added) == 2  # one relay + one schedule
+    await async_setup_entry(hass, entry, lambda entities: added.extend(entities))
+    assert len(added) == 3  # one relay + one schedule + the holiday-mode switch
     assert any(isinstance(e, PlejdScheduleSwitch) for e in added)
+    assert any(isinstance(e, PlejdHolidaySwitch) for e in added)
 
 
 async def test_schedule_switch_turn_on_programs_event():
@@ -149,3 +156,56 @@ def test_device_info():
     sw = PlejdSwitch(_Coordinator([]), _device())
     assert sw._attr_unique_id == "r1"
     assert sw._attr_device_info["model"] == "REL-02"
+
+
+# ── PlejdHolidaySwitch ───────────────────────────────────────────────────────
+
+
+def test_holiday_switch_device_info_and_default_state():
+    sw = PlejdHolidaySwitch(_Coordinator([]), _holiday_manager())
+    assert sw._attr_unique_id == "site-1_holiday_mode"
+    assert sw._attr_device_info["model"] == "Site"
+    assert sw.is_on is False
+
+
+async def test_holiday_switch_turn_on_starts_the_manager():
+    manager = _holiday_manager()
+    sw = PlejdHolidaySwitch(_Coordinator([]), manager)
+    await sw.async_turn_on()
+    assert manager.is_running is True
+    assert sw.is_on is True
+
+
+async def test_holiday_switch_turn_off_stops_the_manager():
+    manager = _holiday_manager()
+    sw = PlejdHolidaySwitch(_Coordinator([]), manager)
+    await sw.async_turn_on()
+    await sw.async_turn_off()
+    assert manager.is_running is False
+    assert sw.is_on is False
+
+
+async def test_holiday_switch_restores_on_and_restarts_manager():
+    manager = _holiday_manager()
+    sw = PlejdHolidaySwitch(_Coordinator([]), manager)
+
+    async def _last():
+        return types.SimpleNamespace(state="on")
+
+    sw.async_get_last_state = _last
+    await sw.async_added_to_hass()
+    assert sw.is_on is True
+    assert manager.is_running is True
+
+
+async def test_holiday_switch_stays_off_without_prior_state():
+    manager = _holiday_manager()
+    sw = PlejdHolidaySwitch(_Coordinator([]), manager)
+
+    async def _last():
+        return None
+
+    sw.async_get_last_state = _last
+    await sw.async_added_to_hass()
+    assert sw.is_on is False
+    assert manager.is_running is False

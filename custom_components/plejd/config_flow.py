@@ -12,7 +12,13 @@ from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResu
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from homeassistant.helpers.selector import SelectSelector, SelectSelectorConfig
+from homeassistant.helpers.selector import (
+    EntitySelector,
+    EntitySelectorConfig,
+    SelectSelector,
+    SelectSelectorConfig,
+    TimeSelector,
+)
 
 from .add_device import async_add_device
 from .cloud import (
@@ -28,6 +34,9 @@ from .const import (
     CONF_DEVICES,
     CONF_DISCOVERED_ADDRESS,
     CONF_GATEWAYS,
+    CONF_HOLIDAY_LIGHTS,
+    CONF_HOLIDAY_WINDOW_END,
+    CONF_HOLIDAY_WINDOW_START,
     CONF_INPUTS,
     CONF_INSTALLATION_ID,
     CONF_MOTION,
@@ -38,6 +47,8 @@ from .const import (
     CONF_SITE_ID,
     CONF_TRANSPORT,
     DOMAIN,
+    HOLIDAY_WINDOW_END_DEFAULT,
+    HOLIDAY_WINDOW_START_DEFAULT,
     TIME_EVENT_SLOTS,
     TRANSPORT_AUTO,
     TRANSPORT_BLE,
@@ -227,7 +238,9 @@ class PlejdOptionsFlow(OptionsFlow):
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Entry point: a menu, not tied to any particular device (works with or without a gateway)."""
-        return self.async_show_menu(step_id="init", menu_options=["schedules", "dashboard", "add_device"])
+        return self.async_show_menu(
+            step_id="init", menu_options=["schedules", "dashboard", "holiday_mode", "add_device"]
+        )
 
     async def async_step_dashboard(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Show or hide the Plejd dashboard in the sidebar."""
@@ -239,6 +252,34 @@ class PlejdOptionsFlow(OptionsFlow):
         return self.async_show_form(
             step_id="dashboard", data_schema=vol.Schema({vol.Required(CONF_SHOW_PANEL, default=show): bool})
         )
+
+    async def async_step_holiday_mode(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """Configure holiday mode (presence simulation): target lights + active window."""
+        if user_input is not None:
+            return self.async_create_entry(
+                title="",
+                data={
+                    **self._entry.options,
+                    CONF_HOLIDAY_LIGHTS: user_input.get("lights", []),
+                    CONF_HOLIDAY_WINDOW_START: user_input["window_start"],
+                    CONF_HOLIDAY_WINDOW_END: user_input["window_end"],
+                },
+            )
+        options = self._entry.options
+        schema = vol.Schema(
+            {
+                vol.Optional("lights", default=options.get(CONF_HOLIDAY_LIGHTS, [])): EntitySelector(
+                    EntitySelectorConfig(domain="light", multiple=True)
+                ),
+                vol.Optional(
+                    "window_start", default=options.get(CONF_HOLIDAY_WINDOW_START, HOLIDAY_WINDOW_START_DEFAULT)
+                ): TimeSelector(),
+                vol.Optional(
+                    "window_end", default=options.get(CONF_HOLIDAY_WINDOW_END, HOLIDAY_WINDOW_END_DEFAULT)
+                ): TimeSelector(),
+            }
+        )
+        return self.async_show_form(step_id="holiday_mode", data_schema=schema)
 
     async def async_step_schedules(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         schedules: list[dict] = list(self._entry.options.get(CONF_SCHEDULES, []))

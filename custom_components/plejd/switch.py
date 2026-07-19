@@ -15,11 +15,12 @@ from homeassistant.helpers.restore_state import RestoreEntity
 from .cloud import PlejdCloudDevice
 from .const import CATEGORY_SWITCH, CONF_SCHEDULES, DOMAIN
 from .coordinator import PlejdCoordinator
+from .holiday_mode import DATA_HOLIDAY_MODE, PlejdHolidayMode
 from .protocol import weekday_mask
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> None:
-    """Set up Plejd relay switches and on-device schedule switches."""
+    """Set up Plejd relay switches, on-device schedule switches, and the holiday-mode switch."""
     coordinator: PlejdCoordinator = entry.runtime_data
     entities: list[SwitchEntity] = [
         PlejdSwitch(coordinator, device)
@@ -27,6 +28,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         if device.category == CATEGORY_SWITCH and device.address is not None
     ]
     entities.extend(PlejdScheduleSwitch(coordinator, sched) for sched in entry.options.get(CONF_SCHEDULES, []))
+    entities.append(PlejdHolidaySwitch(coordinator, hass.data[DATA_HOLIDAY_MODE]))
     async_add_entities(entities)
 
 
@@ -121,3 +123,40 @@ class PlejdSwitch(SwitchEntity):
 
     async def async_added_to_hass(self) -> None:
         self.async_on_remove(self._coordinator.async_add_listener(self.async_write_ha_state))
+
+
+class PlejdHolidaySwitch(SwitchEntity, RestoreEntity):
+    """Enable/disable holiday mode (presence simulation), the Plejd app's "Semesterläge"."""
+
+    _attr_has_entity_name = True
+    _attr_translation_key = "holiday_mode"
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_icon = "mdi:beach"
+
+    def __init__(self, coordinator: PlejdCoordinator, manager: PlejdHolidayMode) -> None:
+        self._manager = manager
+        self._attr_is_on = False
+        self._attr_unique_id = f"{coordinator.site_id}_holiday_mode"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, coordinator.site_id)},
+            name="Plejd",
+            manufacturer="Plejd",
+            model="Site",
+        )
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        self._manager.start()
+        self._attr_is_on = True
+        self.async_write_ha_state()
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        self._manager.stop()
+        self._attr_is_on = False
+        self.async_write_ha_state()
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        last = await self.async_get_last_state()
+        if last is not None and last.state == "on":
+            self._attr_is_on = True
+            self._manager.start()

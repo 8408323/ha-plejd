@@ -34,6 +34,17 @@ class _FakeCoordinator:
         return None
 
 
+class _FakeHolidayMode:
+    instances: list = []
+
+    def __init__(self, hass, entry):
+        self.stopped = False
+        _FakeHolidayMode.instances.append(self)
+
+    def stop(self):
+        self.stopped = True
+
+
 class _FakeConfigEntries:
     unload_result = True
 
@@ -499,3 +510,36 @@ async def test_setup_survives_binding_load_failure(monkeypatch):
     monkeypatch.setattr(plejd, "PlejdDimBindings", _BadBindings)
     hass, entry = _hass(), _entry()
     assert await async_setup_entry(hass, entry) is True  # storage error must not abort setup
+
+
+# ── Holiday mode wiring ────────────────────────────────────────────────────────
+
+
+async def test_setup_registers_holiday_mode(monkeypatch):
+    from plejd.holiday_mode import DATA_HOLIDAY_MODE
+
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    monkeypatch.setattr(plejd, "PlejdHolidayMode", _FakeHolidayMode)
+    _FakeCoordinator.instances.clear()
+    _FakeHolidayMode.instances.clear()
+    hass, entry = _hass(), _entry()
+    await async_setup_entry(hass, entry)
+    assert hass.data[DATA_HOLIDAY_MODE] is _FakeHolidayMode.instances[-1]
+
+
+async def test_unload_stops_holiday_mode_and_cleans_data(monkeypatch):
+    from plejd.holiday_mode import DATA_HOLIDAY_MODE
+
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    monkeypatch.setattr(plejd, "PlejdHolidayMode", _FakeHolidayMode)
+    _FakeCoordinator.instances.clear()
+    _FakeHolidayMode.instances.clear()
+    hass, entry = _hass(), _entry()
+    unloads: list = []
+    entry.async_on_unload = unloads.append
+    await async_setup_entry(hass, entry)
+    assert DATA_HOLIDAY_MODE in hass.data
+    for unload in unloads:
+        unload()
+    assert DATA_HOLIDAY_MODE not in hass.data
+    assert _FakeHolidayMode.instances[-1].stopped is True

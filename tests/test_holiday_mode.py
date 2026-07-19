@@ -1,0 +1,264 @@
+"""Tests for holiday mode (presence simulation)."""
+
+from __future__ import annotations
+
+import random
+import types
+from datetime import datetime, time, timedelta, timezone
+
+from homeassistant.helpers import entity_registry as er
+from homeassistant.util import dt as dt_util
+from plejd import holiday_mode as hm
+from plejd.const import CONF_HOLIDAY_LIGHTS, CONF_HOLIDAY_WINDOW_END, CONF_HOLIDAY_WINDOW_START
+from plejd.holiday_mode import PlejdHolidayMode, _in_window, _parse_hhmm
+
+
+class _FakeRandom:
+    """A deterministic stand-in for random.Random, injected at the manager's rng boundary."""
+
+    def __init__(self, sample_result, uniform_value=15.0):
+        self._sample_result = sample_result
+        self._uniform_value = uniform_value
+        self.sample_calls: list[tuple[list[str], int]] = []
+        self.uniform_calls: list[tuple[float, float]] = []
+
+    def sample(self, population, k):
+        self.sample_calls.append((list(population), k))
+        return list(self._sample_result[:k])
+
+    def uniform(self, a, b):
+        self.uniform_calls.append((a, b))
+        return self._uniform_value
+
+
+class _Services:
+    def __init__(self):
+        self.calls: list[tuple[str, str, dict]] = []
+
+    async def async_call(self, domain, service, data, blocking=False):
+        self.calls.append((domain, service, data))
+
+
+def _hass(entity_registry=None):
+    h = types.SimpleNamespace(services=_Services())
+    if entity_registry is not None:
+        h.entity_registry = entity_registry
+    return h
+
+
+def _entry(options=None, entry_id="e1"):
+    return types.SimpleNamespace(options=options or {}, entry_id=entry_id)
+
+
+def _registry(entity_to_entry: dict[str, str]):
+    entities = {eid: types.SimpleNamespace(entity_id=eid, config_entry_id=cid) for eid, cid in entity_to_entry.items()}
+    return er.EntityRegistry(entities)
+
+
+def _local(hour, minute):
+    return datetime(2026, 7, 19, hour, minute, tzinfo=timezone(timedelta(hours=2)))
+
+
+# ── _in_window / _parse_hhmm (pure helpers) ────────────────────────────────────
+
+
+def test_in_window_normal_range():
+    assert _in_window(time(19, 0), time(18, 0), time(23, 0)) is True
+    assert _in_window(time(12, 0), time(18, 0), time(23, 0)) is False
+    assert _in_window(time(18, 0), time(18, 0), time(23, 0)) is True  # inclusive start
+    assert _in_window(time(23, 0), time(18, 0), time(23, 0)) is False  # exclusive end
+
+
+def test_in_window_crosses_midnight():
+    assert _in_window(time(23, 30), time(22, 0), time(2, 0)) is True
+    assert _in_window(time(1, 0), time(22, 0), time(2, 0)) is True
+    assert _in_window(time(12, 0), time(22, 0), time(2, 0)) is False
+
+
+def test_parse_hhmm_ignores_seconds():
+    assert _parse_hhmm("18:30:15") == time(18, 30)
+    assert _parse_hhmm("07:05") == time(7, 5)
+
+
+# ── target light resolution ─────────────────────────────────────────────────────
+
+
+def test_configured_lights_take_priority_over_fallback():
+    manager = PlejdHolidayMode(_hass(), _entry(options={CONF_HOLIDAY_LIGHTS: ["light.x", "light.y"]}))
+    assert manager._target_lights() == ["light.x", "light.y"]
+
+
+def test_falls_back_to_all_plejd_lights_when_none_configured():
+    registry = _registry(
+        {
+            "light.kitchen": "e1",
+            "light.hall": "e1",
+            "switch.pump": "e1",  # non-light domain, excluded
+            "light.other_entry": "e2",  # different config entry, excluded
+        }
+    )
+    manager = PlejdHolidayMode(_hass(entity_registry=registry), _entry(options={}, entry_id="e1"))
+    assert sorted(manager._target_lights()) == ["light.hall", "light.kitchen"]
+
+
+def test_window_uses_defaults_when_unset():
+    manager = PlejdHolidayMode(_hass(), _entry(options={}))
+    assert manager._window() == (time(18, 0), time(23, 0))
+
+
+def test_window_reads_configured_bounds():
+    manager = PlejdHolidayMode(
+        _hass(), _entry(options={CONF_HOLIDAY_WINDOW_START: "22:00", CONF_HOLIDAY_WINDOW_END: "02:00"})
+    )
+    assert manager._window() == (time(22, 0), time(2, 0))
+
+
+# ── start / stop ─────────────────────────────────────────────────────────────
+
+
+def test_start_registers_recurring_timer_and_is_idempotent(monkeypatch):
+    registrations = []
+
+    def _fake_track(hass, action, interval):
+        registrations.append((hass, action, interval))
+        return lambda: registrations.append("unsub")
+
+    monkeypatch.setattr(hm, "async_track_time_interval", _fake_track)
+    manager = PlejdHolidayMode(_hass(), _entry())
+    manager.start()
+    manager.start()  # idempotent: must not register a second timer
+    assert len([r for r in registrations if r != "unsub"]) == 1
+    assert manager.is_running is True
+
+
+def test_stop_cancels_timer_and_clears_pending_state(monkeypatch):
+    unsubbed = []
+
+    def _fake_track(hass, action, interval):
+        return lambda: unsubbed.append(True)
+
+    monkeypatch.setattr(hm, "async_track_time_interval", _fake_track)
+    manager = PlejdHolidayMode(_hass(), _entry())
+    manager.start()
+    manager._on_until["light.a"] = _local(20, 0)
+    manager.stop()
+    assert unsubbed == [True]  # the timer's own unsub was invoked -> no leaked timer
+    assert manager.is_running is False
+    assert manager._on_until == {}
+
+
+def test_stop_without_start_is_a_noop():
+    manager = PlejdHolidayMode(_hass(), _entry())
+    manager.stop()  # must not raise
+    assert manager.is_running is False
+
+
+def test_default_rng_is_a_real_random_instance():
+    manager = PlejdHolidayMode(_hass(), _entry())
+    assert isinstance(manager._rng, random.Random)
+
+
+# ── _async_tick: active-window gating ─────────────────────────────────────────
+
+
+async def test_tick_outside_active_window_does_nothing(monkeypatch):
+    hass = _hass()
+    manager = PlejdHolidayMode(hass, _entry(options={CONF_HOLIDAY_LIGHTS: ["light.a"]}), rng=_FakeRandom(["light.a"]))
+    monkeypatch.setattr(dt_util, "now", lambda: _local(12, 0))  # noon, outside default 18:00-23:00
+    await manager._async_tick(None)
+    assert hass.services.calls == []
+
+
+async def test_tick_inside_active_window_applies(monkeypatch):
+    hass = _hass()
+    manager = PlejdHolidayMode(hass, _entry(options={CONF_HOLIDAY_LIGHTS: ["light.a"]}), rng=_FakeRandom(["light.a"]))
+    monkeypatch.setattr(dt_util, "now", lambda: _local(20, 0))
+    await manager._async_tick(None)
+    assert hass.services.calls == [("light", "turn_on", {"entity_id": "light.a"})]
+
+
+async def test_tick_respects_configured_window_crossing_midnight(monkeypatch):
+    hass = _hass()
+    options = {CONF_HOLIDAY_LIGHTS: ["light.a"], CONF_HOLIDAY_WINDOW_START: "22:00", CONF_HOLIDAY_WINDOW_END: "02:00"}
+    manager = PlejdHolidayMode(hass, _entry(options=options), rng=_FakeRandom(["light.a"]))
+
+    monkeypatch.setattr(dt_util, "now", lambda: _local(1, 0))  # 01:00, inside 22:00-02:00
+    await manager._async_tick(None)
+    assert hass.services.calls == [("light", "turn_on", {"entity_id": "light.a"})]
+
+    hass.services.calls.clear()
+    monkeypatch.setattr(dt_util, "now", lambda: _local(12, 0))  # noon, outside
+    await manager._async_tick(None)
+    assert hass.services.calls == []
+
+
+# ── _async_apply: randomized on/off behavior ──────────────────────────────────
+
+
+async def test_no_target_lights_does_nothing():
+    hass = _hass()
+    manager = PlejdHolidayMode(hass, _entry(options={}), rng=_FakeRandom([]))
+    await manager._async_apply(_local(20, 0))
+    assert hass.services.calls == []
+
+
+async def test_seeded_rng_drives_which_lights_turn_on_and_for_how_long():
+    hass = _hass()
+    options = {CONF_HOLIDAY_LIGHTS: ["light.a", "light.b", "light.c"]}
+    fake_rng = _FakeRandom(sample_result=["light.b"], uniform_value=20.0)
+    manager = PlejdHolidayMode(hass, _entry(options=options), rng=fake_rng)
+    now = _local(20, 0)
+
+    await manager._async_apply(now)
+
+    assert hass.services.calls == [("light", "turn_on", {"entity_id": "light.b"})]
+    assert fake_rng.sample_calls == [(["light.a", "light.b", "light.c"], 1)]  # round(3 * 0.4) -> 1
+    assert manager._on_until == {"light.b": now + timedelta(minutes=20.0)}
+
+
+async def test_randomization_is_reproducible_with_the_same_seed():
+    options = {CONF_HOLIDAY_LIGHTS: ["light.a", "light.b", "light.c", "light.d"]}
+    manager1 = PlejdHolidayMode(_hass(), _entry(options=options), rng=random.Random(42))
+    manager2 = PlejdHolidayMode(_hass(), _entry(options=options), rng=random.Random(42))
+    now = _local(20, 0)
+
+    await manager1._async_apply(now)
+    await manager2._async_apply(now)
+
+    assert manager1._hass.services.calls == manager2._hass.services.calls
+    assert manager1._on_until == manager2._on_until
+
+
+async def test_already_on_lights_are_not_picked_again():
+    hass = _hass()
+    options = {CONF_HOLIDAY_LIGHTS: ["light.a"]}
+    manager = PlejdHolidayMode(hass, _entry(options=options), rng=_FakeRandom(["light.a"]))
+    now = _local(20, 0)
+    await manager._async_apply(now)
+    hass.services.calls.clear()
+
+    await manager._async_apply(now + timedelta(minutes=1))  # still within its on-duration
+
+    assert hass.services.calls == []  # nothing left to turn on, nothing expired yet
+
+
+async def test_turns_off_expired_lights_on_a_later_tick():
+    hass = _hass()
+    options = {CONF_HOLIDAY_LIGHTS: ["light.a"]}
+    manager = PlejdHolidayMode(hass, _entry(options=options), rng=_FakeRandom(["light.a"], uniform_value=10.0))
+    t0 = _local(20, 0)
+
+    await manager._async_apply(t0)
+    assert hass.services.calls == [("light", "turn_on", {"entity_id": "light.a"})]
+    hass.services.calls.clear()
+
+    await manager._async_apply(t0 + timedelta(minutes=5))  # still within the 10-minute on-duration
+    assert hass.services.calls == []
+
+    await manager._async_apply(t0 + timedelta(minutes=11))  # past the on-duration
+    # Expired -> turned off, then immediately eligible again -> picked back on with a fresh deadline.
+    assert hass.services.calls == [
+        ("light", "turn_off", {"entity_id": "light.a"}),
+        ("light", "turn_on", {"entity_id": "light.a"}),
+    ]
+    assert manager._on_until["light.a"] == t0 + timedelta(minutes=21.0)
