@@ -101,6 +101,10 @@ class DimRamp:
     def _forget(self, key: str, task: asyncio.Task) -> None:
         if self._tasks.get(key) is task:
             del self._tasks[key]
+        # Retrieve the result so a failing ramp doesn't surface as "Task exception was
+        # never retrieved"; a cancel (the normal stop path) isn't an error.
+        if not task.cancelled() and (exc := task.exception()) is not None:
+            _LOGGER.warning("Plejd: dim ramp failed", exc_info=exc)
 
     def _spawn(self, coro) -> asyncio.Task:
         create = getattr(self._hass, "async_create_background_task", None)

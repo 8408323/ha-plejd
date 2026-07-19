@@ -63,6 +63,24 @@ async def test_ramp_down_uses_negative_step(monkeypatch):
     assert hass.services.calls[0] == ("light", "turn_on", {"area_id": ["kitchen"], "brightness_step_pct": -7})
 
 
+async def test_ramp_logs_and_forgets_when_service_call_fails(monkeypatch):
+    monkeypatch.setattr(bindings_mod.time, "monotonic", _fake_monotonic(1))
+    hass = _hass()
+
+    async def _boom(domain, service, data, blocking=False):
+        raise RuntimeError("light unavailable")
+
+    hass.services.async_call = _boom
+    logged = []
+    monkeypatch.setattr(bindings_mod._LOGGER, "warning", lambda *a, **k: logged.append((a, k)))
+    ramp = DimRamp(hass, interval=1, max_duration=4)
+    ramp.start("b1", {"entity_id": ["light.a"]}, "up")
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    assert "b1" not in ramp._tasks  # forgotten, exception retrieved (no "never retrieved" warning)
+    assert logged and isinstance(logged[0][1]["exc_info"], RuntimeError)
+
+
 async def test_ramp_empty_target_is_noop():
     hass = _hass()
     ramp = DimRamp(hass)
