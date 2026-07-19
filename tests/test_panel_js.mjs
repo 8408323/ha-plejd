@@ -28,6 +28,11 @@ function loadPanelClass(globals = {}) {
   return PanelClass;
 }
 
+// Objects built inside the vm sandbox have a different Object/Array prototype than this
+// test file's realm, so assert.deepEqual (strict, prototype-sensitive) reports them as
+// unequal even with identical own properties. Round-trip through JSON to compare by value.
+const plain = (v) => JSON.parse(JSON.stringify(v));
+
 test("_save clears a stale notice before the in-flight render", async () => {
   const PanelClass = loadPanelClass();
   const panel = new PanelClass();
@@ -336,4 +341,431 @@ test("_targetName lists every target of a multi-target binding", () => {
   const name = panel._targetName({ targets: { entity_id: ["light.a", "light.b"], area_id: ["kitchen"] } });
 
   assert.equal(name, "Light A, Light B, Kitchen");
+});
+
+// ── press actions ────────────────────────────────────────────────────────────
+
+test("_pressRowHtml renders the trigger and action pickers with no extra fields by default", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._form.device = "dev1";
+  panel._triggers = { dev1: [{ type: "button_short_press", subtype: "button_1" }] };
+
+  const html = panel._pressRowHtml(
+    { trigger: "", type: "", entity_id: "", domain: "", service: "", data: "" },
+    0,
+  );
+
+  assert.match(html, /id="f-press-trigger-0"/);
+  assert.match(html, /id="f-press-type-0"/);
+  assert.match(html, /data-remove-press="0"/);
+  assert.doesNotMatch(html, /f-press-entity-0/);
+  assert.doesNotMatch(html, /f-press-domain-0/);
+});
+
+test("_pressRowHtml shows a scene picker restricted to scene.* entities when type is scene", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._form.device = "dev1";
+  panel._triggers = { dev1: [] };
+  panel._hass = {
+    states: {
+      "scene.movie_night": { entity_id: "scene.movie_night", attributes: { friendly_name: "Movie Night" } },
+      "light.kitchen": { entity_id: "light.kitchen", attributes: { friendly_name: "Kitchen" } },
+    },
+  };
+
+  const html = panel._pressRowHtml(
+    { trigger: "", type: "scene", entity_id: "scene.movie_night", domain: "", service: "", data: "" },
+    2,
+  );
+
+  assert.match(html, /id="f-press-entity-2"/);
+  assert.match(html, /Movie Night/);
+  assert.doesNotMatch(html, /Kitchen/);
+  assert.match(html, /value="scene\.movie_night"[^>]*selected/);
+  assert.doesNotMatch(html, /f-press-domain-2/);
+});
+
+test("_pressRowHtml shows domain/service/data fields when type is service", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._form.device = "dev1";
+  panel._triggers = { dev1: [] };
+
+  const html = panel._pressRowHtml(
+    {
+      trigger: "",
+      type: "service",
+      entity_id: "",
+      domain: "light",
+      service: "turn_on",
+      data: '{"brightness_pct": 50}',
+    },
+    0,
+  );
+
+  assert.match(html, /id="f-press-domain-0"/);
+  assert.match(html, /id="f-press-service-0"/);
+  assert.match(html, /id="f-press-data-0"/);
+  assert.match(html, /value="light"/);
+  assert.match(html, /value="turn_on"/);
+  assert.match(html, /brightness_pct/);
+  assert.doesNotMatch(html, /f-press-entity-0/);
+});
+
+test("_pressRowHtml escapes user-controlled service fields", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._form.device = "dev1";
+  panel._triggers = { dev1: [] };
+
+  const html = panel._pressRowHtml(
+    { trigger: "", type: "service", entity_id: "", domain: "<img src=x>", service: "", data: "" },
+    0,
+  );
+
+  assert.doesNotMatch(html, /<img/);
+  assert.match(html, /&lt;img/);
+});
+
+test("clicking + Add press action appends an empty row and re-renders", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  let renders = 0;
+  panel._renderEditor = () => {
+    renders += 1;
+  };
+
+  const listeners = {};
+  const addBtn = {
+    addEventListener: (ev, fn) => {
+      listeners.add = fn;
+    },
+  };
+  const el = {
+    querySelectorAll: () => [],
+    querySelector: (sel) => (sel === "#f-press-add" ? addBtn : null),
+  };
+
+  panel._wire(el);
+  assert.equal(panel._form.presses.length, 0);
+
+  listeners.add();
+
+  assert.equal(panel._form.presses.length, 1);
+  assert.deepEqual(plain(panel._form.presses[0]), {
+    trigger: "",
+    type: "",
+    entity_id: "",
+    domain: "",
+    service: "",
+    data: "",
+  });
+  assert.equal(renders, 1);
+});
+
+test("clicking a press row's remove button removes just that row", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._form.presses = [
+    { trigger: "0", type: "toggle", entity_id: "", domain: "", service: "", data: "" },
+    { trigger: "1", type: "on", entity_id: "", domain: "", service: "", data: "" },
+  ];
+  panel._renderEditor = () => {};
+
+  const listeners = {};
+  const removeBtn1 = {
+    addEventListener: (ev, fn) => {
+      listeners.remove1 = fn;
+    },
+  };
+  const el = {
+    querySelectorAll: () => [],
+    querySelector: (sel) => (sel === '[data-remove-press="1"]' ? removeBtn1 : null),
+  };
+
+  panel._wire(el);
+  listeners.remove1();
+
+  assert.equal(panel._form.presses.length, 1);
+  assert.equal(panel._form.presses[0].trigger, "0");
+});
+
+test("changing a press row's action type re-renders to show its fields", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._form.presses = [{ trigger: "", type: "", entity_id: "", domain: "", service: "", data: "" }];
+  let renders = 0;
+  panel._renderEditor = () => {
+    renders += 1;
+  };
+
+  const listeners = {};
+  const typeEl = {
+    value: "scene",
+    addEventListener: (ev, fn) => {
+      listeners.type = fn;
+    },
+  };
+  const el = {
+    querySelectorAll: () => [],
+    querySelector: (sel) => (sel === "#f-press-type-0" ? typeEl : null),
+  };
+
+  panel._wire(el);
+  listeners.type({ target: typeEl });
+
+  assert.equal(panel._form.presses[0].type, "scene");
+  assert.equal(renders, 1);
+});
+
+test("changing the remote clears each press row's trigger index but keeps the rest of the row", async () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._form.presses = [{ trigger: "1", type: "toggle", entity_id: "", domain: "", service: "", data: "" }];
+  panel._loadTriggers = () => Promise.resolve();
+  panel._renderEditor = () => {};
+
+  const listeners = {};
+  const deviceEl = {
+    value: "dev2",
+    addEventListener: (ev, fn) => {
+      listeners.change = fn;
+    },
+  };
+  const el = {
+    querySelectorAll: () => [],
+    querySelector: (sel) => (sel === "#f-device" ? deviceEl : null),
+  };
+
+  panel._wire(el);
+  await listeners.change({ target: deviceEl });
+
+  assert.equal(panel._form.device, "dev2");
+  assert.equal(panel._form.presses[0].trigger, "");
+  assert.equal(panel._form.presses[0].type, "toggle");
+});
+
+test("_pressesFromForm skips a fully empty press row", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._form.device = "dev1";
+  panel._triggers = { dev1: [{ type: "button_short_press" }] };
+  panel._form.presses = [{ trigger: "", type: "", entity_id: "", domain: "", service: "", data: "" }];
+
+  assert.deepEqual(plain(panel._pressesFromForm()), []);
+});
+
+test("_pressesFromForm rejects a press row with an action but no trigger", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._form.device = "dev1";
+  panel._triggers = { dev1: [{ type: "button_short_press" }] };
+  panel._form.presses = [{ trigger: "", type: "toggle", entity_id: "", domain: "", service: "", data: "" }];
+
+  assert.throws(() => panel._pressesFromForm(), /trigger/i);
+});
+
+test("_pressesFromForm rejects a scene action with no scene picked", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._form.device = "dev1";
+  panel._triggers = { dev1: [{ type: "button_short_press" }] };
+  panel._form.presses = [{ trigger: "0", type: "scene", entity_id: "", domain: "", service: "", data: "" }];
+
+  assert.throws(() => panel._pressesFromForm(), /scene/i);
+});
+
+test("_pressesFromForm rejects a service action missing domain or service", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._form.device = "dev1";
+  panel._triggers = { dev1: [{ type: "button_short_press" }] };
+  panel._form.presses = [
+    { trigger: "0", type: "service", entity_id: "", domain: "light", service: "", data: "" },
+  ];
+
+  assert.throws(() => panel._pressesFromForm(), /domain and a service/i);
+});
+
+test("_pressesFromForm rejects invalid JSON in a service action's data field", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._form.device = "dev1";
+  panel._triggers = { dev1: [{ type: "button_short_press" }] };
+  panel._form.presses = [
+    { trigger: "0", type: "service", entity_id: "", domain: "light", service: "turn_on", data: "{not json" },
+  ];
+
+  assert.throws(() => panel._pressesFromForm(), /valid JSON/i);
+});
+
+test("_pressesFromForm assembles a full set of toggle/scene/service rows", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._form.device = "dev1";
+  panel._triggers = {
+    dev1: [
+      { type: "button_short_press", subtype: "button_1" },
+      { type: "button_long_press", subtype: "button_1" },
+      { type: "button_short_press", subtype: "button_2" },
+    ],
+  };
+  panel._form.presses = [
+    { trigger: "0", type: "toggle", entity_id: "", domain: "", service: "", data: "" },
+    { trigger: "1", type: "scene", entity_id: "scene.movie_night", domain: "", service: "", data: "" },
+    {
+      trigger: "2",
+      type: "service",
+      entity_id: "",
+      domain: "light",
+      service: "turn_on",
+      data: '{"brightness_pct": 50}',
+    },
+  ];
+
+  const presses = plain(panel._pressesFromForm());
+
+  assert.deepEqual(presses, [
+    { trigger: { type: "button_short_press", subtype: "button_1" }, action: { type: "toggle" } },
+    {
+      trigger: { type: "button_long_press", subtype: "button_1" },
+      action: { type: "scene", entity_id: "scene.movie_night" },
+    },
+    {
+      trigger: { type: "button_short_press", subtype: "button_2" },
+      action: { type: "service", domain: "light", service: "turn_on", data: { brightness_pct: 50 } },
+    },
+  ]);
+});
+
+test("_onSave saves a press-only binding without requiring a dim up/down/stop trigger", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._bindings = [];
+  panel._triggers = { dev1: [{ type: "button_short_press" }] };
+  panel._form.presses = [{ trigger: "", type: "", entity_id: "", domain: "", service: "", data: "" }];
+  let savedBindings;
+  panel._save = (bindings) => {
+    savedBindings = bindings;
+    return Promise.resolve();
+  };
+
+  const values = {
+    "#f-target": "light:light.a",
+    "#f-device": "dev1",
+    "#f-up": "",
+    "#f-down": "",
+    "#f-stop": "",
+    "#f-press-trigger-0": "0",
+    "#f-press-type-0": "toggle",
+  };
+  const el = { querySelector: (sel) => (sel in values ? { value: values[sel] } : null) };
+
+  panel._onSave(el);
+
+  assert.equal(panel._error, "");
+  assert.equal(savedBindings.length, 1);
+  assert.equal(savedBindings[0].up, undefined);
+  assert.equal(savedBindings[0].stop, undefined);
+  assert.deepEqual(plain(savedBindings[0].presses), [
+    { trigger: { type: "button_short_press" }, action: { type: "toggle" } },
+  ]);
+});
+
+test("_onSave fails when neither a dim trigger nor any press action is configured", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._bindings = [];
+  panel._triggers = { dev1: [{ type: "button_short_press" }] };
+  panel._renderEditor = () => {};
+  let saveCalled = false;
+  panel._save = () => {
+    saveCalled = true;
+    return Promise.resolve();
+  };
+
+  const values = {
+    "#f-target": "light:light.a",
+    "#f-device": "dev1",
+    "#f-up": "",
+    "#f-down": "",
+    "#f-stop": "",
+  };
+  const el = { querySelector: (sel) => (sel in values ? { value: values[sel] } : null) };
+
+  panel._onSave(el);
+
+  assert.equal(saveCalled, false);
+  assert.match(panel._error, /dim up\/down trigger or add at least one press action/);
+});
+
+test("_onSave surfaces a press-row validation error via _fail instead of saving", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._bindings = [];
+  panel._triggers = { dev1: [{ type: "button_short_press" }] };
+  panel._form.presses = [{ trigger: "", type: "", entity_id: "", domain: "", service: "", data: "" }];
+  panel._renderEditor = () => {};
+  let saveCalled = false;
+  panel._save = () => {
+    saveCalled = true;
+    return Promise.resolve();
+  };
+
+  const values = {
+    "#f-target": "light:light.a",
+    "#f-device": "dev1",
+    "#f-up": "",
+    "#f-down": "",
+    "#f-stop": "",
+    "#f-press-trigger-0": "", // no trigger picked, but an action type was
+    "#f-press-type-0": "toggle",
+  };
+  const el = { querySelector: (sel) => (sel in values ? { value: values[sel] } : null) };
+
+  panel._onSave(el);
+
+  assert.equal(saveCalled, false);
+  assert.match(panel._error, /pick a trigger/i);
+});
+
+test("the bindings list summarizes press actions alongside up/down/stop", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._bindings = [
+    {
+      id: "b1",
+      targets: { entity_id: ["light.a"] },
+      up: { device_id: "dev1", type: "x" },
+      stop: { device_id: "dev1", type: "y" },
+      presses: [
+        { trigger: {}, action: { type: "toggle" } },
+        { trigger: {}, action: { type: "on" } },
+        { trigger: {}, action: { type: "off" } },
+      ],
+    },
+    {
+      id: "b2",
+      targets: { entity_id: ["light.b"] },
+      presses: [{ trigger: { device_id: "dev2" }, action: { type: "toggle" } }],
+    },
+  ];
+  panel._hass = {
+    states: {
+      "light.a": { entity_id: "light.a", attributes: { friendly_name: "Light A" } },
+      "light.b": { entity_id: "light.b", attributes: { friendly_name: "Light B" } },
+    },
+    areas: {},
+    devices: { dev2: { name: "Remote B" } },
+  };
+  const bindingsEl = { innerHTML: "", querySelector: () => null, querySelectorAll: () => [] };
+  panel.querySelector = (sel) => (sel === "#plejd-bindings" ? bindingsEl : null);
+
+  panel._renderEditor();
+
+  assert.match(bindingsEl.innerHTML, /3 press actions/);
+  assert.match(bindingsEl.innerHTML, /1 press action(?!s)/);
+  assert.match(bindingsEl.innerHTML, /Remote B/); // press-only binding's device via its first press trigger
 });
