@@ -188,6 +188,10 @@ class PlejdDimBindings:
     async def _attach(self, binding: dict) -> None:
         bid = binding["id"]  # guaranteed by _ensure_ids
         target = _target(binding)
+        if (binding.get("up") or binding.get("down")) and not binding.get("stop"):
+            # A hold with no release path would ramp to DIM_MAX_DURATION on every press;
+            # reject the whole binding rather than attach start triggers that can't stop.
+            raise ValueError("dim binding has a start trigger but no stop trigger")
         # Attach atomically: if any trigger fails, roll back the ones already attached for
         # this binding, so we never leave a ramp that can start but not stop.
         attached: list = []
@@ -219,6 +223,8 @@ class PlejdDimBindings:
 
     def _start_action(self, bid, target, direction):
         async def _action(run_variables=None, context=None):
+            if self._closed:  # a trigger firing during unload-race cleanup mustn't start a ramp
+                return
             self._ramp.start(bid, target, direction)
 
         return _action

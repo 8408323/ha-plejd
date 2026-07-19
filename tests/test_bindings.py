@@ -217,18 +217,20 @@ async def test_replace_persists_and_reattaches(monkeypatch):
     pb = PlejdDimBindings(hass)
     await pb.async_load()  # empty
     assert pb.bindings == []
-    new = [{"id": "b1", "targets": {"entity_id": ["light.a"]}, "up": {"x": 1}}]
+    new = [{"id": "b1", "targets": {"entity_id": ["light.a"]}, "up": {"x": 1}, "stop": {"s": 1}}]
     await pb.async_replace(new)
     assert pb.bindings == new
     assert hass.data[("store", bindings_mod.STORE_KEY)] == new  # persisted
-    assert len(captured) == 1  # the one "up" trigger attached
+    assert len(captured) == 2  # the "up" and "stop" triggers attached
 
 
 async def test_replace_detaches_previous(monkeypatch):
     captured = []
     monkeypatch.setattr(bindings_mod, "async_initialize_triggers", _spy_triggers(captured))
     hass = _hass()
-    hass.data[("store", bindings_mod.STORE_KEY)] = [{"id": "b1", "targets": {"entity_id": ["light.a"]}, "up": {"x": 1}}]
+    hass.data[("store", bindings_mod.STORE_KEY)] = [
+        {"id": "b1", "targets": {"entity_id": ["light.a"]}, "up": {"x": 1}, "stop": {"s": 1}}
+    ]
     pb = PlejdDimBindings(hass)
     await pb.async_load()
     await pb.async_replace([])  # remove all
@@ -247,8 +249,8 @@ async def test_load_survives_a_bad_binding(monkeypatch):
     monkeypatch.setattr(bindings_mod, "async_initialize_triggers", _init)
     hass = _hass()
     hass.data[("store", bindings_mod.STORE_KEY)] = [
-        {"id": "bad", "targets": {"entity_id": ["light.a"]}, "up": {"bad": 1}},
-        {"id": "good", "targets": {"entity_id": ["light.b"]}, "up": {"ok": 1}},
+        {"id": "bad", "targets": {"entity_id": ["light.a"]}, "up": {"bad": 1}, "stop": {"s": 1}},
+        {"id": "good", "targets": {"entity_id": ["light.b"]}, "up": {"ok": 1}, "stop": {"s": 1}},
     ]
     pb = PlejdDimBindings(hass)
     await pb.async_load()  # must not raise
@@ -259,7 +261,9 @@ async def test_shutdown_detaches_and_stops_ramp(monkeypatch):
     captured = []
     monkeypatch.setattr(bindings_mod, "async_initialize_triggers", _spy_triggers(captured))
     hass = _hass()
-    hass.data[("store", bindings_mod.STORE_KEY)] = [{"id": "b1", "targets": {"entity_id": ["light.a"]}, "up": {"x": 1}}]
+    hass.data[("store", bindings_mod.STORE_KEY)] = [
+        {"id": "b1", "targets": {"entity_id": ["light.a"]}, "up": {"x": 1}, "stop": {"s": 1}}
+    ]
     pb = PlejdDimBindings(hass)
     pb._ramp = _SpyRamp()
     await pb.async_load()
@@ -352,10 +356,38 @@ async def test_concurrent_replaces_leave_consistent_triggers(monkeypatch):
     pb = PlejdDimBindings(hass)
     await pb.async_load()
     a = [{"id": "a", "targets": {"entity_id": ["light.a"]}, "up": {"x": 1}, "down": {"y": 1}, "stop": {"z": 1}}]
-    b = [{"id": "b", "targets": {"entity_id": ["light.b"]}, "up": {"x": 1}}]
+    b = [{"id": "b", "targets": {"entity_id": ["light.b"]}, "up": {"x": 1}, "stop": {"z": 1}}]
     await asyncio.gather(pb.async_replace(a), pb.async_replace(b))
     live = sum(1 for key in ("up", "down", "stop") if pb.bindings[0].get(key))
     assert len(pb._unsubs) == live  # exactly the winner's triggers remain — no stale leak
+
+
+async def test_binding_with_start_but_no_stop_is_rejected(monkeypatch):
+    captured = []
+    monkeypatch.setattr(bindings_mod, "async_initialize_triggers", _spy_triggers(captured))
+    hass = _hass()
+    hass.data[("store", bindings_mod.STORE_KEY)] = [
+        {"id": "b1", "targets": {"entity_id": ["light.a"]}, "up": {"x": 1}},  # start, no release
+    ]
+    pb = PlejdDimBindings(hass)
+    await pb.async_load()  # per-binding guard logs and skips it
+    assert pb._unsubs == [] and captured == []  # no hold-without-release binding attached
+
+
+async def test_start_action_noops_after_close(monkeypatch):
+    captured = []
+    monkeypatch.setattr(bindings_mod, "async_initialize_triggers", _spy_triggers(captured))
+    hass = _hass()
+    hass.data[("store", bindings_mod.STORE_KEY)] = [
+        {"id": "b1", "targets": {"entity_id": ["light.a"]}, "up": {"x": 1}, "stop": {"s": 1}},
+    ]
+    pb = PlejdDimBindings(hass)
+    pb._ramp = _SpyRamp()
+    await pb.async_load()
+    start_action = captured[0][1]  # the "up" start action
+    pb._closed = True  # integration unloaded
+    await start_action()
+    assert pb._ramp.calls == []  # a trigger firing after teardown starts no ramp
 
 
 async def test_replace_cancels_live_ramps(monkeypatch):
@@ -366,7 +398,7 @@ async def test_replace_cancels_live_ramps(monkeypatch):
     pb._ramp.start("b1", {"entity_id": ["light.a"]}, "up")  # a ramp is mid-hold
     await asyncio.sleep(0)
     task = pb._ramp._tasks["b1"]
-    await pb.async_replace([{"id": "b2", "targets": {"entity_id": ["light.b"]}, "up": {"x": 1}}])
+    await pb.async_replace([{"id": "b2", "targets": {"entity_id": ["light.b"]}, "up": {"x": 1}, "stop": {"s": 1}}])
     await asyncio.sleep(0)
     assert task.cancelled()  # old ramp stopped, so it can't keep stepping to DIM_MAX_DURATION
 
@@ -394,9 +426,9 @@ async def test_replace_undoes_attach_when_shutdown_races(monkeypatch):
     pb = PlejdDimBindings(hass)
     holder["pb"] = pb
     await pb.async_load()
-    await pb.async_replace([{"id": "b1", "targets": {"entity_id": ["light.a"]}, "up": {"x": 1}}])
+    await pb.async_replace([{"id": "b1", "targets": {"entity_id": ["light.a"]}, "up": {"x": 1}, "stop": {"s": 1}}])
     assert pb._unsubs == []  # the attach that completed after shutdown was rolled back
-    assert holder.get("unsubbed") == [[{"x": 1}]]  # and its stray trigger was unsubscribed
+    assert holder.get("unsubbed") == [[{"x": 1}], [{"s": 1}]]  # its stray triggers were unsubscribed
 
 
 async def test_replace_assigns_missing_ids(monkeypatch):
