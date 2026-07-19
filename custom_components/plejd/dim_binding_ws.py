@@ -13,9 +13,12 @@ from homeassistant.components import websocket_api
 from homeassistant.components.device_automation import DeviceAutomationType, async_get_device_automations
 from homeassistant.components.device_automation.exceptions import DeviceNotFound
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import device_registry as dr
 
 from .bindings import InvalidDimBinding
 from .const import DOMAIN
+from .remote_profile_ws import DATA_REMOTE_PROFILES
+from .remote_profiles import build_buttons_view
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -76,7 +79,18 @@ async def ws_device_triggers(hass: HomeAssistant, connection, msg) -> None:
         _LOGGER.warning("Plejd: could not get triggers for device %s", device_id, exc_info=True)
         connection.send_error(msg["id"], "triggers_failed", "Could not load device triggers")
         return
-    connection.send_result(msg["id"], {"triggers": triggers.get(device_id, [])})
+    device_triggers = triggers.get(device_id, [])
+    manufacturer, model = _device_manufacturer_model(hass, device_id)
+    remote_profiles = hass.data.get(DATA_REMOTE_PROFILES)
+    custom_profile = remote_profiles.get(device_id) if remote_profiles is not None else None
+    buttons = build_buttons_view(device_triggers, manufacturer=manufacturer, model=model, custom_profile=custom_profile)
+    connection.send_result(msg["id"], {"triggers": device_triggers, "buttons": buttons})
+
+
+def _device_manufacturer_model(hass: HomeAssistant, device_id: str) -> tuple[str | None, str | None]:
+    registry = dr.async_get(hass)
+    device = registry.async_get(device_id) if registry is not None else None
+    return (device.manufacturer, device.model) if device is not None else (None, None)
 
 
 def async_register(hass: HomeAssistant) -> None:

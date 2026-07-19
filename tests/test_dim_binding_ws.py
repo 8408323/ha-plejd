@@ -74,14 +74,89 @@ async def test_device_triggers_returns_devices_triggers():
     hass = _hass(device_automations={"dev1": trigs})
     conn = _Conn()
     await dim_binding_ws.ws_device_triggers(hass, conn, {"id": 5, "device_id": "dev1"})
-    assert conn.result == (5, {"triggers": trigs})
+    msg_id, payload = conn.result
+    assert msg_id == 5
+    assert payload["triggers"] == trigs  # unchanged, still the raw flat list
 
 
 async def test_device_triggers_empty_for_unknown_device():
     hass = _hass(device_automations={})
     conn = _Conn()
     await dim_binding_ws.ws_device_triggers(hass, conn, {"id": 5, "device_id": "gone"})
-    assert conn.result == (5, {"triggers": []})
+    assert conn.result == (5, {"triggers": [], "buttons": {"device_type": None, "source": "generic", "groups": []}})
+
+
+# ── "buttons" grouped view (device_triggers extension) ──────────────────────
+
+
+class _Device:
+    def __init__(self, manufacturer, model):
+        self.manufacturer = manufacturer
+        self.model = model
+
+
+class _Registry:
+    def __init__(self, device):
+        self._device = device
+
+    def async_get(self, device_id):
+        return self._device
+
+
+class _RemoteProfiles:
+    def __init__(self, overrides=None):
+        self._overrides = overrides or {}
+
+    def get(self, device_id):
+        return self._overrides.get(device_id)
+
+
+async def test_device_triggers_buttons_falls_back_to_generic_with_no_registry():
+    trigs = [{"platform": "device", "type": "on", "subtype": "button_1"}]
+    hass = _hass(device_automations={"dev1": trigs})
+    conn = _Conn()
+    await dim_binding_ws.ws_device_triggers(hass, conn, {"id": 5, "device_id": "dev1"})
+    _, payload = conn.result
+    assert payload["buttons"]["source"] == "generic"
+    assert payload["buttons"]["groups"][0]["id"] == "subtype:button_1"
+
+
+async def test_device_triggers_buttons_uses_builtin_profile_from_device_registry():
+    trigs = [{"type": "action", "subtype": "on"}, {"type": "action", "subtype": "off"}]
+    hass = _hass(device_automations={"dev1": trigs})
+    hass.device_registry = _Registry(_Device("IKEA", "E1743"))
+    conn = _Conn()
+    await dim_binding_ws.ws_device_triggers(hass, conn, {"id": 5, "device_id": "dev1"})
+    _, payload = conn.result
+    assert payload["buttons"]["source"] == "profile"
+    assert payload["buttons"]["device_type"] == "IKEA TRADFRI on/off switch"
+
+
+async def test_device_triggers_buttons_prefers_custom_override_over_builtin_profile():
+    from plejd.dim_binding_ws import DATA_REMOTE_PROFILES
+
+    trigs = [{"type": "action", "subtype": "on"}]
+    custom = {
+        "buttons": [{"name": "my_button", "label": "My Button", "triggers": [{"type": "action", "subtype": "on"}]}]
+    }
+    hass = _hass(device_automations={"dev1": trigs})
+    hass.device_registry = _Registry(_Device("IKEA", "E1743"))
+    hass.data[DATA_REMOTE_PROFILES] = _RemoteProfiles({"dev1": custom})
+    conn = _Conn()
+    await dim_binding_ws.ws_device_triggers(hass, conn, {"id": 5, "device_id": "dev1"})
+    _, payload = conn.result
+    assert payload["buttons"]["source"] == "custom"
+    assert payload["buttons"]["groups"][0]["id"] == "my_button"
+
+
+async def test_device_triggers_buttons_ignores_missing_device_in_registry():
+    trigs = [{"type": "on"}]
+    hass = _hass(device_automations={"dev1": trigs})
+    hass.device_registry = _Registry(None)  # registry present, device not found
+    conn = _Conn()
+    await dim_binding_ws.ws_device_triggers(hass, conn, {"id": 5, "device_id": "dev1"})
+    _, payload = conn.result
+    assert payload["buttons"]["source"] == "generic"
 
 
 def test_async_register_registers_all_commands():
