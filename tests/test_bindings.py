@@ -291,6 +291,22 @@ async def test_replace_assigns_missing_ids(monkeypatch):
     assert hass.data[("store", bindings_mod.STORE_KEY)][0]["id"]  # and persisted
 
 
+async def test_replace_reassigns_duplicate_ids(monkeypatch):
+    monkeypatch.setattr(bindings_mod, "async_initialize_triggers", _spy_triggers([]))
+    hass = _hass()
+    pb = PlejdDimBindings(hass)
+    await pb.async_load()
+    await pb.async_replace(
+        [
+            {"id": "dup", "targets": {"entity_id": ["light.a"]}},
+            {"id": "dup", "targets": {"entity_id": ["light.b"]}},
+        ]
+    )
+    assert pb.bindings[0]["id"] == "dup"
+    assert pb.bindings[1]["id"] != "dup"
+    assert pb.bindings[0]["id"] != pb.bindings[1]["id"]
+
+
 async def test_load_persists_ids_assigned_to_legacy_data(monkeypatch):
     monkeypatch.setattr(bindings_mod, "async_initialize_triggers", _spy_triggers([]))
     hass = _hass()
@@ -299,3 +315,17 @@ async def test_load_persists_ids_assigned_to_legacy_data(monkeypatch):
     await pb.async_load()
     assert pb.bindings[0]["id"]  # assigned
     assert hass.data[("store", bindings_mod.STORE_KEY)][0]["id"]  # and saved back, so it's stable
+
+
+async def test_load_persists_reassigned_duplicate_ids(monkeypatch):
+    monkeypatch.setattr(bindings_mod, "async_initialize_triggers", _spy_triggers([]))
+    hass = _hass()
+    hass.data[("store", bindings_mod.STORE_KEY)] = [
+        {"id": "dup", "targets": {"entity_id": ["light.a"]}},
+        {"id": "dup", "targets": {"entity_id": ["light.b"]}},
+    ]
+    pb = PlejdDimBindings(hass)
+    await pb.async_load()
+    assert pb.bindings[0]["id"] == "dup"
+    assert pb.bindings[1]["id"] != "dup"
+    assert hass.data[("store", bindings_mod.STORE_KEY)][1]["id"] == pb.bindings[1]["id"]

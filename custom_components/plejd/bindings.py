@@ -45,13 +45,20 @@ def _target(binding: dict) -> dict[str, Any]:
 def _ensure_ids(bindings: list[dict]) -> bool:
     """Give every binding a stable unique id (so ramps never collide under a shared key).
 
-    Mutates in place; returns True if any id was newly assigned.
+    Mutates in place; returns True if any id was newly assigned or de-duplicated.
     """
     assigned = False
+    seen: set[str] = set()
     for binding in bindings:
-        if not binding.get("id"):
-            binding["id"] = uuid4().hex
-            assigned = True
+        if (bid := binding.get("id")) and bid not in seen:
+            seen.add(bid)
+            continue
+        bid = uuid4().hex
+        while bid in seen:
+            bid = uuid4().hex
+        binding["id"] = bid
+        seen.add(bid)
+        assigned = True
     return assigned
 
 
