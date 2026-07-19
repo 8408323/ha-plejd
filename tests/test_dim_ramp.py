@@ -144,9 +144,7 @@ async def test_restart_replaces_task_without_evicting_new_one():
 
 
 async def test_shutdown_cancels_all():
-    coord = _FakeCoord(
-        {11: OutputState(output=11, on=True, level=100), 12: OutputState(output=12, on=True, level=100)}
-    )
+    coord = _FakeCoord({11: OutputState(output=11, on=True, level=100), 12: OutputState(output=12, on=True, level=100)})
     ramp = _ramp(coord, step=10, interval=PARKED)
     ramp.start(11, 1)
     ramp.start(12, -1)
@@ -188,9 +186,7 @@ def _device(device_id, address, output_index=0, *, category=CATEGORY_LIGHT, dimm
 
 
 def _hass_with_registries(entities=None, device_registry=None):
-    return types.SimpleNamespace(
-        entity_registry=_FakeEntityRegistry(entities or {}), device_registry=device_registry
-    )
+    return types.SimpleNamespace(entity_registry=_FakeEntityRegistry(entities or {}), device_registry=device_registry)
 
 
 def _ent(unique_id, platform="plejd"):
@@ -266,7 +262,9 @@ def test_resolve_device_target_skips_unknown_device():
 
 def test_resolve_dedups_across_targets():
     coord = _FakeCoord(devices=[_device("k1", 11)])
-    dev_reg = _FakeDeviceRegistry(by_identifiers={frozenset({("plejd", "k1")}): types.SimpleNamespace(area_id="kitchen")})
+    dev_reg = _FakeDeviceRegistry(
+        by_identifiers={frozenset({("plejd", "k1")}): types.SimpleNamespace(area_id="kitchen")}
+    )
     hass = _hass_with_registries({"light.k1": _ent("k1")}, device_registry=dev_reg)
     # Same output reached via both an entity target and its area — returned once.
     assert resolve_addresses(hass, coord, ["light.k1"], area_ids=["kitchen"]) == [11]

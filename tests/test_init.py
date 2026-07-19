@@ -416,9 +416,7 @@ async def _setup_with_spy_ramp(monkeypatch, resolver=None):
         return spy
 
     monkeypatch.setattr(plejd, "PlejdDimRamp", _make)
-    monkeypatch.setattr(
-        plejd, "resolve_addresses", resolver or (lambda hass, coord, ents, areas, devices: [11, 12])
-    )
+    monkeypatch.setattr(plejd, "resolve_addresses", resolver or (lambda hass, coord, ents, areas, devices: [11, 12]))
     hass, entry = _hass(), _entry()
     unloads: list = []
     entry.async_on_unload = unloads.append
