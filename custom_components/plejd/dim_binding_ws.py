@@ -11,8 +11,10 @@ import logging
 import voluptuous as vol
 from homeassistant.components import websocket_api
 from homeassistant.components.device_automation import DeviceAutomationType, async_get_device_automations
+from homeassistant.components.device_automation.exceptions import DeviceNotFound
 from homeassistant.core import HomeAssistant
 
+from .bindings import InvalidDimBinding
 from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
@@ -25,7 +27,12 @@ DATA_BINDINGS = f"{DOMAIN}_dim_bindings"
 @websocket_api.async_response
 async def ws_list(hass: HomeAssistant, connection, msg) -> None:
     bindings = hass.data.get(DATA_BINDINGS)
-    connection.send_result(msg["id"], {"bindings": bindings.bindings if bindings is not None else []})
+    if bindings is None:
+        # Not loaded (e.g. mid reload, after unload popped it): error rather than an empty
+        # list, so the editor treats it as a load failure and can't later save [] over storage.
+        connection.send_error(msg["id"], "not_loaded", "Plejd is not loaded")
+        return
+    connection.send_result(msg["id"], {"bindings": bindings.bindings})
 
 
 @websocket_api.require_admin
@@ -38,6 +45,11 @@ async def ws_save(hass: HomeAssistant, connection, msg) -> None:
         return
     try:
         await bindings.async_replace(msg["bindings"])
+    except InvalidDimBinding as err:
+        # A known validation failure (e.g. a start trigger with no stop) — safe to surface
+        # the reason. Only this specific type, so an unrelated ValueError can't leak internals.
+        connection.send_error(msg["id"], "invalid_binding", str(err))
+        return
     except Exception:  # noqa: BLE001 - log the detail server-side, return a stable generic message
         _LOGGER.exception("Plejd: failed to save dim bindings")
         connection.send_error(msg["id"], "save_failed", "Could not save bindings")
@@ -53,12 +65,17 @@ async def ws_device_triggers(hass: HomeAssistant, connection, msg) -> None:
     device_id = msg["device_id"]
     try:
         triggers = await async_get_device_automations(hass, DeviceAutomationType.TRIGGER, [device_id])
-    except Exception:  # noqa: BLE001 - one device failing to enumerate must not break the picker
-        # Degrade to "no triggers" for this device, but log loudly: in the dashboard flow the
-        # device_id is a real, user-picked device, so a failure here is an unexpected backend
-        # error worth surfacing, not the routine empty result of an unknown device.
+    except DeviceNotFound:
+        # The device was removed or the editor holds a stale id — terminal, not retryable.
+        # Tell the editor to drop/refresh it rather than offer a (futile) retry.
+        connection.send_error(msg["id"], "device_not_found", "Device not found")
+        return
+    except Exception:  # noqa: BLE001 - a genuine enumeration failure, not "device has no triggers"
+        # Surface the failure instead of an empty list: a real, user-picked device returning
+        # empty reads as "no triggers" in the editor and its trigger cache then blocks a retry.
         _LOGGER.warning("Plejd: could not get triggers for device %s", device_id, exc_info=True)
-        triggers = {}
+        connection.send_error(msg["id"], "triggers_failed", "Could not load device triggers")
+        return
     connection.send_result(msg["id"], {"triggers": triggers.get(device_id, [])})
 
 
