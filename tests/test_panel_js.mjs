@@ -283,7 +283,7 @@ test("clicking a light row's name calls light.turn_on when the light is off", ()
   assert.deepEqual(plain(calls[0]), { domain: "light", service: "turn_on", data: { entity_id: "light.kitchen" } });
 });
 
-test("dragging a brightness slider updates the live label without calling a service, and release commits brightness_pct once", () => {
+test("dragging a brightness slider sends a live update on the first tick and updates the label", () => {
   const PanelClass = loadPanelClass();
   const panel = new PanelClass();
   const calls = [];
@@ -315,13 +315,135 @@ test("dragging a brightness slider updates the live label without calling a serv
   listeners.input();
 
   assert.equal(levelSpan.textContent, "72%");
-  assert.equal(calls.length, 0); // dragging never sends a command
   assert.equal(panel._draggingEntity, "light.kitchen");
+  // No prior send this drag, so the first tick ships immediately for direct feedback.
+  assert.equal(calls.length, 1);
+  assert.deepEqual(plain(calls[0]), {
+    domain: "light",
+    service: "turn_on",
+    data: { entity_id: "light.kitchen", brightness_pct: 72 },
+  });
+});
+
+test("further ticks within the throttle window are queued, not sent immediately, and the trailing tick reflects the latest value", () => {
+  const timers = [];
+  let nextId = 1;
+  const PanelClass = loadPanelClass({
+    setTimeout(fn) {
+      const id = nextId++;
+      timers.push({ id, fn });
+      return id;
+    },
+    clearTimeout(id) {
+      const i = timers.findIndex((t) => t.id === id);
+      if (i !== -1) timers.splice(i, 1);
+    },
+  });
+  const panel = new PanelClass();
+  const calls = [];
+  panel._hass = {
+    states: {},
+    callService: (domain, service, data) => {
+      calls.push({ domain, service, data });
+      return Promise.resolve();
+    },
+  };
+
+  const listeners = {};
+  const levelSpan = { textContent: "40%" };
+  const slider = {
+    value: "40",
+    getAttribute: (name) => (name === "data-brightness" ? "light.kitchen" : null),
+    addEventListener: (ev, fn) => {
+      listeners[ev] = fn;
+    },
+  };
+  const el = {
+    querySelectorAll: (sel) => (sel === "[data-brightness]" ? [slider] : []),
+    querySelector: (sel) => (sel === '[data-level="light.kitchen"]' ? levelSpan : null),
+  };
+
+  panel._wireLights(el);
+
+  slider.value = "50";
+  listeners.input(); // first tick: sends immediately (no throttling to apply yet)
+  assert.equal(calls.length, 1);
+
+  slider.value = "60";
+  listeners.input(); // within the throttle window: queued, not sent
+  assert.equal(calls.length, 1);
+  assert.equal(timers.length, 1);
+
+  slider.value = "65";
+  listeners.input(); // still dragging: replaces the queued timer, not a second one
+  assert.equal(calls.length, 1);
+  assert.equal(timers.length, 1);
+
+  timers[0].fn(); // the throttle window elapses
+
+  assert.equal(calls.length, 2);
+  assert.deepEqual(plain(calls[1]), {
+    domain: "light",
+    service: "turn_on",
+    data: { entity_id: "light.kitchen", brightness_pct: 65 }, // the latest position, not 60
+  });
+});
+
+test("releasing the slider sends the exact final value and cancels a pending throttled send", () => {
+  const timers = [];
+  let nextId = 1;
+  const cleared = [];
+  const PanelClass = loadPanelClass({
+    setTimeout(fn) {
+      const id = nextId++;
+      timers.push({ id, fn });
+      return id;
+    },
+    clearTimeout(id) {
+      cleared.push(id);
+      const i = timers.findIndex((t) => t.id === id);
+      if (i !== -1) timers.splice(i, 1);
+    },
+  });
+  const panel = new PanelClass();
+  const calls = [];
+  panel._hass = {
+    states: {},
+    callService: (domain, service, data) => {
+      calls.push({ domain, service, data });
+      return Promise.resolve();
+    },
+  };
+
+  const listeners = {};
+  const levelSpan = { textContent: "40%" };
+  const slider = {
+    value: "40",
+    getAttribute: (name) => (name === "data-brightness" ? "light.kitchen" : null),
+    addEventListener: (ev, fn) => {
+      listeners[ev] = fn;
+    },
+  };
+  const el = {
+    querySelectorAll: (sel) => (sel === "[data-brightness]" ? [slider] : []),
+    querySelector: (sel) => (sel === '[data-level="light.kitchen"]' ? levelSpan : null),
+  };
+
+  panel._wireLights(el);
+
+  slider.value = "50";
+  listeners.input(); // sends immediately
+  slider.value = "72";
+  listeners.input(); // throttled: queues a trailing send at 72
+
+  assert.equal(timers.length, 1);
+  const queuedTimerId = timers[0].id;
 
   listeners.change();
 
-  assert.equal(calls.length, 1);
-  assert.deepEqual(plain(calls[0]), {
+  assert.deepEqual(cleared, [queuedTimerId]); // the queued send is canceled, not left to fire later
+  assert.equal(calls.length, 2);
+  assert.deepEqual(plain(calls[1]), {
     domain: "light",
     service: "turn_on",
     data: { entity_id: "light.kitchen", brightness_pct: 72 },

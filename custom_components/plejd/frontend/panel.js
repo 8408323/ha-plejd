@@ -21,6 +21,9 @@ const BTN = `
   background: var(--primary-color, #03a9f4); color: var(--text-primary-color, #fff);
 `;
 const LABEL = "display:block;font-size:.8rem;color:var(--secondary-text-color,#727272);margin:0 0 4px";
+// Minimum gap between live brightness commands while dragging a slider — matches
+// DIM_INTERVAL in dim_ramp.py, the same pacing the hold-to-dim ramp uses per tick.
+const DRAG_SEND_INTERVAL_MS = 100;
 
 // Entity/area/device names are user-controlled; escape before interpolating into innerHTML.
 const esc = (s) =>
@@ -376,16 +379,42 @@ class PlejdPanel extends HTMLElement {
     });
     el.querySelectorAll("[data-brightness]").forEach((slider) => {
       const entityId = slider.getAttribute("data-brightness");
-      // 'input' fires on every drag tick (live label only, no command); 'change' fires
-      // once on release/keystroke — that's when we actually send brightness_pct, so
-      // dragging never floods the mesh with commands.
+      let lastSent = 0;
+      let pendingTimer = null;
+      const sendNow = () => {
+        lastSent = Date.now();
+        this._setLightBrightness(entityId, Number(slider.value));
+      };
+      // 'input' fires on every drag tick — send live so the light tracks the slider for
+      // direct feedback, but throttled to DRAG_SEND_INTERVAL_MS (matches the hold-to-dim
+      // ramp's own tick pacing, DIM_INTERVAL in dim_ramp.py) so a fast drag doesn't flood
+      // the mesh; a trailing timer guarantees the final position mid-pause still ships.
       slider.addEventListener("input", () => {
         this._draggingEntity = entityId;
         const levelEl = el.querySelector(`[data-level="${entityId}"]`);
         if (levelEl) levelEl.textContent = `${slider.value}%`;
+        if (pendingTimer !== null) {
+          clearTimeout(pendingTimer);
+          pendingTimer = null;
+        }
+        const elapsed = Date.now() - lastSent;
+        if (elapsed >= DRAG_SEND_INTERVAL_MS) {
+          sendNow();
+        } else {
+          pendingTimer = setTimeout(() => {
+            pendingTimer = null;
+            sendNow();
+          }, DRAG_SEND_INTERVAL_MS - elapsed);
+        }
       });
+      // 'change' fires once on release/keystroke — always send the exact final value,
+      // canceling any still-pending throttled send so it can't overwrite it afterward.
       slider.addEventListener("change", () => {
         this._draggingEntity = null;
+        if (pendingTimer !== null) {
+          clearTimeout(pendingTimer);
+          pendingTimer = null;
+        }
         this._setLightBrightness(entityId, Number(slider.value));
       });
     });
