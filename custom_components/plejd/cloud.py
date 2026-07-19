@@ -511,9 +511,11 @@ def parse_site(site: dict) -> PlejdCloudSite:
     room_address = room_address if isinstance(room_address, dict) else {}
     output_groups = site.get("outputGroups")
     output_groups = output_groups if isinstance(output_groups, dict) else {}
+    raw_rooms = site.get("rooms")
+    raw_rooms = raw_rooms if isinstance(raw_rooms, list) else []
     room_titles = {
         r.get("roomId"): (r.get("title") if isinstance(r.get("title"), str) else "").strip()
-        for r in site.get("rooms") or []
+        for r in raw_rooms
         if isinstance(r, dict)
     }
     category_by_address = {d.address: d.category for d in devices if d.address is not None}

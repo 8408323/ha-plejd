@@ -639,6 +639,19 @@ def test_parse_site_skips_non_dict_room_entry():
     assert len(rooms) == 1 and rooms[0].name == "Kitchen"
 
 
+def test_parse_site_tolerates_non_list_rooms_field():
+    site = {
+        **_SITE,
+        # rooms is a scalar (untrusted cloud data), not a list -> treated as absent
+        # instead of raising when building room_titles.
+        "rooms": "not-a-list",
+        "roomAddress": {"r1": 14},
+        "outputGroups": {"d1": {"0": [14]}},
+    }
+    rooms = parse_site(site).rooms
+    assert len(rooms) == 1 and rooms[0].name == "Room"  # falls back like a missing title does
+
+
 def test_parse_site_skips_non_dict_output_group_membership_map():
     site = {
         **_SITE,
