@@ -56,6 +56,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     coordinator = PlejdCoordinator(hass, entry)
     # Assign before connecting so diagnostics work even while setup is still failing.
     entry.runtime_data = coordinator
+    # Register the sidebar dashboard before starting the coordinator: a rare panel
+    # failure (e.g. url-path clash) then can't leave the BLE coordinator running, and
+    # HA runs this on_unload if a later setup step fails. Toggle via the options.
+    if entry.options.get(CONF_SHOW_PANEL, True):
+        await panel.async_register_panel(hass)
+    entry.async_on_unload(lambda: panel.async_unregister_panel(hass))
     await coordinator.async_start()
     try:
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
@@ -99,11 +105,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     entry.async_on_unload(lambda: hass.services.async_remove(DOMAIN, SERVICE_ADD_DEVICE))
     hass.services.async_register(DOMAIN, SERVICE_SCAN_DEVICES, _async_handle_scan_devices)
     entry.async_on_unload(lambda: hass.services.async_remove(DOMAIN, SERVICE_SCAN_DEVICES))
-
-    # Plejd dashboard in the sidebar (toggle via the integration options).
-    if entry.options.get(CONF_SHOW_PANEL, True):
-        await panel.async_register_panel(hass)
-    entry.async_on_unload(lambda: panel.async_unregister_panel(hass))
     return True
 
 

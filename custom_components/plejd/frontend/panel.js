@@ -20,7 +20,7 @@ const esc = (s) =>
 class PlejdPanel extends HTMLElement {
   set hass(hass) {
     this._hass = hass;
-    this._render();
+    this._scheduleRender();
   }
 
   set panel(panel) {
@@ -28,7 +28,17 @@ class PlejdPanel extends HTMLElement {
   }
 
   connectedCallback() {
-    this._render();
+    this._scheduleRender();
+  }
+
+  // HA sets `hass` on every state update; coalesce rapid updates into one render per frame.
+  _scheduleRender() {
+    if (this._pending) return;
+    this._pending = true;
+    requestAnimationFrame(() => {
+      this._pending = false;
+      this._render();
+    });
   }
 
   _lights() {
