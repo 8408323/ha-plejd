@@ -10,15 +10,8 @@ the ack fix (#77) — so the ramp is smooth instead of the chunky input_number w
 from __future__ import annotations
 
 import asyncio
-import logging
-from typing import TYPE_CHECKING
 
 from homeassistant.core import HomeAssistant
-
-if TYPE_CHECKING:
-    from .coordinator import PlejdCoordinator
-
-_LOGGER = logging.getLogger(__name__)
 
 # Per-tick brightness delta (0-255) and tick spacing. ~13/255 every 100 ms walks the
 # full range in ~2 s, matching a comfortable hold-to-dim feel.
@@ -36,7 +29,7 @@ class PlejdDimRamp:
     def __init__(
         self,
         hass: HomeAssistant,
-        coordinator: PlejdCoordinator,
+        coordinator,  # PlejdCoordinator; duck-typed (state_for + async_set_output) to avoid an import cycle
         *,
         step: int = DIM_STEP,
         interval: float = DIM_INTERVAL,
