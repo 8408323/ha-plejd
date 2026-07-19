@@ -90,10 +90,16 @@ def _validate_presses(binding: dict) -> None:
         atype = action.get("type")
         if atype not in PRESS_ACTIONS:
             raise InvalidDimBinding(f"unknown press action type: {atype!r}")
-        if atype == "scene" and not action.get("entity_id"):
-            raise InvalidDimBinding("scene press action needs an entity_id")
-        if atype == "service" and not (action.get("domain") and action.get("service")):
-            raise InvalidDimBinding("service press action needs a domain and service")
+        if atype == "scene":
+            entity_id = action.get("entity_id")
+            if not entity_id or not isinstance(entity_id, str):
+                raise InvalidDimBinding("scene press action needs a string entity_id")
+        if atype == "service":
+            if not (action.get("domain") and action.get("service")):
+                raise InvalidDimBinding("service press action needs a domain and service")
+            data = action.get("data")
+            if data is not None and not isinstance(data, dict):
+                raise InvalidDimBinding("service press action data must be a mapping")
 
 
 def _ensure_ids(bindings: list[dict]) -> bool:

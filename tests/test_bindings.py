@@ -728,6 +728,17 @@ async def test_replace_rejects_malformed_presses(monkeypatch):
         {"presses": "not-a-list"},  # wrong type for presses
         {"presses": [{"trigger": {"x": 1}, "action": "not-a-dict"}]},  # wrong type for action
         {"presses": ["not-a-dict"]},  # wrong type for a press entry
+        {
+            "presses": [{"trigger": {"x": 1}, "action": {"type": "scene", "entity_id": ["scene.kvall"]}}]
+        },  # entity_id must be a single string, not a list
+        {
+            "presses": [
+                {
+                    "trigger": {"x": 1},
+                    "action": {"type": "service", "domain": "light", "service": "turn_on", "data": ["bad"]},
+                }
+            ]
+        },  # data must be a mapping
     ]
     for binding in bad:
         with pytest.raises(ValueError):
@@ -738,7 +749,9 @@ async def test_load_skips_binding_with_malformed_presses(monkeypatch):
     captured = []
     monkeypatch.setattr(bindings_mod, "async_initialize_triggers", _spy_triggers(captured))
     logged = []
-    monkeypatch.setattr(bindings_mod._LOGGER, "warning", lambda *a, **k: logged.append(a[0] % a[1:] if len(a) > 1 else a[0]))
+    monkeypatch.setattr(
+        bindings_mod._LOGGER, "warning", lambda *a, **k: logged.append(a[0] % a[1:] if len(a) > 1 else a[0])
+    )
     hass = _hass()
     hass.data[("store", bindings_mod.STORE_KEY)] = [
         {"id": "b1", "targets": {"entity_id": ["light.a"]}, "presses": "not-a-list"},
