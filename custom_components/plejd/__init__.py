@@ -74,15 +74,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # Holiday mode (presence simulation) — constructed before platform forwarding so the
     # switch platform can look it up; the switch entity itself controls start/stop.
-    holiday_mode = PlejdHolidayMode(hass, entry)
-    hass.data[DATA_HOLIDAY_MODE] = holiday_mode
-    entry.async_on_unload(lambda: hass.data.pop(DATA_HOLIDAY_MODE, None))
-    entry.async_on_unload(holiday_mode.stop)
+    hass.data[DATA_HOLIDAY_MODE] = PlejdHolidayMode(hass, entry)
 
     try:
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     except Exception:
-        # Don't leak the BLE connection if platform setup fails.
+        # Don't leak the BLE connection (or a stale holiday-mode manager) if platform setup fails.
+        hass.data.pop(DATA_HOLIDAY_MODE, None)
         await coordinator.async_shutdown()
         raise
     entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
@@ -144,6 +142,14 @@ async def _async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    # Stop holiday mode (and turn off any lights it owns) before the light platform and
+    # the mesh connection go away, or the cleanup calls would target entities that no
+    # longer exist / a mesh that can no longer reach them. Unlike the coordinator below,
+    # this runs unconditionally (not gated on unload_ok): its own timer/state is this
+    # integration's alone to own, independent of whether some other platform's unload fails.
+    holiday_mode = hass.data.pop(DATA_HOLIDAY_MODE, None)
+    if holiday_mode is not None:
+        await holiday_mode.async_stop()
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
         await entry.runtime_data.async_shutdown()

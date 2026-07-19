@@ -145,12 +145,12 @@ class PlejdHolidaySwitch(SwitchEntity, RestoreEntity):
         )
 
     async def async_turn_on(self, **kwargs: Any) -> None:
-        self._manager.start()
+        await self._manager.async_start()
         self._attr_is_on = True
         self.async_write_ha_state()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
-        self._manager.stop()
+        await self._manager.async_stop()
         self._attr_is_on = False
         self.async_write_ha_state()
 
@@ -159,4 +159,4 @@ class PlejdHolidaySwitch(SwitchEntity, RestoreEntity):
         last = await self.async_get_last_state()
         if last is not None and last.state == "on":
             self._attr_is_on = True
-            self._manager.start()
+            await self._manager.async_start()

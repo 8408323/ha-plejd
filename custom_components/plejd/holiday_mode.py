@@ -10,14 +10,15 @@ only Plejd ones.
 
 from __future__ import annotations
 
-import asyncio
+import logging
 import random
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable
 from datetime import datetime, time, timedelta
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from .const import (
@@ -33,7 +34,12 @@ if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
     from homeassistant.core import HomeAssistant
 
+_LOGGER = logging.getLogger(__name__)
+
 DATA_HOLIDAY_MODE = f"{DOMAIN}_holiday_mode"
+
+STORE_VERSION = 1
+STORE_KEY = f"{DOMAIN}.holiday_mode"
 
 CHECK_INTERVAL = timedelta(minutes=5)
 TOGGLE_FRACTION = 0.4  # fraction of currently-off target lights turned on per tick
@@ -68,37 +74,36 @@ class PlejdHolidayMode:
         self._rng = rng or random.Random()
         self._unsub: Callable[[], None] | None = None
         self._on_until: dict[str, datetime] = {}
+        self._store: Store = Store(hass, STORE_VERSION, STORE_KEY)
 
     @property
     def is_running(self) -> bool:
         return self._unsub is not None
 
-    def start(self) -> None:
-        """Begin the recurring schedule (idempotent)."""
+    async def async_start(self) -> None:
+        """Begin the recurring schedule, restoring deadlines persisted before a restart (idempotent)."""
         if self._unsub is not None:
             return
+        stored = await self._store.async_load() or {}
+        self._on_until = {entity_id: datetime.fromisoformat(deadline) for entity_id, deadline in stored.items()}
         self._unsub = async_track_time_interval(self._hass, self._async_tick, CHECK_INTERVAL)
 
-    def stop(self) -> None:
-        """Stop the recurring schedule and turn off any lights it turned on (idempotent)."""
+    async def async_stop(self) -> None:
+        """Stop the recurring schedule and turn off any lights it turned on (idempotent).
+
+        Awaited directly by callers (the switch entity, and __init__.py's unload, before
+        the light platform is torn down) rather than fired-and-forgotten, so the cleanup
+        reliably completes while the target entities/connection still exist.
+        """
         if self._unsub is not None:
             self._unsub()
             self._unsub = None
-        if self._on_until:
-            pending = list(self._on_until)
-            self._on_until = {}
-            self._spawn(self._async_turn_off_all(pending))
-
-    def _spawn(self, coro: Coroutine[Any, Any, None]) -> asyncio.Task:
-        # Prefer HA's owned background task; fall back to a bare task outside HA (tests).
-        create = getattr(self._hass, "async_create_background_task", None)
-        if create is not None:
-            return create(coro, name="plejd-holiday-mode-cleanup")
-        return asyncio.ensure_future(coro)
-
-    async def _async_turn_off_all(self, entity_ids: list[str]) -> None:
-        for entity_id in entity_ids:
-            await self._hass.services.async_call("light", "turn_off", {"entity_id": entity_id}, blocking=True)
+        if not self._on_until:
+            return
+        for entity_id in list(self._on_until):
+            if await self._async_turn_off(entity_id):
+                del self._on_until[entity_id]
+        await self._async_persist()
 
     def _window(self) -> tuple[time, time]:
         options = self._entry.options
@@ -120,6 +125,25 @@ class PlejdHolidayMode:
         state = self._hass.states.get(entity_id)
         return state is not None and state.state == "on"
 
+    async def _async_persist(self) -> None:
+        await self._store.async_save({eid: deadline.isoformat() for eid, deadline in self._on_until.items()})
+
+    async def _async_turn_on(self, entity_id: str) -> bool:
+        try:
+            await self._hass.services.async_call("light", "turn_on", {"entity_id": entity_id}, blocking=True)
+        except Exception:  # noqa: BLE001 - one failed light must not block the rest, nor mark it as ours
+            _LOGGER.warning("Plejd holiday mode: could not turn on %s", entity_id, exc_info=True)
+            return False
+        return True
+
+    async def _async_turn_off(self, entity_id: str) -> bool:
+        try:
+            await self._hass.services.async_call("light", "turn_off", {"entity_id": entity_id}, blocking=True)
+        except Exception:  # noqa: BLE001 - one failed light must not block the rest
+            _LOGGER.warning("Plejd holiday mode: could not turn off %s", entity_id, exc_info=True)
+            return False
+        return True
+
     async def _async_tick(self, _now: object) -> None:
         await self._async_apply(dt_util.now())
 
@@ -127,8 +151,11 @@ class PlejdHolidayMode:
         # Expire our own on-lights on every tick, even outside the active window — a light
         # turned on near the window's end can have a deadline past it (#89 review).
         await self._async_turn_off_expired(now_local)
-        if not _in_window(now_local.time(), *self._window()):
-            return
+        if _in_window(now_local.time(), *self._window()):
+            await self._async_turn_on_new(now_local)
+        await self._async_persist()
+
+    async def _async_turn_on_new(self, now_local: datetime) -> None:
         off_lights = [
             entity_id
             for entity_id in self._target_lights()
@@ -138,12 +165,13 @@ class PlejdHolidayMode:
             return
         count = min(len(off_lights), max(1, round(len(off_lights) * TOGGLE_FRACTION)))
         for entity_id in self._rng.sample(off_lights, count):
+            if not await self._async_turn_on(entity_id):
+                continue  # not adopted as ours: safe to retry on the next tick
             minutes = self._rng.uniform(MIN_ON_MINUTES, MAX_ON_MINUTES)
             self._on_until[entity_id] = now_local + timedelta(minutes=minutes)
-            await self._hass.services.async_call("light", "turn_on", {"entity_id": entity_id}, blocking=True)
 
     async def _async_turn_off_expired(self, now_local: datetime) -> None:
         expired = [entity_id for entity_id, deadline in self._on_until.items() if deadline <= now_local]
         for entity_id in expired:
-            del self._on_until[entity_id]
-            await self._hass.services.async_call("light", "turn_off", {"entity_id": entity_id}, blocking=True)
+            if await self._async_turn_off(entity_id):
+                del self._on_until[entity_id]  # only drop tracking once the light is confirmed off

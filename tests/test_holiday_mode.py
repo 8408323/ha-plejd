@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import random
 import types
 from datetime import datetime, time, timedelta, timezone
@@ -11,13 +10,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
 from plejd import holiday_mode as hm
 from plejd.const import CONF_HOLIDAY_LIGHTS, CONF_HOLIDAY_WINDOW_END, CONF_HOLIDAY_WINDOW_START
-from plejd.holiday_mode import PlejdHolidayMode, _in_window, _parse_hhmm
-
-
-async def _drain():
-    # Let a stop()-spawned fire-and-forget cleanup task run to completion.
-    await asyncio.sleep(0)
-    await asyncio.sleep(0)
+from plejd.holiday_mode import STORE_KEY, PlejdHolidayMode, _in_window, _parse_hhmm
 
 
 class _FakeRandom:
@@ -46,6 +39,21 @@ class _Services:
         self.calls.append((domain, service, data))
 
 
+class _FlakyServices:
+    """Raises once for (service, entity_id) pairs in `fail_first`, then succeeds."""
+
+    def __init__(self, fail_first=None):
+        self.calls: list[tuple[str, str, dict]] = []
+        self._fail_first = set(fail_first or ())
+
+    async def async_call(self, domain, service, data, blocking=False):
+        key = (service, data.get("entity_id"))
+        if key in self._fail_first:
+            self._fail_first.discard(key)
+            raise RuntimeError("simulated transient failure")
+        self.calls.append((domain, service, data))
+
+
 class _States:
     """Minimal hass.states stand-in: reports "on" for a fixed set of entities."""
 
@@ -57,7 +65,7 @@ class _States:
 
 
 def _hass(entity_registry=None, states_on=None):
-    h = types.SimpleNamespace(services=_Services(), states=_States(states_on))
+    h = types.SimpleNamespace(services=_Services(), states=_States(states_on), data={})
     if entity_registry is not None:
         h.entity_registry = entity_registry
     return h
@@ -130,10 +138,10 @@ def test_window_reads_configured_bounds():
     assert manager._window() == (time(22, 0), time(2, 0))
 
 
-# ── start / stop ─────────────────────────────────────────────────────────────
+# ── async_start / async_stop ────────────────────────────────────────────────────
 
 
-def test_start_registers_recurring_timer_and_is_idempotent(monkeypatch):
+async def test_start_registers_recurring_timer_and_is_idempotent(monkeypatch):
     registrations = []
 
     def _fake_track(hass, action, interval):
@@ -142,8 +150,8 @@ def test_start_registers_recurring_timer_and_is_idempotent(monkeypatch):
 
     monkeypatch.setattr(hm, "async_track_time_interval", _fake_track)
     manager = PlejdHolidayMode(_hass(), _entry())
-    manager.start()
-    manager.start()  # idempotent: must not register a second timer
+    await manager.async_start()
+    await manager.async_start()  # idempotent: must not register a second timer
     assert len([r for r in registrations if r != "unsub"]) == 1
     assert manager.is_running is True
 
@@ -157,25 +165,66 @@ async def test_stop_cancels_timer_turns_off_tracked_lights_and_clears_pending_st
     monkeypatch.setattr(hm, "async_track_time_interval", _fake_track)
     hass = _hass()
     manager = PlejdHolidayMode(hass, _entry())
-    manager.start()
+    await manager.async_start()
     manager._on_until["light.a"] = _local(20, 0)
-    manager.stop()
-    await _drain()
+
+    await manager.async_stop()
+
     assert unsubbed == [True]  # the timer's own unsub was invoked -> no leaked timer
     assert manager.is_running is False
     assert manager._on_until == {}
     assert hass.services.calls == [("light", "turn_off", {"entity_id": "light.a"})]
+    assert hass.data[("store", STORE_KEY)] == {}  # cleared deadline persisted too
 
 
-def test_stop_without_start_is_a_noop():
+async def test_stop_without_start_is_a_noop():
     manager = PlejdHolidayMode(_hass(), _entry())
-    manager.stop()  # must not raise
+    await manager.async_stop()  # must not raise
     assert manager.is_running is False
 
 
 def test_default_rng_is_a_real_random_instance():
     manager = PlejdHolidayMode(_hass(), _entry())
     assert isinstance(manager._rng, random.Random)
+
+
+# ── persistence across a restart ────────────────────────────────────────────────
+
+
+async def test_start_restores_deadlines_persisted_before_a_restart(monkeypatch):
+    monkeypatch.setattr(hm, "async_track_time_interval", lambda hass, action, interval: lambda: None)
+    hass = _hass()
+    deadline = _local(21, 0)
+    hass.data[("store", STORE_KEY)] = {"light.a": deadline.isoformat()}
+
+    manager = PlejdHolidayMode(hass, _entry())
+    await manager.async_start()
+
+    assert manager._on_until == {"light.a": deadline}
+
+
+async def test_restored_deadline_still_expires_and_turns_the_light_off(monkeypatch):
+    monkeypatch.setattr(hm, "async_track_time_interval", lambda hass, action, interval: lambda: None)
+    hass = _hass()
+    deadline = _local(21, 0)
+    hass.data[("store", STORE_KEY)] = {"light.a": deadline.isoformat()}
+    manager = PlejdHolidayMode(hass, _entry(options={CONF_HOLIDAY_LIGHTS: ["light.a"]}), rng=_FakeRandom([]))
+    await manager.async_start()
+
+    await manager._async_apply(deadline + timedelta(minutes=1))
+
+    assert hass.services.calls == [("light", "turn_off", {"entity_id": "light.a"})]
+
+
+async def test_apply_persists_deadlines_for_the_next_restart():
+    hass = _hass()
+    options = {CONF_HOLIDAY_LIGHTS: ["light.a"]}
+    manager = PlejdHolidayMode(hass, _entry(options=options), rng=_FakeRandom(["light.a"], uniform_value=20.0))
+    now = _local(20, 0)
+
+    await manager._async_apply(now)
+
+    assert hass.data[("store", STORE_KEY)] == {"light.a": (now + timedelta(minutes=20.0)).isoformat()}
 
 
 # ── _async_tick: active-window gating ─────────────────────────────────────────
@@ -291,23 +340,6 @@ async def test_turns_off_expired_lights_on_a_later_tick():
     assert manager._on_until["light.a"] == t0 + timedelta(minutes=21.0)
 
 
-async def test_stop_spawns_cleanup_as_an_ha_owned_background_task():
-    created = []
-
-    def _create(coro, name):
-        created.append(name)
-        return asyncio.ensure_future(coro)
-
-    hass = _hass()
-    hass.async_create_background_task = _create
-    manager = PlejdHolidayMode(hass, _entry())
-    manager._on_until["light.a"] = _local(20, 0)
-    manager.stop()
-    await _drain()
-    assert created == ["plejd-holiday-mode-cleanup"]  # HA-owned task (surfaces failures), not a bare future
-    assert hass.services.calls == [("light", "turn_off", {"entity_id": "light.a"})]
-
-
 async def test_skips_lights_already_on_that_holiday_mode_did_not_turn_on():
     # A light already on (by the user, another automation, ...) must not be adopted as
     # "ours" — else a later expiry would turn off a light holiday mode never turned on.
@@ -342,3 +374,42 @@ async def test_turns_off_expired_lights_even_outside_the_active_window(monkeypat
     monkeypatch.setattr(dt_util, "now", lambda: _local(23, 40))  # outside the window, past the deadline
     await manager._async_tick(None)
     assert hass.services.calls == [("light", "turn_off", {"entity_id": "light.a"})]
+
+
+# ── retry-safety: a failing service call must not corrupt tracking ─────────────
+
+
+async def test_turn_off_failure_keeps_the_light_tracked_for_retry():
+    hass = _hass()
+    options = {CONF_HOLIDAY_LIGHTS: ["light.a"]}
+    fake_rng = _FakeRandom(["light.a"], uniform_value=10.0)
+    manager = PlejdHolidayMode(hass, _entry(options=options), rng=fake_rng)
+    t0 = _local(20, 0)
+    await manager._async_apply(t0)  # turns on light.a, deadline t0+10min
+    hass.services.calls.clear()
+
+    hass.services = _FlakyServices(fail_first={("turn_off", "light.a")})
+    fake_rng._sample_result = []  # isolate the expiry retry from picking a new light this tick
+    await manager._async_apply(t0 + timedelta(minutes=11))  # turn_off raises the first time
+    assert hass.services.calls == []
+    assert manager._on_until == {"light.a": t0 + timedelta(minutes=10)}  # still tracked, not lost
+
+    await manager._async_apply(t0 + timedelta(minutes=12))  # retried on the next tick, now succeeds
+    assert hass.services.calls == [("light", "turn_off", {"entity_id": "light.a"})]
+    assert manager._on_until == {}
+
+
+async def test_turn_on_failure_does_not_mark_the_light_as_owned():
+    hass = _hass()
+    hass.services = _FlakyServices(fail_first={("turn_on", "light.a")})
+    options = {CONF_HOLIDAY_LIGHTS: ["light.a"]}
+    manager = PlejdHolidayMode(hass, _entry(options=options), rng=_FakeRandom(["light.a"], uniform_value=10.0))
+    t0 = _local(20, 0)
+
+    await manager._async_apply(t0)  # turn_on raises -> must not be tracked
+    assert hass.services.calls == []
+    assert manager._on_until == {}
+
+    await manager._async_apply(t0 + timedelta(minutes=1))  # retried on the next tick, now succeeds
+    assert hass.services.calls == [("light", "turn_on", {"entity_id": "light.a"})]
+    assert manager._on_until == {"light.a": (t0 + timedelta(minutes=1)) + timedelta(minutes=10)}

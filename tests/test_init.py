@@ -36,13 +36,15 @@ class _FakeCoordinator:
 
 class _FakeHolidayMode:
     instances: list = []
+    call_order: list = []
 
     def __init__(self, hass, entry):
         self.stopped = False
         _FakeHolidayMode.instances.append(self)
 
-    def stop(self):
+    async def async_stop(self):
         self.stopped = True
+        _FakeHolidayMode.call_order.append("holiday_mode.async_stop")
 
 
 class _FakeConfigEntries:
@@ -52,6 +54,7 @@ class _FakeConfigEntries:
         self.forwarded = platforms
 
     async def async_unload_platforms(self, entry, platforms):
+        _FakeHolidayMode.call_order.append("async_unload_platforms")
         return self.unload_result
 
     async def async_reload(self, entry_id):
@@ -146,6 +149,22 @@ async def test_setup_shuts_down_when_forward_fails(monkeypatch):
     with pytest.raises(RuntimeError, match="platform setup failed"):
         await async_setup_entry(hass, entry)
     assert _FakeCoordinator.instances[-1].shutdown is True
+
+
+async def test_setup_cleans_up_holiday_mode_when_forward_fails(monkeypatch):
+    from plejd.holiday_mode import DATA_HOLIDAY_MODE
+
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    _FakeCoordinator.instances.clear()
+    hass, entry = _hass(), _entry()
+
+    async def _boom(entry, platforms):
+        raise RuntimeError("platform setup failed")
+
+    hass.config_entries.async_forward_entry_setups = _boom
+    with pytest.raises(RuntimeError, match="platform setup failed"):
+        await async_setup_entry(hass, entry)
+    assert DATA_HOLIDAY_MODE not in hass.data  # no stale manager left for a later retry
 
 
 async def test_unload_shuts_down_coordinator(monkeypatch):
@@ -527,19 +546,32 @@ async def test_setup_registers_holiday_mode(monkeypatch):
     assert hass.data[DATA_HOLIDAY_MODE] is _FakeHolidayMode.instances[-1]
 
 
-async def test_unload_stops_holiday_mode_and_cleans_data(monkeypatch):
+async def test_unload_stops_holiday_mode_before_unloading_platforms(monkeypatch):
     from plejd.holiday_mode import DATA_HOLIDAY_MODE
 
     monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
     monkeypatch.setattr(plejd, "PlejdHolidayMode", _FakeHolidayMode)
     _FakeCoordinator.instances.clear()
     _FakeHolidayMode.instances.clear()
+    _FakeHolidayMode.call_order.clear()
     hass, entry = _hass(), _entry()
-    unloads: list = []
-    entry.async_on_unload = unloads.append
     await async_setup_entry(hass, entry)
     assert DATA_HOLIDAY_MODE in hass.data
-    for unload in unloads:
-        unload()
+
+    assert await async_unload_entry(hass, entry) is True
+
     assert DATA_HOLIDAY_MODE not in hass.data
     assert _FakeHolidayMode.instances[-1].stopped is True
+    # Stopping (and turning off any lights it owns) must happen before the light platform
+    # and the mesh connection go away, or the cleanup would target entities that no
+    # longer exist (#89 review).
+    assert _FakeHolidayMode.call_order == ["holiday_mode.async_stop", "async_unload_platforms"]
+
+
+async def test_unload_without_holiday_mode_registered_is_a_noop(monkeypatch):
+    # Setup failed before holiday mode was constructed (or it was already popped) —
+    # unload must tolerate a missing DATA_HOLIDAY_MODE entry.
+    entry = _entry()
+    entry.runtime_data = _FakeCoordinator(None, entry)
+    hass = _hass()
+    assert await async_unload_entry(hass, entry) is True
