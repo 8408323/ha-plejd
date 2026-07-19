@@ -209,6 +209,20 @@ class PlejdPanel extends HTMLElement {
       );
   }
 
+  // Per-device Fault (problem) binary_sensors, the same domain-and-platform filtering
+  // approach as _lights() but for binary_sensor.* health entities instead of light.*.
+  _faults() {
+    const hass = this._hass;
+    if (!hass) return [];
+    return Object.values(hass.states).filter(
+      (s) =>
+        s.entity_id.startsWith("binary_sensor.") &&
+        s.attributes.device_class === "problem" &&
+        (hass.entities?.[s.entity_id]?.platform === "plejd" ||
+          s.attributes.attribution === "Plejd"),
+    );
+  }
+
   _allLights() {
     const hass = this._hass;
     return Object.values(hass.states)
@@ -266,6 +280,13 @@ class PlejdPanel extends HTMLElement {
     return d?.name_by_user || d?.name || deviceId;
   }
 
+  // A fault sensor's physical device, resolved the same way binding targets are (registry
+  // name over entity name) so the widget shows "Kitchen dimmer", not "Kitchen dimmer Fault".
+  _faultDeviceName(state) {
+    const deviceId = this._hass.entities?.[state.entity_id]?.device_id;
+    return deviceId ? this._deviceName(deviceId) : state.attributes.friendly_name || state.entity_id;
+  }
+
   // A stored binding's target(s) -> a human string. Lists every target (a binding can
   // hold multiple entities/areas/devices) so a Delete's scope isn't misread.
   _targetName(binding) {
@@ -293,6 +314,7 @@ class PlejdPanel extends HTMLElement {
       <div style="padding:16px 16px 48px;max-width:760px;margin:0 auto;color:var(--primary-text-color,#212121);font-family:var(--paper-font-body1_-_font-family,Roboto,sans-serif)">
         <h1 style="font-weight:400;margin:8px 4px 20px">Plejd</h1>
         <div id="plejd-lights" style="${CARD}"></div>
+        <div id="plejd-health" style="${CARD};margin-top:16px"></div>
         <div id="plejd-bindings" style="${CARD};margin-top:16px"></div>
       </div>`;
     this._renderEditor();
@@ -303,6 +325,7 @@ class PlejdPanel extends HTMLElement {
     this._lightsFrame = this._scheduleLightsFrame(() => {
       this._lightsFrame = null;
       this._updateLights();
+      this._updateHealth();
     });
   }
 
@@ -331,6 +354,34 @@ class PlejdPanel extends HTMLElement {
         <span style="color:var(--secondary-text-color,#727272);font-size:.9rem">${lights.length}</span>
       </div>
       ${rows || '<p style="color:var(--secondary-text-color,#727272)">No Plejd lights found.</p>'}`;
+  }
+
+  _updateHealth() {
+    const el = this.querySelector("#plejd-health");
+    if (!el) return;
+    const faulted = this._faults()
+      .filter((s) => s.state === "on")
+      .map((s) => ({
+        name: this._faultDeviceName(s),
+        flags: (s.attributes.active_faults || []).map((f) => f.replace(/_/g, " ")).join(", "),
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    const rows = faulted
+      .map(
+        (f) => `
+          <div style="display:flex;align-items:center;gap:12px;padding:10px 4px;border-bottom:1px solid var(--divider-color,#e0e0e0)">
+            <span style="width:10px;height:10px;border-radius:50%;background:var(--error-color,#db4437);flex:none"></span>
+            <span style="flex:1">${esc(f.name)}</span>
+            <span style="color:var(--secondary-text-color,#727272)">${esc(f.flags)}</span>
+          </div>`,
+      )
+      .join("");
+    el.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px">
+        <h2 style="font-weight:500;font-size:1.05rem;margin:0">Device health</h2>
+        <span style="color:var(--secondary-text-color,#727272);font-size:.9rem">${faulted.length}</span>
+      </div>
+      ${rows || '<p style="color:var(--secondary-text-color,#727272)">All devices healthy.</p>'}`;
   }
 
   _triggerOptions(deviceId, selected) {
