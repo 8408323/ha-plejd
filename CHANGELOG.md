@@ -7,6 +7,12 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Remote → light dim bindings (backend).** The integration can store "hold a
+  remote to dim a light/room" bindings and attach any remote's HA **device
+  triggers** (IKEA, Hue, ZHA, Zigbee2MQTT — any trigger) to a smooth
+  brightness-step ramp. Targets **any** Home Assistant light or a whole **area**,
+  not only Plejd (each step still rides Plejd's acked path for Plejd lights).
+  Managed over a WebSocket API; the dashboard editor UI comes next (#76).
 - **Plejd dashboard (sidebar panel).** A custom Plejd panel in the Home Assistant
   sidebar — its own web code, not a Lovelace view. It currently lists the site's
   Plejd lights; the remote dim-binding editor lands here next. Show or hide it in
