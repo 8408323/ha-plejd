@@ -83,7 +83,13 @@ async def test_ramp_logs_and_forgets_when_service_call_fails(monkeypatch):
     await asyncio.sleep(0)
     await asyncio.sleep(0)
     assert "b1" not in ramp._tasks  # forgotten, exception retrieved (no "never retrieved" warning)
-    assert logged and isinstance(logged[0][1]["exc_info"], RuntimeError)
+    assert logged
+    exc_info = logged[0][1]["exc_info"]
+    assert isinstance(exc_info, tuple)
+    assert exc_info[0] is RuntimeError
+    assert isinstance(exc_info[1], RuntimeError)
+    assert exc_info[1].args == ("light unavailable",)
+    assert exc_info[2] is not None
 
 
 async def test_ramp_empty_target_is_noop():
