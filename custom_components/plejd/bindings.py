@@ -44,6 +44,8 @@ DIM_MAX_DURATION = 8.0
 
 _TARGET_KEYS = ("entity_id", "device_id", "area_id")
 
+_ERR_STOPLESS_BINDING = "dim binding has a start trigger but no stop trigger"
+
 
 def _target(binding: dict) -> dict[str, Any]:
     """The HA service target from a binding (entity/device/area), non-empty keys only."""
@@ -181,7 +183,7 @@ class PlejdDimBindings:
                 # Reject before persisting: a hold with no release is invalid, and
                 # _async_attach would otherwise swallow the per-binding error and still
                 # report a saved-but-non-functional binding to the client.
-                raise ValueError("dim binding has a start trigger but no stop trigger")
+                raise ValueError(_ERR_STOPLESS_BINDING)
         _ensure_ids(bindings)
         # Serialize the whole save→swap→re-attach so two overlapping saves can't interleave
         # and leave both trigger sets live. Save first so the in-memory list and the live
@@ -224,7 +226,7 @@ class PlejdDimBindings:
         if _is_stopless(binding):
             # Load-path safety net for legacy/hand-edited storage (async_replace rejects
             # these before saving): a hold with no release would ramp to DIM_MAX_DURATION.
-            raise ValueError("dim binding has a start trigger but no stop trigger")
+            raise ValueError(_ERR_STOPLESS_BINDING)
         plejd_light = self._plejd_light(binding)
         # Attach atomically: if any trigger fails, roll back the ones already attached for
         # this binding, so we never leave a ramp that can start but not stop.

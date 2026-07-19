@@ -5,6 +5,7 @@ from __future__ import annotations
 import types
 
 from plejd import dim_binding_ws
+from plejd.bindings import _ERR_STOPLESS_BINDING
 from plejd.dim_binding_ws import DATA_BINDINGS
 
 
@@ -110,7 +111,7 @@ class _RejectingBindings:
     bindings: list = []
 
     async def async_replace(self, items):
-        raise ValueError("dim binding has a start trigger but no stop trigger")
+        raise ValueError(_ERR_STOPLESS_BINDING)
 
 
 async def test_save_rejects_invalid_binding_with_reason():
