@@ -113,3 +113,43 @@ test("disconnect cancels a queued lights render", () => {
   assert.deepEqual(cancelled, [42]);
   assert.equal(panel._lightsFrame, null);
 });
+
+test("_updateLights renders the current Plejd lights list", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const lights = { innerHTML: "" };
+
+  panel.querySelector = (selector) => (selector === "#plejd-lights" ? lights : null);
+  panel._hass = {
+    states: {
+      "light.kitchen": {
+        entity_id: "light.kitchen",
+        state: "on",
+        attributes: { friendly_name: 'Kitchen <Main>', brightness: 128 },
+      },
+      "light.patio": {
+        entity_id: "light.patio",
+        state: "off",
+        attributes: { friendly_name: "Patio" },
+      },
+      "light.other": {
+        entity_id: "light.other",
+        state: "on",
+        attributes: { friendly_name: "Other vendor" },
+      },
+    },
+    entities: {
+      "light.kitchen": { platform: "plejd" },
+      "light.patio": { platform: "plejd" },
+      "light.other": { platform: "other" },
+    },
+  };
+
+  panel._updateLights();
+
+  assert.match(lights.innerHTML, />2<\/span>/);
+  assert.match(lights.innerHTML, /Kitchen &lt;Main&gt;/);
+  assert.match(lights.innerHTML, /50%/);
+  assert.match(lights.innerHTML, /Patio/);
+  assert.doesNotMatch(lights.innerHTML, /Other vendor/);
+});
