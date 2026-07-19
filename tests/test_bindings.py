@@ -456,6 +456,19 @@ async def test_replace_rejects_stopless_binding_without_persisting(monkeypatch):
     assert ("store", bindings_mod.STORE_KEY) not in hass.data  # and never persisted
 
 
+async def test_replace_survives_malformed_previous_binding(monkeypatch):
+    monkeypatch.setattr(bindings_mod, "async_initialize_triggers", _spy_triggers([]))
+    hass = _hass_with_entities({})
+    hass.data[("store", bindings_mod.STORE_KEY)] = [
+        {"id": "old", "targets": {"entity_id": [None]}, "up": {"a": 1}, "stop": {"c": 1}},  # legacy/bad data
+    ]
+    pb = PlejdDimBindings(hass)
+    await pb.async_load()
+    # replacing must not raise while inspecting the malformed previous binding for native ramps
+    await pb.async_replace([{"id": "new", "targets": {"area_id": ["kitchen"]}, "up": {"x": 1}, "stop": {"s": 1}}])
+    assert [b["id"] for b in pb.bindings] == ["new"]
+
+
 async def test_replace_stops_native_plejd_ramp_of_removed_binding(monkeypatch):
     monkeypatch.setattr(bindings_mod, "async_initialize_triggers", _spy_triggers([]))
     hass = _hass_with_entities({"light.kok": "plejd"})

@@ -259,7 +259,10 @@ class PlejdDimBindings:
         if list(target) != ["entity_id"] or not isinstance(entities, list) or len(entities) != 1:
             return None
         entity_id = entities[0]
-        if not entity_id.startswith("light."):
+        # Tolerate malformed legacy/hand-edited storage (e.g. entity_id [null]): a non-string
+        # here must return None, not raise — this runs during replace's old-ramp cleanup too,
+        # where an exception would abort the whole replacement.
+        if not isinstance(entity_id, str) or not entity_id.startswith("light."):
             return None
         entry = er.async_get(self._hass).async_get(entity_id)
         return entity_id if entry is not None and entry.platform == DOMAIN else None
