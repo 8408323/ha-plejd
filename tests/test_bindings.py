@@ -739,6 +739,17 @@ async def test_replace_rejects_malformed_presses(monkeypatch):
                 }
             ]
         },  # data must be a mapping
+        {"presses": [{"trigger": "bad", "action": {"type": "toggle"}}]},  # trigger must be a mapping
+        {"presses": [{"trigger": ["bad"], "action": {"type": "toggle"}}]},  # or a list of mappings
+        {
+            "presses": [{"trigger": {"x": 1}, "action": {"type": "scene", "entity_id": "light.kok"}}]
+        },  # scene entity_id must target a scene.* entity
+        {
+            "presses": [{"trigger": {"x": 1}, "action": {"type": "service", "domain": 1, "service": "turn_on"}}]
+        },  # service domain must be a string
+        {
+            "presses": [{"trigger": {"x": 1}, "action": {"type": "service", "domain": "light", "service": 1}}]
+        },  # service name must be a string
     ]
     for binding in bad:
         with pytest.raises(ValueError):

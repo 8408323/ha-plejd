@@ -81,8 +81,12 @@ def _validate_presses(binding: dict) -> None:
     for press in presses:
         if not isinstance(press, dict):
             raise InvalidDimBinding("each press entry must be a mapping")
-        if not press.get("trigger"):
+        trigger = press.get("trigger")
+        if not trigger:
             raise InvalidDimBinding("binding press has no trigger")
+        trigger_configs = trigger if isinstance(trigger, list) else [trigger]
+        if not all(isinstance(t, dict) for t in trigger_configs):
+            raise InvalidDimBinding("binding press trigger must be a mapping (or a list of mappings)")
         action = press.get("action")
         if action is not None and not isinstance(action, dict):
             raise InvalidDimBinding("press action must be a mapping")
@@ -92,11 +96,12 @@ def _validate_presses(binding: dict) -> None:
             raise InvalidDimBinding(f"unknown press action type: {atype!r}")
         if atype == "scene":
             entity_id = action.get("entity_id")
-            if not entity_id or not isinstance(entity_id, str):
-                raise InvalidDimBinding("scene press action needs a string entity_id")
+            if not isinstance(entity_id, str) or not entity_id.startswith("scene."):
+                raise InvalidDimBinding("scene press action needs a scene.* entity_id")
         if atype == "service":
-            if not (action.get("domain") and action.get("service")):
-                raise InvalidDimBinding("service press action needs a domain and service")
+            domain, service = action.get("domain"), action.get("service")
+            if not (isinstance(domain, str) and domain and isinstance(service, str) and service):
+                raise InvalidDimBinding("service press action needs a string domain and service")
             data = action.get("data")
             if data is not None and not isinstance(data, dict):
                 raise InvalidDimBinding("service press action data must be a mapping")
