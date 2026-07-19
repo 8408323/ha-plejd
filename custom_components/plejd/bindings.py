@@ -66,6 +66,26 @@ def _is_stopless(binding: dict) -> bool:
     return bool((binding.get("up") or binding.get("down")) and not binding.get("stop"))
 
 
+# A "press" maps one remote trigger (any button, any press type) to an instantaneous action
+# on the binding's target — the general counterpart to the hold-to-dim up/down/stop triggers.
+PRESS_ACTIONS = ("toggle", "on", "off", "scene", "service")
+
+
+def _validate_presses(binding: dict) -> None:
+    """Reject a binding whose press mappings are malformed (raised before persisting)."""
+    for press in binding.get("presses") or []:
+        if not press.get("trigger"):
+            raise InvalidDimBinding("binding press has no trigger")
+        action = press.get("action") or {}
+        atype = action.get("type")
+        if atype not in PRESS_ACTIONS:
+            raise InvalidDimBinding(f"unknown press action type: {atype!r}")
+        if atype == "scene" and not action.get("entity_id"):
+            raise InvalidDimBinding("scene press action needs an entity_id")
+        if atype == "service" and not (action.get("domain") and action.get("service")):
+            raise InvalidDimBinding("service press action needs a domain and service")
+
+
 def _ensure_ids(bindings: list[dict]) -> bool:
     """Give every binding a stable unique id (so ramps never collide under a shared key).
 
@@ -192,6 +212,7 @@ class PlejdDimBindings:
                 # _async_attach would otherwise swallow the per-binding error and still
                 # report a saved-but-non-functional binding to the client.
                 raise InvalidDimBinding(_ERR_STOPLESS_BINDING)
+            _validate_presses(binding)
         _ensure_ids(bindings)
         # Serialize the whole save→swap→re-attach so two overlapping saves can't interleave
         # and leave both trigger sets live. Save first so the in-memory list and the live
@@ -253,6 +274,10 @@ class PlejdDimBindings:
             stop = binding.get("stop")
             if stop:
                 await self._attach_trigger(attached, stop, self._stop_action(bid, plejd_light))
+            for press in binding.get("presses") or []:
+                trigger = press.get("trigger")
+                if trigger:
+                    await self._attach_trigger(attached, trigger, self._press_action(target, press.get("action") or {}))
         except Exception:
             for unsub in attached:
                 unsub()
@@ -315,6 +340,32 @@ class PlejdDimBindings:
                 self._ramp.stop(bid)
 
         return _action
+
+    def _press_action(self, target, action):
+        async def _action(run_variables=None, context=None):
+            if self._closed:  # unload raced an attach; don't run after teardown
+                return
+            await self._run_press(target, action)
+
+        return _action
+
+    async def _run_press(self, target: dict[str, Any], action: dict) -> None:
+        """Run one press action on the target (any remote trigger → any HA action)."""
+        atype = action.get("type")
+        if atype in ("toggle", "on", "off"):
+            if not target:
+                return  # nothing to act on
+            service = {"toggle": "toggle", "on": "turn_on", "off": "turn_off"}[atype]
+            await self._hass.services.async_call("homeassistant", service, dict(target), blocking=True)
+        elif atype == "scene":
+            await self._hass.services.async_call(
+                "scene", "turn_on", {"entity_id": [action["entity_id"]]}, blocking=True
+            )
+        elif atype == "service":
+            # Escape hatch: call any service. The binding target is merged in so a service
+            # like light.turn_on applies to it; explicit data wins on conflict.
+            data = {**target, **(action.get("data") or {})}
+            await self._hass.services.async_call(action["domain"], action["service"], data, blocking=True)
 
     def _detach(self) -> None:
         for unsub in self._unsubs:

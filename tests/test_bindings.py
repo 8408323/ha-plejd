@@ -599,3 +599,133 @@ async def test_load_persists_reassigned_duplicate_ids(monkeypatch):
     assert pb.bindings[0]["id"] == "dup"
     assert pb.bindings[1]["id"] != "dup"
     assert hass.data[("store", bindings_mod.STORE_KEY)][1]["id"] == pb.bindings[1]["id"]
+
+
+# ── press actions (any trigger → any action) ──────────────────────────────────
+
+
+async def _load_one(monkeypatch, hass, binding):
+    monkeypatch.setattr(bindings_mod, "async_initialize_triggers", _spy_triggers(captured := []))
+    hass.data[("store", bindings_mod.STORE_KEY)] = [binding]
+    pb = PlejdDimBindings(hass)
+    await pb.async_load()
+    return pb, captured
+
+
+async def test_press_toggle_calls_homeassistant_toggle(monkeypatch):
+    hass = _hass()
+    _, captured = await _load_one(
+        monkeypatch,
+        hass,
+        {
+            "id": "b1",
+            "targets": {"entity_id": ["light.a"]},
+            "presses": [{"trigger": {"x": 1}, "action": {"type": "toggle"}}],
+        },
+    )
+    await captured[0][1]()  # fire the press trigger
+    assert hass.services.calls == [("homeassistant", "toggle", {"entity_id": ["light.a"]})]
+
+
+async def test_press_on_and_off_map_to_turn_on_off(monkeypatch):
+    hass = _hass()
+    _, captured = await _load_one(
+        monkeypatch,
+        hass,
+        {
+            "id": "b1",
+            "targets": {"area_id": ["kitchen"]},
+            "presses": [
+                {"trigger": {"a": 1}, "action": {"type": "on"}},
+                {"trigger": {"b": 1}, "action": {"type": "off"}},
+            ],
+        },
+    )
+    await captured[0][1]()
+    await captured[1][1]()
+    assert hass.services.calls == [
+        ("homeassistant", "turn_on", {"area_id": ["kitchen"]}),
+        ("homeassistant", "turn_off", {"area_id": ["kitchen"]}),
+    ]
+
+
+async def test_press_scene_activates_scene(monkeypatch):
+    hass = _hass()
+    _, captured = await _load_one(
+        monkeypatch,
+        hass,
+        {
+            "id": "b1",
+            "targets": {},
+            "presses": [{"trigger": {"x": 1}, "action": {"type": "scene", "entity_id": "scene.kvall"}}],
+        },
+    )
+    await captured[0][1]()
+    assert hass.services.calls == [("scene", "turn_on", {"entity_id": ["scene.kvall"]})]
+
+
+async def test_press_service_merges_target_and_data(monkeypatch):
+    hass = _hass()
+    _, captured = await _load_one(
+        monkeypatch,
+        hass,
+        {
+            "id": "b1",
+            "targets": {"entity_id": ["light.a"]},
+            "presses": [
+                {
+                    "trigger": {"x": 1},
+                    "action": {
+                        "type": "service",
+                        "domain": "light",
+                        "service": "turn_on",
+                        "data": {"brightness_pct": 40},
+                    },
+                }
+            ],
+        },
+    )
+    await captured[0][1]()
+    assert hass.services.calls == [("light", "turn_on", {"entity_id": ["light.a"], "brightness_pct": 40})]
+
+
+async def test_press_toggle_on_empty_target_is_noop(monkeypatch):
+    hass = _hass()
+    _, captured = await _load_one(
+        monkeypatch,
+        hass,
+        {"id": "b1", "targets": {}, "presses": [{"trigger": {"x": 1}, "action": {"type": "toggle"}}]},
+    )
+    await captured[0][1]()
+    assert hass.services.calls == []  # nothing to toggle
+
+
+async def test_press_action_noops_after_close(monkeypatch):
+    hass = _hass()
+    pb, captured = await _load_one(
+        monkeypatch,
+        hass,
+        {
+            "id": "b1",
+            "targets": {"entity_id": ["light.a"]},
+            "presses": [{"trigger": {"x": 1}, "action": {"type": "toggle"}}],
+        },
+    )
+    pb._closed = True
+    await captured[0][1]()
+    assert hass.services.calls == []  # a trigger firing after teardown runs nothing
+
+
+async def test_replace_rejects_malformed_presses(monkeypatch):
+    monkeypatch.setattr(bindings_mod, "async_initialize_triggers", _spy_triggers([]))
+    pb = PlejdDimBindings(_hass())
+    await pb.async_load()
+    bad = [
+        {"presses": [{"action": {"type": "toggle"}}]},  # no trigger
+        {"presses": [{"trigger": {"x": 1}, "action": {"type": "bogus"}}]},  # unknown type
+        {"presses": [{"trigger": {"x": 1}, "action": {"type": "scene"}}]},  # scene w/o entity_id
+        {"presses": [{"trigger": {"x": 1}, "action": {"type": "service", "domain": "light"}}]},  # no service
+    ]
+    for binding in bad:
+        with pytest.raises(ValueError):
+            await pb.async_replace([{"id": "b1", "targets": {"entity_id": ["light.a"]}, **binding}])
