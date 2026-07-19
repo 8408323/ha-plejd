@@ -46,7 +46,10 @@ async def ws_save(hass: HomeAssistant, connection, msg) -> None:
 async def ws_device_triggers(hass: HomeAssistant, connection, msg) -> None:
     """Return the HA device triggers available for a device (the remote picker)."""
     device_id = msg["device_id"]
-    triggers = await async_get_device_automations(hass, DeviceAutomationType.TRIGGER, [device_id])
+    try:
+        triggers = await async_get_device_automations(hass, DeviceAutomationType.TRIGGER, [device_id])
+    except Exception:  # noqa: BLE001 - a stale/removed device raises DeviceNotFound; just report none
+        triggers = {}
     connection.send_result(msg["id"], {"triggers": triggers.get(device_id, [])})
 
 

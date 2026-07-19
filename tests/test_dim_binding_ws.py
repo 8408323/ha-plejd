@@ -104,3 +104,13 @@ async def test_save_returns_error_when_replace_fails():
     await dim_binding_ws.ws_save(hass, conn, {"id": 3, "bindings": [{}]})
     assert conn.error[0] == 3 and conn.error[1] == "save_failed"
     assert conn.result is None
+
+
+async def test_device_triggers_recovers_from_missing_device(monkeypatch):
+    async def _boom(hass, automation_type, device_ids):
+        raise RuntimeError("DeviceNotFound")
+
+    monkeypatch.setattr(dim_binding_ws, "async_get_device_automations", _boom)
+    conn = _Conn()
+    await dim_binding_ws.ws_device_triggers(_hass(), conn, {"id": 5, "device_id": "gone"})
+    assert conn.result == (5, {"triggers": []})  # stale device → empty, no crash
