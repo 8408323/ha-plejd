@@ -44,6 +44,7 @@ class PlejdPanel extends HTMLElement {
     this._error = "";
     this._notice = "";
     this._busy = false;
+    this._lightsFrame = null;
   }
 
   set hass(hass) {
@@ -55,7 +56,7 @@ class PlejdPanel extends HTMLElement {
     }
     // Only the live lights list tracks state; leave the editor DOM (and any in-progress
     // form entry) untouched on the frequent hass state updates.
-    this._updateLights();
+    this._scheduleLightsUpdate();
   }
 
   set panel(panel) {
@@ -67,7 +68,13 @@ class PlejdPanel extends HTMLElement {
     // list and leave the editor DOM — and any in-progress form entry — untouched.
     if (!this._hass) return;
     if (!this.querySelector("#plejd-lights")) this._renderShell();
-    this._updateLights();
+    this._scheduleLightsUpdate();
+  }
+
+  disconnectedCallback() {
+    if (this._lightsFrame == null) return;
+    (globalThis.cancelAnimationFrame || globalThis.clearTimeout)(this._lightsFrame);
+    this._lightsFrame = null;
   }
 
   // ── data ──────────────────────────────────────────────────────────────────
@@ -113,6 +120,7 @@ class PlejdPanel extends HTMLElement {
   async _save(bindings) {
     this._busy = true;
     this._error = "";
+    this._notice = "";
     this._renderEditor();
     try {
       const res = await this._callWS({ type: "plejd/dim_bindings/save", bindings });
@@ -208,6 +216,16 @@ class PlejdPanel extends HTMLElement {
         <div id="plejd-bindings" style="${CARD};margin-top:16px"></div>
       </div>`;
     this._renderEditor();
+  }
+
+  _scheduleLightsUpdate() {
+    if (this._lightsFrame != null) return;
+    this._lightsFrame = (globalThis.requestAnimationFrame || ((cb) => globalThis.setTimeout(cb, 0)))(
+      () => {
+        this._lightsFrame = null;
+        this._updateLights();
+      },
+    );
   }
 
   _updateLights() {
