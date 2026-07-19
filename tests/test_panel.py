@@ -34,6 +34,7 @@ async def test_register_serves_static_once_and_adds_sidebar(monkeypatch):
     assert reg[0]["frontend_url_path"] == panel.PANEL_URL_PATH
     assert reg[0]["webcomponent_name"] == "plejd-panel"
     assert reg[0]["sidebar_title"] == panel.PANEL_TITLE
+    assert reg[0]["require_admin"] is True  # configuration dashboard → admin only
     assert hass.data[panel._PANEL_KEY] is True
 
 

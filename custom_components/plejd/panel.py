@@ -43,7 +43,7 @@ async def async_register_panel(hass: HomeAssistant) -> None:
         sidebar_title=PANEL_TITLE,
         sidebar_icon=PANEL_ICON,
         module_url=PANEL_MODULE_URL,
-        require_admin=False,
+        require_admin=True,  # a configuration dashboard — admin only
     )
     hass.data[_PANEL_KEY] = True
 
