@@ -53,8 +53,9 @@ class DimRamp:
     """Generic hold-to-dim: steps a target's brightness via `light.turn_on` while held.
 
     Keyed so each binding gets its own cancellable ramp. Works on any light because it
-    hands the whole target (entity/device/area) to `light.turn_on`, which expands areas
-    and enforces per-entity permissions.
+    hands the whole target (entity/device/area) to `light.turn_on`, which expands an
+    area to its lights. Runs as a system action (a remote trigger fired it), so no user
+    context or per-user permission check applies — like any automation-driven call.
     """
 
     def __init__(
