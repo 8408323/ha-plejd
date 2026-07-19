@@ -469,4 +469,10 @@ except ImportError:
 
     _ep = types.ModuleType("homeassistant.helpers.entity_platform")
     _ep.AddEntitiesCallback = object  # type: ignore[attr-defined]
+
+    class _CurrentPlatform:
+        def async_register_entity_service(self, name, schema, func):
+            return None
+
+    _ep.async_get_current_platform = _CurrentPlatform  # type: ignore[attr-defined]
     sys.modules.setdefault("homeassistant.helpers.entity_platform", _ep)

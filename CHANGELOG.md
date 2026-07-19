@@ -7,6 +7,12 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Remote hold-to-dim (`plejd.start_dim` / `plejd.stop_dim`).** Bind a dimmer
+  remote's "move while held / stop on release" actions (IKEA/Hue style) to these
+  services and the light ramps smoothly over the gateway — reliable since the ack
+  fix — instead of the chunky `input_number` + `repeat` workaround. Targets any
+  Plejd light, or a whole **area** ("a Plejd room") to dim every dimmable light in
+  it together in one gesture (#76).
 - **Add a device, from Home Assistant.** A new `plejd.add_device` service
   commissions an unprovisioned Plejd device into the mesh directly from HA — cloud
   registration, Diffie-Hellman key exchange, mesh access address, and node index —

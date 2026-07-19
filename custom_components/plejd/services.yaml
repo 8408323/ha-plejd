@@ -64,3 +64,35 @@ scan_new_devices:
   description: >-
     Scan for unprovisioned Plejd devices in Bluetooth range and fire
     plejd_new_devices_found with what was found.
+
+start_dim:
+  name: Start dimming
+  description: >-
+    Begin smoothly ramping a Plejd light's brightness up or down, continuing until
+    stop_dim is called or a limit is reached. Bind this to a dimmer remote's
+    "brightness move" / "hold" action for smooth hold-to-dim.
+  target:
+    entity:
+      integration: plejd
+      domain: light
+  fields:
+    direction:
+      name: Direction
+      description: Which way to ramp the brightness.
+      required: true
+      example: up
+      selector:
+        select:
+          options:
+            - up
+            - down
+
+stop_dim:
+  name: Stop dimming
+  description: >-
+    Stop an in-progress ramp started by start_dim, holding the light at its current
+    brightness. Bind this to the remote's "stop" / "release" action.
+  target:
+    entity:
+      integration: plejd
+      domain: light
