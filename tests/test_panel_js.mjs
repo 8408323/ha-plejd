@@ -78,6 +78,7 @@ test("hass updates coalesce lights renders to one animation frame", () => {
   panel._loadBindings = () => {
     loads += 1;
   };
+  panel._loadSchedules = () => {};
   panel._updateLights = () => {
     lights += 1;
   };
@@ -112,6 +113,7 @@ test("disconnect cancels a queued lights render", () => {
 
   panel._renderShell = () => {};
   panel._loadBindings = () => {};
+  panel._loadSchedules = () => {};
   panel._updateLights = () => {};
   panel.hass = { states: {} };
   panel.disconnectedCallback();
@@ -134,6 +136,7 @@ test("disconnect cancels a queued setTimeout fallback when requestAnimationFrame
 
   panel._renderShell = () => {};
   panel._loadBindings = () => {};
+  panel._loadSchedules = () => {};
   panel._updateLights = () => {};
   panel.hass = { states: {} };
   panel.disconnectedCallback();
@@ -225,6 +228,7 @@ test("first hass assignment loads area and device registries over websocket", as
 
   panel._renderShell = () => {};
   panel._loadBindings = () => {};
+  panel._loadSchedules = () => {};
   panel._scheduleLightsUpdate = () => {};
   panel._renderEditor = () => {};
 
@@ -308,6 +312,7 @@ test("registry loading failure keeps registries empty and logs a warning", async
 
   panel._renderShell = () => {};
   panel._loadBindings = () => {};
+  panel._loadSchedules = () => {};
   panel._scheduleLightsUpdate = () => {};
   panel._renderEditor = () => {};
 
@@ -1002,4 +1007,330 @@ test("the bindings list summarizes press actions alongside up/down/stop", () => 
   assert.match(bindingsEl.innerHTML, /3 press actions/);
   assert.match(bindingsEl.innerHTML, /1 press action(?!s)/);
   assert.match(bindingsEl.innerHTML, /Remote B/); // press-only binding's device via its first press trigger
+});
+
+// ── schedules ────────────────────────────────────────────────────────────────
+
+function scheduleFormEl(values, days = []) {
+  const dayEls = days.map((day) => ({
+    checked: true,
+    getAttribute: (attr) => (attr === "data-sched-day" ? String(day) : null),
+  }));
+  return {
+    querySelector: (sel) => (sel in values ? { value: values[sel] } : null),
+    querySelectorAll: (sel) => (sel === "[data-sched-day]" ? dayEls : []),
+  };
+}
+
+test("_renderSchedules shows a loading state before the first list resolves", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const el = { innerHTML: "", querySelector: () => null, querySelectorAll: () => [] };
+  panel.querySelector = (sel) => (sel === "#plejd-schedules" ? el : null);
+
+  panel._renderSchedules();
+
+  assert.match(el.innerHTML, /Loading…/);
+});
+
+test("_renderSchedules shows a retry button after a failed load", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._schedulesLoadFailed = true;
+  panel._scheduleError = "Could not load schedules: boom";
+  const listeners = {};
+  const retryBtn = { addEventListener: (ev, fn) => (listeners[ev] = fn) };
+  const el = {
+    innerHTML: "",
+    querySelector: (sel) => (sel === "#sched-retry" ? retryBtn : null),
+    querySelectorAll: () => [],
+  };
+  panel.querySelector = (sel) => (sel === "#plejd-schedules" ? el : null);
+  let retried = false;
+  panel._retryScheduleLoad = () => {
+    retried = true;
+  };
+
+  panel._renderSchedules();
+  assert.match(el.innerHTML, /Could not load schedules: boom/);
+  listeners.click();
+  assert.equal(retried, true);
+});
+
+test("_renderSchedules lists existing schedules with days, time, scene, and fade", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._schedules = [{ id: 0, name: "Evening", days: [0, 6], time: "18:30:00", scene: 3, fade: 5 }];
+  panel._scheduleScenes = [{ index: 3, name: "Movie" }];
+  const el = { innerHTML: "", querySelector: () => null, querySelectorAll: () => [] };
+  panel.querySelector = (sel) => (sel === "#plejd-schedules" ? el : null);
+
+  panel._renderSchedules();
+
+  assert.match(el.innerHTML, /Evening/);
+  assert.match(el.innerHTML, /Mon, Sun/);
+  assert.match(el.innerHTML, /18:30:00/);
+  assert.match(el.innerHTML, /Movie/);
+  assert.match(el.innerHTML, /5s fade/);
+  assert.match(el.innerHTML, /data-sched-del="0"/);
+});
+
+test("_renderSchedules falls back to a placeholder scene name for an unknown index", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._schedules = [{ id: 0, name: "Morning", days: [], time: "06:00:00", scene: 9, fade: 0 }];
+  panel._scheduleScenes = [];
+  const el = { innerHTML: "", querySelector: () => null, querySelectorAll: () => [] };
+  panel.querySelector = (sel) => (sel === "#plejd-schedules" ? el : null);
+
+  panel._renderSchedules();
+
+  assert.match(el.innerHTML, /Scene 9/);
+  assert.match(el.innerHTML, /— · 06:00:00/); // no days selected
+});
+
+test("_renderSchedules shows a placeholder when there are no schedules yet", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._schedules = [];
+  const el = { innerHTML: "", querySelector: () => null, querySelectorAll: () => [] };
+  panel.querySelector = (sel) => (sel === "#plejd-schedules" ? el : null);
+
+  panel._renderSchedules();
+
+  assert.match(el.innerHTML, /No schedules yet\./);
+});
+
+test("_onScheduleSave rejects a blank name without calling the backend", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._schedules = [];
+  panel._renderSchedules = () => {};
+  let called = false;
+  panel._saveSchedule = () => {
+    called = true;
+  };
+  const el = scheduleFormEl({ "#sched-name": "  ", "#sched-scene": "3", "#sched-time": "06:00", "#sched-fade": "0" });
+
+  panel._onScheduleSave(el);
+
+  assert.equal(called, false);
+  assert.match(panel._scheduleError, /Name is required/);
+});
+
+test("_onScheduleSave rejects when no day is selected", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._renderSchedules = () => {};
+  let called = false;
+  panel._saveSchedule = () => {
+    called = true;
+  };
+  const el = scheduleFormEl({ "#sched-name": "X", "#sched-scene": "3", "#sched-time": "06:00", "#sched-fade": "0" });
+
+  panel._onScheduleSave(el);
+
+  assert.equal(called, false);
+  assert.match(panel._scheduleError, /Pick at least one day/);
+});
+
+test("_onScheduleSave rejects an invalid time", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._renderSchedules = () => {};
+  let called = false;
+  panel._saveSchedule = () => {
+    called = true;
+  };
+  const el = scheduleFormEl(
+    { "#sched-name": "X", "#sched-scene": "3", "#sched-time": "not-a-time", "#sched-fade": "0" },
+    [0],
+  );
+
+  panel._onScheduleSave(el);
+
+  assert.equal(called, false);
+  assert.match(panel._scheduleError, /Pick a valid time/);
+});
+
+test("_onScheduleSave rejects when no scene is picked", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._renderSchedules = () => {};
+  let called = false;
+  panel._saveSchedule = () => {
+    called = true;
+  };
+  const el = scheduleFormEl({ "#sched-name": "X", "#sched-scene": "", "#sched-time": "06:00", "#sched-fade": "0" }, [
+    0,
+  ]);
+
+  panel._onScheduleSave(el);
+
+  assert.equal(called, false);
+  assert.match(panel._scheduleError, /Pick a scene/);
+});
+
+test("_onScheduleSave rejects a negative fade", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._renderSchedules = () => {};
+  let called = false;
+  panel._saveSchedule = () => {
+    called = true;
+  };
+  const el = scheduleFormEl(
+    { "#sched-name": "X", "#sched-scene": "3", "#sched-time": "06:00", "#sched-fade": "-1" },
+    [0],
+  );
+
+  panel._onScheduleSave(el);
+
+  assert.equal(called, false);
+  assert.match(panel._scheduleError, /Fade must be zero or a positive number/);
+});
+
+test("_onScheduleSave sends a normalized payload when the form is valid", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._renderSchedules = () => {};
+  let payload;
+  panel._saveSchedule = (p) => {
+    payload = p;
+  };
+  const el = scheduleFormEl(
+    { "#sched-name": "  Evening  ", "#sched-scene": "3", "#sched-time": "18:30", "#sched-fade": "5" },
+    [6, 0],
+  );
+
+  panel._onScheduleSave(el);
+
+  assert.deepEqual(plain(payload), { name: "Evening", days: [0, 6], time: "18:30", scene: 3, fade: 5 });
+});
+
+test("_saveSchedule adds a schedule and resets the form on success", async () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._renderSchedules = () => {};
+  panel._scheduleForm = { name: "Evening", days: [0], time: "18:30", scene: "3", fade: 0 };
+  let sentMsg;
+  panel._callWS = (msg) => {
+    sentMsg = msg;
+    return Promise.resolve({ schedules: [{ id: 0, name: "Evening" }] });
+  };
+
+  await panel._saveSchedule({ name: "Evening", days: [0], time: "18:30", scene: 3, fade: 0 });
+
+  assert.equal(sentMsg.type, "plejd/schedules/add");
+  assert.deepEqual(panel._schedules, [{ id: 0, name: "Evening" }]);
+  assert.equal(panel._scheduleForm.name, "");
+  assert.deepEqual(plain(panel._scheduleForm.days), []);
+  assert.equal(panel._scheduleNotice, "Saved.");
+});
+
+test("_saveSchedule surfaces a backend error without resetting the form", async () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._renderSchedules = () => {};
+  panel._scheduleForm = { name: "Evening", days: [0], time: "18:30", scene: "3", fade: 0 };
+  panel._callWS = () => Promise.reject(new Error("no_free_slots"));
+
+  await panel._saveSchedule({ name: "Evening", days: [0], time: "18:30", scene: 3, fade: 0 });
+
+  assert.equal(panel._scheduleError, "no_free_slots");
+  assert.equal(panel._scheduleForm.name, "Evening"); // not reset on failure
+  assert.equal(panel._scheduleBusy, false);
+});
+
+test("deleting a schedule preserves an in-progress add form", async () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._schedules = [{ id: 0, name: "Keep" }, { id: 1, name: "Drop" }];
+  panel._renderSchedules = () => {};
+  let sentMsg;
+  panel._callWS = (msg) => {
+    sentMsg = msg;
+    return Promise.resolve({ schedules: [{ id: 0, name: "Keep" }] });
+  };
+  const el = scheduleFormEl(
+    { "#sched-name": "New one", "#sched-scene": "3", "#sched-time": "07:00", "#sched-fade": "0" },
+    [1],
+  );
+
+  panel._onScheduleDelete(el, 1);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(sentMsg.type, "plejd/schedules/delete");
+  assert.equal(sentMsg.schedule_id, 1);
+  assert.deepEqual(panel._schedules, [{ id: 0, name: "Keep" }]);
+  assert.equal(panel._scheduleForm.name, "New one"); // in-progress add survives the delete
+});
+
+test("a day checkbox toggles the day in the form via _wireSchedules", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const listeners = {};
+  const dayEl = {
+    checked: true,
+    getAttribute: () => "2",
+    addEventListener: (ev, fn) => (listeners[ev] = fn),
+  };
+  const el = {
+    querySelectorAll: (sel) => (sel === "[data-sched-day]" ? [dayEl] : []),
+    querySelector: () => null,
+  };
+
+  panel._wireSchedules(el);
+  listeners.change({ target: dayEl });
+  assert.deepEqual(plain(panel._scheduleForm.days), [2]);
+
+  dayEl.checked = false;
+  listeners.change({ target: dayEl });
+  assert.deepEqual(plain(panel._scheduleForm.days), []);
+});
+
+test("_wireSchedules routes a delete button click through _onScheduleDelete", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  let deletedId;
+  panel._onScheduleDelete = (_el, id) => {
+    deletedId = id;
+  };
+  const listeners = {};
+  const delBtn = {
+    getAttribute: () => "4",
+    addEventListener: (ev, fn) => (listeners[ev] = fn),
+  };
+  const el = {
+    querySelectorAll: (sel) => (sel === "[data-sched-del]" ? [delBtn] : []),
+    querySelector: () => null,
+  };
+
+  panel._wireSchedules(el);
+  listeners.click();
+
+  assert.equal(deletedId, "4");
+});
+
+test("_onScheduleSave and _onScheduleDelete are no-ops while a save/delete is in flight", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._scheduleBusy = true;
+  let saveCalled = false;
+  let deleteCalled = false;
+  panel._saveSchedule = () => {
+    saveCalled = true;
+  };
+  panel._deleteSchedule = () => {
+    deleteCalled = true;
+  };
+  const el = scheduleFormEl({ "#sched-name": "X", "#sched-scene": "3", "#sched-time": "06:00", "#sched-fade": "0" }, [
+    0,
+  ]);
+
+  panel._onScheduleSave(el);
+  panel._onScheduleDelete(el, 1);
+
+  assert.equal(saveCalled, false);
+  assert.equal(deleteCalled, false);
 });

@@ -482,6 +482,36 @@ async def test_unload_cleans_up_bindings(monkeypatch):
     assert DATA_BINDINGS not in hass.data
 
 
+# ── Schedules wiring ─────────────────────────────────────────────────────────
+
+
+async def test_setup_stores_entry_and_registers_schedule_ws(monkeypatch):
+    from plejd.schedule_ws import DATA_ENTRY, ws_add, ws_delete, ws_list
+
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    _FakeCoordinator.instances.clear()
+    hass, entry = _hass(), _entry()
+    await async_setup_entry(hass, entry)
+    assert hass.data[DATA_ENTRY] is entry  # entry available for the schedule WS API
+    registered = hass.data["ws_commands"]
+    assert ws_list in registered and ws_add in registered and ws_delete in registered
+
+
+async def test_unload_cleans_up_schedule_entry(monkeypatch):
+    from plejd.schedule_ws import DATA_ENTRY
+
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    _FakeCoordinator.instances.clear()
+    hass, entry = _hass(), _entry()
+    unloads: list = []
+    entry.async_on_unload = unloads.append
+    await async_setup_entry(hass, entry)
+    assert DATA_ENTRY in hass.data
+    for unload in unloads:
+        unload()
+    assert DATA_ENTRY not in hass.data
+
+
 async def test_setup_survives_binding_load_failure(monkeypatch):
     monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
     _FakeCoordinator.instances.clear()

@@ -44,6 +44,9 @@ const PRESS_ACTION_LABELS = {
   service: "Call service",
 };
 
+// Weekday labels for the schedule day picker (index 0=Mon..6=Sun, mirrors const.py WEEKDAYS).
+const WEEKDAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
 class PlejdPanel extends HTMLElement {
   constructor() {
     super();
@@ -58,6 +61,13 @@ class PlejdPanel extends HTMLElement {
     this._error = "";
     this._notice = "";
     this._busy = false;
+    this._schedules = null; // loaded list, null until the first WS list resolves (or a failed load)
+    this._schedulesLoadFailed = false;
+    this._scheduleScenes = []; // on-device scenes (index + name), for the scene picker
+    this._scheduleForm = { name: "", days: [], time: "07:00", scene: "", fade: 0 };
+    this._scheduleError = "";
+    this._scheduleNotice = "";
+    this._scheduleBusy = false;
     this._lightsFrame = null;
     const useAnimationFrame = Boolean(
       globalThis.requestAnimationFrame && globalThis.cancelAnimationFrame,
@@ -77,6 +87,7 @@ class PlejdPanel extends HTMLElement {
       this._renderShell();
       this._loadBindings();
       this._loadRegistries();
+      this._loadSchedules();
     }
     // Only the live lights list tracks state; leave the editor DOM (and any in-progress
     // form entry) untouched on the frequent hass state updates.
@@ -293,9 +304,11 @@ class PlejdPanel extends HTMLElement {
       <div style="padding:16px 16px 48px;max-width:760px;margin:0 auto;color:var(--primary-text-color,#212121);font-family:var(--paper-font-body1_-_font-family,Roboto,sans-serif)">
         <h1 style="font-weight:400;margin:8px 4px 20px">Plejd</h1>
         <div id="plejd-lights" style="${CARD}"></div>
+        <div id="plejd-schedules" style="${CARD};margin-top:16px"></div>
         <div id="plejd-bindings" style="${CARD};margin-top:16px"></div>
       </div>`;
     this._renderEditor();
+    this._renderSchedules();
   }
 
   _scheduleLightsUpdate() {
@@ -724,6 +737,250 @@ class PlejdPanel extends HTMLElement {
   _fail(message) {
     this._error = message;
     this._renderEditor();
+  }
+
+  // ── schedules ─────────────────────────────────────────────────────────────
+  //
+  // On-device weekly time -> scene schedules (mirrors the config-flow "Configure ->
+  // Schedules" dialog). Self-contained: its own load/save calls, form state, and render,
+  // independent of the dim-binding editor above.
+
+  async _loadSchedules() {
+    this._schedulesLoadFailed = false;
+    try {
+      const res = await this._callWS({ type: "plejd/schedules/list" });
+      this._schedules = res.schedules || [];
+      this._scheduleScenes = res.scenes || [];
+    } catch (err) {
+      // Keep _schedules unset (not []): mirrors _loadBindings — offer a retry rather than
+      // risk rendering an add form with no valid scene baseline.
+      this._schedules = null;
+      this._schedulesLoadFailed = true;
+      this._scheduleError = `Could not load schedules: ${err.message || err}`;
+    }
+    this._renderSchedules();
+  }
+
+  _retryScheduleLoad() {
+    this._scheduleError = "";
+    this._schedules = null;
+    this._schedulesLoadFailed = false;
+    this._renderSchedules();
+    this._loadSchedules();
+  }
+
+  async _saveSchedule(payload) {
+    this._scheduleBusy = true;
+    this._scheduleError = "";
+    this._scheduleNotice = "";
+    this._renderSchedules();
+    try {
+      const res = await this._callWS({ type: "plejd/schedules/add", ...payload });
+      this._schedules = res.schedules || [];
+      this._scheduleNotice = "Saved.";
+      this._scheduleForm = { name: "", days: [], time: "07:00", scene: "", fade: 0 };
+    } catch (err) {
+      this._scheduleError = err.message || String(err);
+    } finally {
+      this._scheduleBusy = false;
+      this._renderSchedules();
+    }
+  }
+
+  async _deleteSchedule(scheduleId) {
+    this._scheduleBusy = true;
+    this._scheduleError = "";
+    this._scheduleNotice = "";
+    this._renderSchedules();
+    try {
+      const res = await this._callWS({ type: "plejd/schedules/delete", schedule_id: Number(scheduleId) });
+      this._schedules = res.schedules || [];
+    } catch (err) {
+      this._scheduleError = err.message || String(err);
+    } finally {
+      this._scheduleBusy = false;
+      this._renderSchedules();
+    }
+  }
+
+  _sceneName(index) {
+    return this._scheduleScenes.find((s) => s.index === index)?.name || `Scene ${index}`;
+  }
+
+  _renderSchedules() {
+    const el = this.querySelector("#plejd-schedules");
+    if (!el) return;
+
+    if (this._schedules === null) {
+      el.innerHTML = this._schedulesLoadFailed
+        ? `
+          <h2 style="font-weight:500;font-size:1.05rem;margin:0 0 8px">Schedules</h2>
+          <p style="color:var(--error-color,#db4437);margin:0 0 12px">${esc(this._scheduleError)}</p>
+          <button id="sched-retry" style="${BTN}">Retry</button>`
+        : `
+          <h2 style="font-weight:500;font-size:1.05rem;margin:0 0 8px">Schedules</h2>
+          <p style="color:var(--secondary-text-color,#727272);margin:0">Loading…</p>`;
+      el.querySelector("#sched-retry")?.addEventListener("click", () => this._retryScheduleLoad());
+      return;
+    }
+
+    const list = this._schedules.length
+      ? this._schedules
+          .map((s) => {
+            const days = s.days?.length ? s.days.map((d) => WEEKDAY_LABELS[d]).join(", ") : "—";
+            const fade = s.fade ? ` · ${s.fade}s fade` : "";
+            return `
+              <div style="display:flex;align-items:center;gap:12px;padding:10px 4px;border-bottom:1px solid var(--divider-color,#e0e0e0)">
+                <div style="flex:1">
+                  <div>${esc(s.name)}</div>
+                  <div style="font-size:.8rem;color:var(--secondary-text-color,#727272)">
+                    ${esc(days)} · ${esc(s.time)} · ${esc(this._sceneName(s.scene))}${fade}
+                  </div>
+                </div>
+                <button data-sched-del="${s.id}" style="${BTN};background:var(--error-color,#db4437)">Delete</button>
+              </div>`;
+          })
+          .join("")
+      : '<p style="color:var(--secondary-text-color,#727272);margin:0 0 12px">No schedules yet.</p>';
+
+    const sceneOpts = this._scheduleScenes
+      .map(
+        (s) =>
+          `<option value="${s.index}" ${String(this._scheduleForm.scene) === String(s.index) ? "selected" : ""}>${esc(s.name)}</option>`,
+      )
+      .join("");
+
+    const dayBoxes = WEEKDAY_LABELS.map(
+      (label, i) => `
+        <label style="display:flex;align-items:center;gap:4px;font-size:.9rem">
+          <input type="checkbox" data-sched-day="${i}" ${this._scheduleForm.days.includes(i) ? "checked" : ""}>
+          ${label}
+        </label>`,
+    ).join("");
+
+    const feedback = this._scheduleError
+      ? `<p style="color:var(--error-color,#db4437);margin:12px 0 0">${esc(this._scheduleError)}</p>`
+      : this._scheduleNotice
+        ? `<p style="color:var(--secondary-text-color,#727272);margin:12px 0 0">${esc(this._scheduleNotice)}</p>`
+        : "";
+
+    el.innerHTML = `
+      <h2 style="font-weight:500;font-size:1.05rem;margin:0 0 4px">Schedules</h2>
+      <p style="color:var(--secondary-text-color,#727272);margin:0 0 12px">
+        Run a scene automatically on a weekly schedule, straight from the mesh — no automation needed.
+      </p>
+      ${list}
+      <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--divider-color,#e0e0e0)">
+        <h3 style="font-weight:500;font-size:.95rem;margin:0 0 12px">Add a schedule</h3>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div>
+            <label for="sched-name" style="${LABEL}">Name</label>
+            <input id="sched-name" style="${INPUT}" value="${esc(this._scheduleForm.name)}" placeholder="Evening lights">
+          </div>
+          <div>
+            <label for="sched-scene" style="${LABEL}">Scene</label>
+            <select id="sched-scene" style="${INPUT}">
+              <option value="">Select a scene…</option>
+              ${sceneOpts}
+            </select>
+          </div>
+        </div>
+        <div style="margin-top:12px">
+          <span style="${LABEL}">Days</span>
+          <div style="display:flex;gap:12px;flex-wrap:wrap">${dayBoxes}</div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px">
+          <div>
+            <label for="sched-time" style="${LABEL}">Time</label>
+            <input id="sched-time" type="time" style="${INPUT}" value="${esc(this._scheduleForm.time)}">
+          </div>
+          <div>
+            <label for="sched-fade" style="${LABEL}">Fade (seconds, optional)</label>
+            <input id="sched-fade" type="number" min="0" style="${INPUT}" value="${esc(String(this._scheduleForm.fade))}">
+          </div>
+        </div>
+        ${feedback}
+        <div style="margin-top:16px;text-align:right">
+          <button id="sched-save" style="${BTN}" ${this._scheduleBusy ? "disabled" : ""}>${this._scheduleBusy ? "Saving…" : "Add schedule"}</button>
+        </div>
+      </div>`;
+
+    this._wireSchedules(el);
+  }
+
+  _wireSchedules(el) {
+    el.querySelectorAll("[data-sched-del]").forEach((btn) =>
+      btn.addEventListener("click", () => this._onScheduleDelete(el, btn.getAttribute("data-sched-del"))),
+    );
+    el.querySelector("#sched-name")?.addEventListener("input", (e) => {
+      this._scheduleForm.name = e.target.value;
+    });
+    el.querySelector("#sched-scene")?.addEventListener("change", (e) => {
+      this._scheduleForm.scene = e.target.value;
+    });
+    el.querySelector("#sched-time")?.addEventListener("input", (e) => {
+      this._scheduleForm.time = e.target.value;
+    });
+    el.querySelector("#sched-fade")?.addEventListener("input", (e) => {
+      this._scheduleForm.fade = e.target.value;
+    });
+    el.querySelectorAll("[data-sched-day]").forEach((cb) => {
+      cb.addEventListener("change", (e) => {
+        const day = Number(cb.getAttribute("data-sched-day"));
+        this._scheduleForm.days = e.target.checked
+          ? [...this._scheduleForm.days, day]
+          : this._scheduleForm.days.filter((d) => d !== day);
+      });
+    });
+    el.querySelector("#sched-save")?.addEventListener("click", () => this._onScheduleSave(el));
+  }
+
+  _readScheduleForm(el) {
+    const val = (id) => el.querySelector(id)?.value ?? "";
+    this._scheduleForm.name = val("#sched-name");
+    this._scheduleForm.scene = val("#sched-scene");
+    this._scheduleForm.time = val("#sched-time");
+    this._scheduleForm.fade = val("#sched-fade");
+    const days = [];
+    el.querySelectorAll("[data-sched-day]").forEach((cb) => {
+      if (cb.checked) days.push(Number(cb.getAttribute("data-sched-day")));
+    });
+    this._scheduleForm.days = days;
+  }
+
+  _onScheduleSave(el) {
+    if (this._scheduleBusy) return;
+    this._readScheduleForm(el);
+    this._scheduleError = this._scheduleNotice = "";
+
+    const name = this._scheduleForm.name.trim();
+    if (!name) return this._failSchedule("Name is required.");
+    if (!this._scheduleForm.days.length) return this._failSchedule("Pick at least one day.");
+    if (!/^\d{2}:\d{2}$/.test(this._scheduleForm.time)) return this._failSchedule("Pick a valid time.");
+    if (this._scheduleForm.scene === "") return this._failSchedule("Pick a scene.");
+    const fade = Number(this._scheduleForm.fade === "" ? 0 : this._scheduleForm.fade);
+    if (!Number.isFinite(fade) || fade < 0) {
+      return this._failSchedule("Fade must be zero or a positive number of seconds.");
+    }
+
+    this._saveSchedule({
+      name,
+      days: [...this._scheduleForm.days].sort((a, b) => a - b),
+      time: this._scheduleForm.time,
+      scene: Number(this._scheduleForm.scene),
+      fade,
+    });
+  }
+
+  _onScheduleDelete(el, id) {
+    if (this._scheduleBusy) return;
+    this._readScheduleForm(el); // keep any in-progress add entry across the delete's re-render
+    this._deleteSchedule(id);
+  }
+
+  _failSchedule(message) {
+    this._scheduleError = message;
+    this._renderSchedules();
   }
 }
 

@@ -11,7 +11,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry
 
-from . import dim_binding_ws, panel
+from . import dim_binding_ws, panel, schedule_ws
 from .add_device import async_add_device
 from .bindings import PlejdDimBindings
 from .const import CONF_SHOW_PANEL, DOMAIN
@@ -123,8 +123,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data[dim_binding_ws.DATA_BINDINGS] = dim_bindings
     entry.async_on_unload(lambda: hass.data.pop(dim_binding_ws.DATA_BINDINGS, None))
     entry.async_on_unload(dim_bindings.shutdown)
+
+    # Schedules (managed from the dashboard via the WebSocket API too, mirroring bindings above).
+    hass.data[schedule_ws.DATA_ENTRY] = entry
+    entry.async_on_unload(lambda: hass.data.pop(schedule_ws.DATA_ENTRY, None))
     if not hass.data.get(_WS_REGISTERED):
         dim_binding_ws.async_register(hass)  # hass-global commands; register once
+        schedule_ws.async_register(hass)
         hass.data[_WS_REGISTERED] = True
     return True
 
