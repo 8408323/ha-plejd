@@ -60,6 +60,7 @@ test("hass updates coalesce lights renders to one animation frame", () => {
       frames.push(callback);
       return frames.length;
     },
+    cancelAnimationFrame() {},
   });
   const panel = new PanelClass();
   let shells = 0;
@@ -111,6 +112,28 @@ test("disconnect cancels a queued lights render", () => {
   panel.disconnectedCallback();
 
   assert.deepEqual(cancelled, [42]);
+  assert.equal(panel._lightsFrame, null);
+});
+
+test("disconnect cancels a queued timeout fallback when animation frames are unavailable", () => {
+  const cancelled = [];
+  const PanelClass = loadPanelClass({
+    setTimeout() {
+      return 7;
+    },
+    clearTimeout(frame) {
+      cancelled.push(frame);
+    },
+  });
+  const panel = new PanelClass();
+
+  panel._renderShell = () => {};
+  panel._loadBindings = () => {};
+  panel._updateLights = () => {};
+  panel.hass = { states: {} };
+  panel.disconnectedCallback();
+
+  assert.deepEqual(cancelled, [7]);
   assert.equal(panel._lightsFrame, null);
 });
 

@@ -45,6 +45,7 @@ class PlejdPanel extends HTMLElement {
     this._notice = "";
     this._busy = false;
     this._lightsFrame = null;
+    this._cancelLightsFrame = null;
   }
 
   set hass(hass) {
@@ -73,8 +74,9 @@ class PlejdPanel extends HTMLElement {
 
   disconnectedCallback() {
     if (this._lightsFrame === null) return;
-    (globalThis.cancelAnimationFrame || globalThis.clearTimeout)(this._lightsFrame);
+    this._cancelLightsFrame?.(this._lightsFrame);
     this._lightsFrame = null;
+    this._cancelLightsFrame = null;
   }
 
   // ── data ──────────────────────────────────────────────────────────────────
@@ -220,12 +222,20 @@ class PlejdPanel extends HTMLElement {
 
   _scheduleLightsUpdate() {
     if (this._lightsFrame !== null) return;
-    this._lightsFrame = (globalThis.requestAnimationFrame || ((cb) => globalThis.setTimeout(cb, 0)))(
-      () => {
-        this._lightsFrame = null;
-        this._updateLights();
-      },
+    const useAnimationFrame = Boolean(
+      globalThis.requestAnimationFrame && globalThis.cancelAnimationFrame,
     );
+    const schedule = useAnimationFrame
+      ? globalThis.requestAnimationFrame.bind(globalThis)
+      : (cb) => globalThis.setTimeout(cb, 0);
+    this._cancelLightsFrame = useAnimationFrame
+      ? globalThis.cancelAnimationFrame.bind(globalThis)
+      : globalThis.clearTimeout.bind(globalThis);
+    this._lightsFrame = schedule(() => {
+      this._lightsFrame = null;
+      this._cancelLightsFrame = null;
+      this._updateLights();
+    });
   }
 
   _updateLights() {
@@ -237,12 +247,7 @@ class PlejdPanel extends HTMLElement {
         const name = s.attributes.friendly_name || s.entity_id;
         const on = s.state === "on";
         const bri = s.attributes.brightness;
-        const level =
-          on && bri !== null && bri !== undefined
-            ? `${Math.round((bri / 255) * 100)}%`
-            : on
-              ? "on"
-              : "off";
+        const level = on && bri != null ? `${Math.round((bri / 255) * 100)}%` : on ? "on" : "off";
         const dot = on ? "var(--state-light-active-color, #fdd835)" : "var(--disabled-text-color, #9e9e9e)";
         return `
           <div style="display:flex;align-items:center;gap:12px;padding:10px 4px;border-bottom:1px solid var(--divider-color,#e0e0e0)">
