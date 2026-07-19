@@ -38,11 +38,6 @@ async def ws_save(hass: HomeAssistant, connection, msg) -> None:
         return
     try:
         await bindings.async_replace(msg["bindings"])
-    except ValueError as err:
-        # Surface validation messages (e.g. "dim binding has a start trigger but no stop trigger")
-        # to the dashboard editor inline; no need to log at exception level for user input errors.
-        connection.send_error(msg["id"], "invalid_binding", str(err))
-        return
     except Exception:  # noqa: BLE001 - log the detail server-side, return a stable generic message
         _LOGGER.exception("Plejd: failed to save dim bindings")
         connection.send_error(msg["id"], "save_failed", "Could not save bindings")

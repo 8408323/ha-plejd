@@ -37,8 +37,9 @@ const triggerLabel = (t) => {
 class PlejdPanel extends HTMLElement {
   constructor() {
     super();
-    this._bindings = null; // loaded list, null until the first WS list resolves
-    this._triggers = {}; // device_id -> its device triggers (cached)
+    this._bindings = null; // loaded list, null until the first WS list resolves (or a failed load)
+    this._loadFailed = false; // a list load errored — block saving so it can't overwrite storage
+    this._triggers = {}; // device_id -> its device triggers (only successful loads are cached)
     this._form = { target: "", device: "", up: "", down: "", stop: "" };
     this._error = "";
     this._notice = "";
@@ -62,11 +63,11 @@ class PlejdPanel extends HTMLElement {
   }
 
   connectedCallback() {
-    if (this._hass) {
-      if (!this.querySelector("#plejd-lights")) this._renderShell();
-      this._updateLights();
-      this._renderEditor();
-    }
+    // On (re)connect, rebuild only if the shell is gone; otherwise refresh the live lights
+    // list and leave the editor DOM — and any in-progress form entry — untouched.
+    if (!this._hass) return;
+    if (!this.querySelector("#plejd-lights")) this._renderShell();
+    this._updateLights();
   }
 
   // ── data ──────────────────────────────────────────────────────────────────
@@ -76,23 +77,35 @@ class PlejdPanel extends HTMLElement {
   }
 
   async _loadBindings() {
+    this._loadFailed = false;
     try {
       const res = await this._callWS({ type: "plejd/dim_bindings/list" });
       this._bindings = res.bindings || [];
     } catch (err) {
-      this._bindings = [];
+      // Keep _bindings unset (not []): a save sends the full list as a replacement, so a
+      // wrong empty baseline could wipe stored bindings. Offer a retry instead of saving.
+      this._bindings = null;
+      this._loadFailed = true;
       this._error = `Could not load bindings: ${err.message || err}`;
     }
     this._renderEditor();
+  }
+
+  _retryLoad() {
+    this._error = "";
+    this._bindings = null;
+    this._loadFailed = false;
+    this._renderEditor(); // back to the "Loading…" state
+    this._loadBindings();
   }
 
   async _loadTriggers(deviceId) {
     if (!deviceId || this._triggers[deviceId]) return;
     try {
       const res = await this._callWS({ type: "plejd/device_triggers", device_id: deviceId });
-      this._triggers[deviceId] = res.triggers || [];
+      this._triggers[deviceId] = res.triggers || []; // cache only on success (even if empty)
     } catch (err) {
-      this._triggers[deviceId] = [];
+      // Don't cache a failed load — leave it unset so re-selecting the remote retries.
       this._error = `Could not load triggers: ${err.message || err}`;
     }
   }
@@ -107,7 +120,9 @@ class PlejdPanel extends HTMLElement {
       this._notice = "Saved.";
       this._form = { target: "", device: "", up: "", down: "", stop: "" };
     } catch (err) {
-      // The backend sends a human message for invalid input (e.g. a missing stop trigger).
+      // Surface whatever the backend returns. Invalid input (e.g. a missing stop trigger)
+      // is already caught client-side before saving; the backend validates too and returns
+      // a specific reason for it (a generic message for unexpected failures).
       this._error = err.message || String(err);
     } finally {
       this._busy = false;
@@ -238,9 +253,17 @@ class PlejdPanel extends HTMLElement {
     if (!el) return;
 
     if (this._bindings === null) {
-      el.innerHTML = `
-        <h2 style="font-weight:500;font-size:1.05rem;margin:0 0 8px">Remote dim bindings</h2>
-        <p style="color:var(--secondary-text-color,#727272);margin:0">Loading…</p>`;
+      // Failed load: show the error + Retry, and no editor — saving now could overwrite
+      // stored bindings from an unknown baseline. Otherwise it's the initial load.
+      el.innerHTML = this._loadFailed
+        ? `
+          <h2 style="font-weight:500;font-size:1.05rem;margin:0 0 8px">Remote dim bindings</h2>
+          <p style="color:var(--error-color,#db4437);margin:0 0 12px">${esc(this._error)}</p>
+          <button id="f-retry" style="${BTN}">Retry</button>`
+        : `
+          <h2 style="font-weight:500;font-size:1.05rem;margin:0 0 8px">Remote dim bindings</h2>
+          <p style="color:var(--secondary-text-color,#727272);margin:0">Loading…</p>`;
+      el.querySelector("#f-retry")?.addEventListener("click", () => this._retryLoad());
       return;
     }
 

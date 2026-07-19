@@ -97,26 +97,9 @@ class _FailingBindings:
         raise ValueError("bad payload")
 
 
-class _CrashingBindings:
-    bindings: list = []
-
-    async def async_replace(self, items):
-        raise RuntimeError("unexpected crash")
-
-
-async def test_save_surfaces_validation_error_from_replace():
+async def test_save_returns_error_when_replace_fails():
     hass = _hass()
     hass.data[DATA_BINDINGS] = _FailingBindings()
-    conn = _Conn()
-    await dim_binding_ws.ws_save(hass, conn, {"id": 3, "bindings": [{}]})
-    assert conn.error[0] == 3 and conn.error[1] == "invalid_binding"
-    assert conn.error[2] == "bad payload"
-    assert conn.result is None
-
-
-async def test_save_returns_generic_error_for_unexpected_exception():
-    hass = _hass()
-    hass.data[DATA_BINDINGS] = _CrashingBindings()
     conn = _Conn()
     await dim_binding_ws.ws_save(hass, conn, {"id": 3, "bindings": [{}]})
     assert conn.error[0] == 3 and conn.error[1] == "save_failed"
