@@ -313,7 +313,7 @@ async def test_replace_keeps_old_bindings_when_save_fails(monkeypatch):
     old = pb.bindings
     pb._store.async_save = _raise_disk_full
     with pytest.raises(OSError):
-        await pb.async_replace([{"id": "b2", "targets": {"entity_id": ["light.b"]}, "up": {"y": 1}}])
+        await pb.async_replace([{"id": "b2", "targets": {"entity_id": ["light.b"]}, "up": {"y": 1}, "stop": {"s": 1}}])
     assert pb.bindings == old  # in-memory bindings untouched, old triggers never detached
     assert ("unsub",) not in captured
 
@@ -445,6 +445,43 @@ async def test_non_light_plejd_entity_uses_generic_ramp(monkeypatch):
     assert pb._ramp.calls == [("start", "b1", {"entity_id": ["switch.plejd_relay"]}, "up")]  # only lights dim
 
 
+async def test_replace_rejects_stopless_binding_without_persisting(monkeypatch):
+    monkeypatch.setattr(bindings_mod, "async_initialize_triggers", _spy_triggers([]))
+    hass = _hass()
+    pb = PlejdDimBindings(hass)
+    await pb.async_load()
+    with pytest.raises(ValueError, match="stop trigger"):
+        await pb.async_replace([{"id": "b1", "targets": {"entity_id": ["light.a"]}, "up": {"x": 1}}])
+    assert pb.bindings == []  # not committed in memory
+    assert ("store", bindings_mod.STORE_KEY) not in hass.data  # and never persisted
+
+
+async def test_replace_survives_malformed_previous_binding(monkeypatch):
+    monkeypatch.setattr(bindings_mod, "async_initialize_triggers", _spy_triggers([]))
+    hass = _hass_with_entities({})
+    hass.data[("store", bindings_mod.STORE_KEY)] = [
+        {"id": "old", "targets": {"entity_id": [None]}, "up": {"a": 1}, "stop": {"c": 1}},  # legacy/bad data
+    ]
+    pb = PlejdDimBindings(hass)
+    await pb.async_load()
+    # replacing must not raise while inspecting the malformed previous binding for native ramps
+    await pb.async_replace([{"id": "new", "targets": {"area_id": ["kitchen"]}, "up": {"x": 1}, "stop": {"s": 1}}])
+    assert [b["id"] for b in pb.bindings] == ["new"]
+
+
+async def test_replace_stops_native_plejd_ramp_of_removed_binding(monkeypatch):
+    monkeypatch.setattr(bindings_mod, "async_initialize_triggers", _spy_triggers([]))
+    hass = _hass_with_entities({"light.kok": "plejd"})
+    hass.data[("store", bindings_mod.STORE_KEY)] = [
+        {"id": "b1", "targets": {"entity_id": ["light.kok"]}, "up": {"a": 1}, "stop": {"c": 1}},
+    ]
+    pb = PlejdDimBindings(hass)
+    await pb.async_load()
+    hass.services.calls.clear()
+    await pb.async_replace([])  # remove the binding while its native ramp could be running
+    assert ("plejd", "stop_dim", {"entity_id": ["light.kok"]}) in hass.services.calls
+
+
 async def test_binding_with_start_but_no_stop_is_rejected(monkeypatch):
     captured = []
     monkeypatch.setattr(bindings_mod, "async_initialize_triggers", _spy_triggers(captured))
@@ -493,7 +530,7 @@ async def test_replace_after_shutdown_attaches_nothing(monkeypatch):
     pb = PlejdDimBindings(hass)
     await pb.async_load()
     pb.shutdown()  # integration unloaded
-    await pb.async_replace([{"id": "b1", "targets": {"entity_id": ["light.a"]}, "up": {"x": 1}}])
+    await pb.async_replace([{"id": "b1", "targets": {"entity_id": ["light.a"]}, "up": {"x": 1}, "stop": {"s": 1}}])
     assert pb._unsubs == []  # a closed manager never re-attaches
 
 
