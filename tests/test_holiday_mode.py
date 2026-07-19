@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import random
 import types
 from datetime import datetime, time, timedelta, timezone
@@ -11,6 +12,12 @@ from homeassistant.util import dt as dt_util
 from plejd import holiday_mode as hm
 from plejd.const import CONF_HOLIDAY_LIGHTS, CONF_HOLIDAY_WINDOW_END, CONF_HOLIDAY_WINDOW_START
 from plejd.holiday_mode import PlejdHolidayMode, _in_window, _parse_hhmm
+
+
+async def _drain():
+    # Let a stop()-spawned fire-and-forget cleanup task run to completion.
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
 
 
 class _FakeRandom:
@@ -39,8 +46,18 @@ class _Services:
         self.calls.append((domain, service, data))
 
 
-def _hass(entity_registry=None):
-    h = types.SimpleNamespace(services=_Services())
+class _States:
+    """Minimal hass.states stand-in: reports "on" for a fixed set of entities."""
+
+    def __init__(self, on_entities=None):
+        self._on = set(on_entities or [])
+
+    def get(self, entity_id):
+        return types.SimpleNamespace(state="on") if entity_id in self._on else None
+
+
+def _hass(entity_registry=None, states_on=None):
+    h = types.SimpleNamespace(services=_Services(), states=_States(states_on))
     if entity_registry is not None:
         h.entity_registry = entity_registry
     return h
@@ -131,20 +148,23 @@ def test_start_registers_recurring_timer_and_is_idempotent(monkeypatch):
     assert manager.is_running is True
 
 
-def test_stop_cancels_timer_and_clears_pending_state(monkeypatch):
+async def test_stop_cancels_timer_turns_off_tracked_lights_and_clears_pending_state(monkeypatch):
     unsubbed = []
 
     def _fake_track(hass, action, interval):
         return lambda: unsubbed.append(True)
 
     monkeypatch.setattr(hm, "async_track_time_interval", _fake_track)
-    manager = PlejdHolidayMode(_hass(), _entry())
+    hass = _hass()
+    manager = PlejdHolidayMode(hass, _entry())
     manager.start()
     manager._on_until["light.a"] = _local(20, 0)
     manager.stop()
+    await _drain()
     assert unsubbed == [True]  # the timer's own unsub was invoked -> no leaked timer
     assert manager.is_running is False
     assert manager._on_until == {}
+    assert hass.services.calls == [("light", "turn_off", {"entity_id": "light.a"})]
 
 
 def test_stop_without_start_is_a_noop():
@@ -180,6 +200,8 @@ async def test_tick_inside_active_window_applies(monkeypatch):
 async def test_tick_respects_configured_window_crossing_midnight(monkeypatch):
     hass = _hass()
     options = {CONF_HOLIDAY_LIGHTS: ["light.a"], CONF_HOLIDAY_WINDOW_START: "22:00", CONF_HOLIDAY_WINDOW_END: "02:00"}
+    # uniform_value stays at the default 15.0-minute on-duration, so a light picked at
+    # 01:00 (deadline 01:15) is long expired by the next, out-of-window check at noon.
     manager = PlejdHolidayMode(hass, _entry(options=options), rng=_FakeRandom(["light.a"]))
 
     monkeypatch.setattr(dt_util, "now", lambda: _local(1, 0))  # 01:00, inside 22:00-02:00
@@ -187,9 +209,14 @@ async def test_tick_respects_configured_window_crossing_midnight(monkeypatch):
     assert hass.services.calls == [("light", "turn_on", {"entity_id": "light.a"})]
 
     hass.services.calls.clear()
-    monkeypatch.setattr(dt_util, "now", lambda: _local(12, 0))  # noon, outside
+    monkeypatch.setattr(dt_util, "now", lambda: _local(1, 10))  # still inside the window, not yet expired
     await manager._async_tick(None)
     assert hass.services.calls == []
+
+    hass.services.calls.clear()
+    monkeypatch.setattr(dt_util, "now", lambda: _local(12, 0))  # noon: outside the window, past the deadline
+    await manager._async_tick(None)
+    assert hass.services.calls == [("light", "turn_off", {"entity_id": "light.a"})]  # expiry still runs
 
 
 # ── _async_apply: randomized on/off behavior ──────────────────────────────────
@@ -262,3 +289,56 @@ async def test_turns_off_expired_lights_on_a_later_tick():
         ("light", "turn_on", {"entity_id": "light.a"}),
     ]
     assert manager._on_until["light.a"] == t0 + timedelta(minutes=21.0)
+
+
+async def test_stop_spawns_cleanup_as_an_ha_owned_background_task():
+    created = []
+
+    def _create(coro, name):
+        created.append(name)
+        return asyncio.ensure_future(coro)
+
+    hass = _hass()
+    hass.async_create_background_task = _create
+    manager = PlejdHolidayMode(hass, _entry())
+    manager._on_until["light.a"] = _local(20, 0)
+    manager.stop()
+    await _drain()
+    assert created == ["plejd-holiday-mode-cleanup"]  # HA-owned task (surfaces failures), not a bare future
+    assert hass.services.calls == [("light", "turn_off", {"entity_id": "light.a"})]
+
+
+async def test_skips_lights_already_on_that_holiday_mode_did_not_turn_on():
+    # A light already on (by the user, another automation, ...) must not be adopted as
+    # "ours" — else a later expiry would turn off a light holiday mode never turned on.
+    hass = _hass(states_on=["light.a"])
+    options = {CONF_HOLIDAY_LIGHTS: ["light.a", "light.b"]}
+    fake_rng = _FakeRandom(["light.b"])
+    manager = PlejdHolidayMode(hass, _entry(options=options), rng=fake_rng)
+
+    await manager._async_apply(_local(20, 0))
+
+    assert fake_rng.sample_calls == [(["light.b"], 1)]  # light.a excluded from the candidate pool
+    assert hass.services.calls == [("light", "turn_on", {"entity_id": "light.b"})]
+    assert "light.a" not in manager._on_until
+
+
+async def test_turns_off_expired_lights_even_outside_the_active_window(monkeypatch):
+    # A light turned on near the window's end can have a deadline past it; expiry must
+    # still run on every tick, not only while inside the active window.
+    hass = _hass()
+    options = {CONF_HOLIDAY_LIGHTS: ["light.a"]}
+    manager = PlejdHolidayMode(hass, _entry(options=options), rng=_FakeRandom(["light.a"], uniform_value=45.0))
+
+    monkeypatch.setattr(dt_util, "now", lambda: _local(22, 50))  # inside 18:00-23:00
+    await manager._async_tick(None)  # on-duration deadline: 22:50 + 45min = 23:35
+    assert hass.services.calls == [("light", "turn_on", {"entity_id": "light.a"})]
+    hass.services.calls.clear()
+
+    monkeypatch.setattr(dt_util, "now", lambda: _local(23, 30))  # outside the window, not yet expired
+    await manager._async_tick(None)
+    assert hass.services.calls == []
+
+    monkeypatch.setattr(dt_util, "now", lambda: _local(23, 40))  # outside the window, past the deadline
+    await manager._async_tick(None)
+    assert hass.services.calls == [("light", "turn_off", {"entity_id": "light.a"})]

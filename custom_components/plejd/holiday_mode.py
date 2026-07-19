@@ -10,11 +10,11 @@ only Plejd ones.
 
 from __future__ import annotations
 
-import logging
+import asyncio
 import random
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
 from datetime import datetime, time, timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.event import async_track_time_interval
@@ -32,8 +32,6 @@ from .const import (
 if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
     from homeassistant.core import HomeAssistant
-
-_LOGGER = logging.getLogger(__name__)
 
 DATA_HOLIDAY_MODE = f"{DOMAIN}_holiday_mode"
 
@@ -82,11 +80,25 @@ class PlejdHolidayMode:
         self._unsub = async_track_time_interval(self._hass, self._async_tick, CHECK_INTERVAL)
 
     def stop(self) -> None:
-        """Stop the recurring schedule (idempotent)."""
+        """Stop the recurring schedule and turn off any lights it turned on (idempotent)."""
         if self._unsub is not None:
             self._unsub()
             self._unsub = None
-        self._on_until.clear()
+        if self._on_until:
+            pending = list(self._on_until)
+            self._on_until = {}
+            self._spawn(self._async_turn_off_all(pending))
+
+    def _spawn(self, coro: Coroutine[Any, Any, None]) -> asyncio.Task:
+        # Prefer HA's owned background task; fall back to a bare task outside HA (tests).
+        create = getattr(self._hass, "async_create_background_task", None)
+        if create is not None:
+            return create(coro, name="plejd-holiday-mode-cleanup")
+        return asyncio.ensure_future(coro)
+
+    async def _async_turn_off_all(self, entity_ids: list[str]) -> None:
+        for entity_id in entity_ids:
+            await self._hass.services.async_call("light", "turn_off", {"entity_id": entity_id}, blocking=True)
 
     def _window(self) -> tuple[time, time]:
         options = self._entry.options
@@ -103,16 +115,25 @@ class PlejdHolidayMode:
         reg_entries = er.async_entries_for_config_entry(registry, self._entry.entry_id)
         return [reg_entry.entity_id for reg_entry in reg_entries if reg_entry.entity_id.startswith("light.")]
 
+    def _is_currently_on(self, entity_id: str) -> bool:
+        """True if HA reports this light already on for a reason holiday mode didn't track."""
+        state = self._hass.states.get(entity_id)
+        return state is not None and state.state == "on"
+
     async def _async_tick(self, _now: object) -> None:
-        now_local = dt_util.now()
-        start, end = self._window()
-        if not _in_window(now_local.time(), start, end):
-            return
-        await self._async_apply(now_local)
+        await self._async_apply(dt_util.now())
 
     async def _async_apply(self, now_local: datetime) -> None:
+        # Expire our own on-lights on every tick, even outside the active window — a light
+        # turned on near the window's end can have a deadline past it (#89 review).
         await self._async_turn_off_expired(now_local)
-        off_lights = [entity_id for entity_id in self._target_lights() if entity_id not in self._on_until]
+        if not _in_window(now_local.time(), *self._window()):
+            return
+        off_lights = [
+            entity_id
+            for entity_id in self._target_lights()
+            if entity_id not in self._on_until and not self._is_currently_on(entity_id)
+        ]
         if not off_lights:
             return
         count = min(len(off_lights), max(1, round(len(off_lights) * TOGGLE_FRACTION)))
