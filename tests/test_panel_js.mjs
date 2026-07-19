@@ -125,7 +125,7 @@ test("_updateLights renders the current Plejd lights list", () => {
       "light.kitchen": {
         entity_id: "light.kitchen",
         state: "on",
-        attributes: { friendly_name: 'Kitchen <Main>', brightness: 128 },
+        attributes: { friendly_name: "Kitchen <Main>", brightness: 128 },
       },
       "light.patio": {
         entity_id: "light.patio",

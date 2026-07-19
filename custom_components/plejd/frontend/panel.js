@@ -72,7 +72,7 @@ class PlejdPanel extends HTMLElement {
   }
 
   disconnectedCallback() {
-    if (this._lightsFrame == null) return;
+    if (this._lightsFrame === null) return;
     (globalThis.cancelAnimationFrame || globalThis.clearTimeout)(this._lightsFrame);
     this._lightsFrame = null;
   }
@@ -237,7 +237,12 @@ class PlejdPanel extends HTMLElement {
         const name = s.attributes.friendly_name || s.entity_id;
         const on = s.state === "on";
         const bri = s.attributes.brightness;
-        const level = on && bri != null ? `${Math.round((bri / 255) * 100)}%` : on ? "on" : "off";
+        const level =
+          on && bri !== null && bri !== undefined
+            ? `${Math.round((bri / 255) * 100)}%`
+            : on
+              ? "on"
+              : "off";
         const dot = on ? "var(--state-light-active-color, #fdd835)" : "var(--disabled-text-color, #9e9e9e)";
         return `
           <div style="display:flex;align-items:center;gap:12px;padding:10px 4px;border-bottom:1px solid var(--divider-color,#e0e0e0)">
