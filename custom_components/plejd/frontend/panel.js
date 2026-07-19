@@ -126,7 +126,7 @@ class PlejdPanel extends HTMLElement {
     }
   }
 
-  async _save(bindings) {
+  async _save(bindings, resetForm = false) {
     this._busy = true;
     this._error = "";
     this._notice = "";
@@ -135,7 +135,8 @@ class PlejdPanel extends HTMLElement {
       const res = await this._callWS({ type: "plejd/dim_bindings/save", bindings });
       this._bindings = res.bindings || [];
       this._notice = "Saved.";
-      this._form = { target: "", device: "", up: "", down: "", stop: "" };
+      // Clear the add form only after an add; a delete must not wipe an in-progress add.
+      if (resetForm) this._form = { target: "", device: "", up: "", down: "", stop: "" };
     } catch (err) {
       // Surface whatever the backend returns. Invalid input (e.g. a missing stop trigger)
       // is already caught client-side before saving; the backend validates too and returns
@@ -382,7 +383,7 @@ class PlejdPanel extends HTMLElement {
 
   _wire(el) {
     el.querySelectorAll("[data-del]").forEach((btn) =>
-      btn.addEventListener("click", () => this._onDelete(btn.getAttribute("data-del"))),
+      btn.addEventListener("click", () => this._onDelete(el, btn.getAttribute("data-del"))),
     );
     el.querySelector("#f-target")?.addEventListener("change", (e) => {
       this._form.target = e.target.value;
@@ -440,11 +441,12 @@ class PlejdPanel extends HTMLElement {
     const binding = { targets, stop };
     if (up) binding.up = up;
     if (down) binding.down = down;
-    this._save([...this._bindings, binding]);
+    this._save([...this._bindings, binding], true); // reset the add form after a successful add
   }
 
-  _onDelete(id) {
+  _onDelete(el, id) {
     if (this._busy) return;
+    this._readForm(el); // keep any in-progress add entry across the delete's re-render
     this._save(this._bindings.filter((b) => String(b.id) !== String(id)));
   }
 

@@ -176,3 +176,39 @@ test("_updateLights renders the current Plejd lights list", () => {
   assert.match(lights.innerHTML, /Patio/);
   assert.doesNotMatch(lights.innerHTML, /Other vendor/);
 });
+
+test("deleting a binding preserves an in-progress add form", async () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._bindings = [{ id: "keep" }, { id: "drop" }];
+  panel._renderEditor = () => {};
+  let saved;
+  panel._callWS = (msg) => {
+    saved = msg;
+    return Promise.resolve({ bindings: [{ id: "keep" }] });
+  };
+  const values = { "#f-target": "light:light.a", "#f-device": "dev1", "#f-up": "0", "#f-down": "", "#f-stop": "1" };
+  const el = { querySelector: (sel) => (sel in values ? { value: values[sel] } : null) };
+
+  await panel._onDelete(el, "drop");
+
+  assert.deepEqual(saved.bindings, [{ id: "keep" }]); // the deleted binding is dropped
+  assert.equal(panel._form.target, "light:light.a"); // the in-progress add form survives
+  assert.equal(panel._form.stop, "1");
+});
+
+test("adding a binding resets the add form on success", async () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._renderEditor = () => {};
+  panel._form = { target: "light:light.a", device: "dev1", up: "0", down: "", stop: "1" };
+  panel._callWS = () => Promise.resolve({ bindings: [{ id: "new" }] });
+
+  await panel._save([{ id: "new" }], true);
+
+  assert.equal(panel._form.target, "");
+  assert.equal(panel._form.device, "");
+  assert.equal(panel._form.up, "");
+  assert.equal(panel._form.down, "");
+  assert.equal(panel._form.stop, "");
+});
