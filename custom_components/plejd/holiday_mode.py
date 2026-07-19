@@ -94,20 +94,37 @@ class PlejdHolidayMode:
         stored = await self._store.async_load() or {}
         if self._unsub is not unsub:
             return  # stopped (or restarted) while the load was in flight; don't clobber that
-        self._on_until = {entity_id: datetime.fromisoformat(deadline) for entity_id, deadline in stored.items()}
+        self._on_until = self._parse_stored_deadlines(stored)
+
+    @staticmethod
+    def _parse_stored_deadlines(stored: dict) -> dict[str, datetime]:
+        """Parse persisted deadlines, dropping (not raising on) any malformed entry.
+
+        A parse failure here must never propagate: it would abort async_start() after
+        the timer is already registered, leaking it with no owning switch state.
+        """
+        parsed: dict[str, datetime] = {}
+        for entity_id, deadline in stored.items():
+            try:
+                parsed[entity_id] = datetime.fromisoformat(deadline)
+            except (TypeError, ValueError):
+                _LOGGER.warning("Plejd holiday mode: dropping a malformed persisted deadline for %s", entity_id)
+        return parsed
 
     async def async_stop(self) -> None:
         """Stop the recurring schedule and turn off any lights it turned on (idempotent).
 
         Awaited directly by callers (the switch entity, and __init__.py's unload, before
         the light platform is torn down) rather than fired-and-forgotten, so the cleanup
-        reliably completes while the target entities/connection still exist.
+        reliably completes while the target entities/connection still exist. Always
+        persists afterward (even with nothing to turn off) so a stop landing while
+        async_start() is still awaiting its own load — leaving `_on_until` empty here —
+        still clears any stale deadlines already on disk, rather than leaving them for
+        the next start to (wrongly) resurrect.
         """
         if self._unsub is not None:
             self._unsub()
             self._unsub = None
-        if not self._on_until:
-            return
         for entity_id in list(self._on_until):
             if await self._async_turn_off_with_retry(entity_id):
                 self._on_until.pop(entity_id, None)  # pop, not del: a concurrent tick may race this

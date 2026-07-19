@@ -59,7 +59,7 @@ _SCHEDULE = {"id": 0, "slot": 1, "name": "Evening", "days": [0, 6], "time": "18:
 
 
 def _holiday_manager():
-    return PlejdHolidayMode(types.SimpleNamespace(), types.SimpleNamespace(options={}, entry_id="e1"))
+    return PlejdHolidayMode(types.SimpleNamespace(data={}), types.SimpleNamespace(options={}, entry_id="e1"))
 
 
 async def test_setup_creates_switches_and_schedule_switches():

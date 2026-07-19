@@ -214,9 +214,11 @@ async def test_stop_cancels_timer_turns_off_tracked_lights_and_clears_pending_st
 
 
 async def test_stop_without_start_is_a_noop():
-    manager = PlejdHolidayMode(_hass(), _entry())
+    hass = _hass()
+    manager = PlejdHolidayMode(hass, _entry())
     await manager.async_stop()  # must not raise
     assert manager.is_running is False
+    assert hass.data[("store", STORE_KEY)] == {}  # persists even with nothing to turn off
 
 
 def test_default_rng_is_a_real_random_instance():
@@ -261,6 +263,42 @@ async def test_apply_persists_deadlines_for_the_next_restart():
     await manager._async_apply(now)
 
     assert hass.data[("store", STORE_KEY)] == {"light.a": (now + timedelta(minutes=20.0)).isoformat()}
+
+
+async def test_start_drops_a_malformed_persisted_deadline_without_leaking_the_timer(monkeypatch):
+    unsubbed = []
+    monkeypatch.setattr(hm, "async_track_time_interval", lambda hass, action, interval: lambda: unsubbed.append(True))
+    hass = _hass()
+    hass.data[("store", STORE_KEY)] = {"light.a": "not-a-valid-timestamp", "light.b": _local(21, 0).isoformat()}
+    manager = PlejdHolidayMode(hass, _entry())
+
+    await manager.async_start()  # must not raise, and must not abandon the timer it just registered
+
+    assert manager._on_until == {"light.b": _local(21, 0)}  # the malformed entry is dropped, not fatal
+    assert manager.is_running is True  # the timer is still correctly owned, not leaked
+
+
+async def test_stop_clears_stale_store_data_when_it_wins_a_race_with_a_slow_start():
+    # A stop landing while async_start() is still awaiting its own load sees an empty
+    # in-memory _on_until (nothing to turn off) — but any stale deadlines already
+    # persisted from a previous run must still be cleared, not left to be wrongly
+    # resurrected on the next start.
+    hass = _hass()
+    hass.data[("store", STORE_KEY)] = {"light.stale": _local(19, 0).isoformat()}
+    manager = PlejdHolidayMode(hass, _entry())
+    real_load = manager._store.async_load
+
+    async def _load_then_stop():
+        result = await real_load()
+        await manager.async_stop()  # wins the race: stops first, while this load is still in flight
+        return result
+
+    manager._store.async_load = _load_then_stop
+
+    await manager.async_start()
+
+    assert hass.data[("store", STORE_KEY)] == {}
+    assert manager._on_until == {}
 
 
 # ── _async_tick: active-window gating ─────────────────────────────────────────
