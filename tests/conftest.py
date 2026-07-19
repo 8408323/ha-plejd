@@ -476,3 +476,30 @@ except ImportError:
 
     _ep.async_get_current_platform = _CurrentPlatform  # type: ignore[attr-defined]
     sys.modules.setdefault("homeassistant.helpers.entity_platform", _ep)
+
+    _frontend = types.ModuleType("homeassistant.components.frontend")
+
+    def _async_remove_panel(hass, frontend_url_path, *, warn_if_unknown=True):
+        return None
+
+    _frontend.async_remove_panel = _async_remove_panel  # type: ignore[attr-defined]
+    sys.modules.setdefault("homeassistant.components.frontend", _frontend)
+
+    _panel_custom = types.ModuleType("homeassistant.components.panel_custom")
+
+    async def _async_register_panel(hass, **kwargs):
+        return None
+
+    _panel_custom.async_register_panel = _async_register_panel  # type: ignore[attr-defined]
+    sys.modules.setdefault("homeassistant.components.panel_custom", _panel_custom)
+
+    _http = types.ModuleType("homeassistant.components.http")
+
+    class _StaticPathConfig:
+        def __init__(self, url_path, path, cache_headers=True):
+            self.url_path = url_path
+            self.path = path
+            self.cache_headers = cache_headers
+
+    _http.StaticPathConfig = _StaticPathConfig  # type: ignore[attr-defined]
+    sys.modules.setdefault("homeassistant.components.http", _http)

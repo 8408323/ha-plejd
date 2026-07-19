@@ -121,7 +121,8 @@
       "init": {
         "menu_options": {
           "schedules": "Manage schedules",
-          "add_device": "Add a device"
+          "add_device": "Add a device",
+          "dashboard": "Show or hide the dashboard"
         }
       },
       "schedules": {
@@ -150,6 +151,13 @@
         "data": {
           "name": "Name",
           "room_title": "New room (optional)"
+        }
+      },
+      "dashboard": {
+        "title": "Plejd dashboard",
+        "description": "Show the Plejd dashboard in the sidebar (left navigation menu).",
+        "data": {
+          "show_panel": "Show dashboard in sidebar"
         }
       }
     },
