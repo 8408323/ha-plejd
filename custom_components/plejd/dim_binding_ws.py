@@ -11,6 +11,7 @@ import logging
 import voluptuous as vol
 from homeassistant.components import websocket_api
 from homeassistant.components.device_automation import DeviceAutomationType, async_get_device_automations
+from homeassistant.components.device_automation.exceptions import DeviceNotFound
 from homeassistant.core import HomeAssistant
 
 from .bindings import InvalidDimBinding
@@ -59,10 +60,14 @@ async def ws_device_triggers(hass: HomeAssistant, connection, msg) -> None:
     device_id = msg["device_id"]
     try:
         triggers = await async_get_device_automations(hass, DeviceAutomationType.TRIGGER, [device_id])
-    except Exception:  # noqa: BLE001 - a genuine lookup failure, not "device has no triggers"
+    except DeviceNotFound:
+        # The device was removed or the editor holds a stale id — terminal, not retryable.
+        # Tell the editor to drop/refresh it rather than offer a (futile) retry.
+        connection.send_error(msg["id"], "device_not_found", "Device not found")
+        return
+    except Exception:  # noqa: BLE001 - a genuine enumeration failure, not "device has no triggers"
         # Surface the failure instead of an empty list: a real, user-picked device returning
         # empty reads as "no triggers" in the editor and its trigger cache then blocks a retry.
-        # An unknown device with genuinely no triggers returns {} without raising (empty below).
         _LOGGER.warning("Plejd: could not get triggers for device %s", device_id, exc_info=True)
         connection.send_error(msg["id"], "triggers_failed", "Could not load device triggers")
         return

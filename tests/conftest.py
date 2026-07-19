@@ -572,3 +572,11 @@ except ImportError:
     _devauto.DeviceAutomationType = _DeviceAutomationType  # type: ignore[attr-defined]
     _devauto.async_get_device_automations = _async_get_device_automations  # type: ignore[attr-defined]
     sys.modules.setdefault("homeassistant.components.device_automation", _devauto)
+
+    _devauto_exc = types.ModuleType("homeassistant.components.device_automation.exceptions")
+
+    class _DeviceNotFound(Exception):
+        pass
+
+    _devauto_exc.DeviceNotFound = _DeviceNotFound  # type: ignore[attr-defined]
+    sys.modules.setdefault("homeassistant.components.device_automation.exceptions", _devauto_exc)
