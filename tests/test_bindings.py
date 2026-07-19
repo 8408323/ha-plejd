@@ -25,13 +25,26 @@ async def _noop_sleep(_seconds):
     return None
 
 
+def _fake_monotonic(step=1.0):
+    """A deterministic monotonic clock that advances `step` per call."""
+    now = [0.0]
+
+    def _mono():
+        value = now[0]
+        now[0] += step
+        return value
+
+    return _mono
+
+
 # ── DimRamp ───────────────────────────────────────────────────────────────────
 
 
 async def test_ramp_up_steps_brightness_up(monkeypatch):
     monkeypatch.setattr(bindings_mod.asyncio, "sleep", _noop_sleep)
+    monkeypatch.setattr(bindings_mod.time, "monotonic", _fake_monotonic(1))  # 0,1,2,3,…
     hass = _hass()
-    ramp = DimRamp(hass, step_pct=5, interval=1, max_duration=3)  # sleep no-op → 3 ticks
+    ramp = DimRamp(hass, step_pct=5, interval=1, max_duration=4)  # deadline 4 → 3 ticks
     ramp.start("b1", {"entity_id": ["light.a"]}, "up")
     await ramp._tasks["b1"]
     await asyncio.sleep(0)
@@ -41,8 +54,9 @@ async def test_ramp_up_steps_brightness_up(monkeypatch):
 
 async def test_ramp_down_uses_negative_step(monkeypatch):
     monkeypatch.setattr(bindings_mod.asyncio, "sleep", _noop_sleep)
+    monkeypatch.setattr(bindings_mod.time, "monotonic", _fake_monotonic(1))
     hass = _hass()
-    ramp = DimRamp(hass, step_pct=7, interval=1, max_duration=2)
+    ramp = DimRamp(hass, step_pct=7, interval=1, max_duration=3)
     ramp.start("b1", {"area_id": ["kitchen"]}, "down")
     await ramp._tasks["b1"]
     await asyncio.sleep(0)

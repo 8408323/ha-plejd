@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Any
 from uuid import uuid4
 
@@ -109,13 +110,14 @@ class DimRamp:
 
     async def _run(self, target: dict[str, Any], direction: str) -> None:
         step = self._step_pct if direction == "up" else -self._step_pct
-        elapsed = 0.0
-        while elapsed < self._max_duration:
+        # Wall-clock deadline: each tick also awaits a (possibly slow) service call, so
+        # counting intervals would under-measure and let the cap drift under load.
+        deadline = time.monotonic() + self._max_duration
+        while time.monotonic() < deadline:
             await self._hass.services.async_call(
                 "light", "turn_on", {**target, "brightness_step_pct": step}, blocking=True
             )
             await asyncio.sleep(self._interval)
-            elapsed += self._interval
 
 
 class PlejdDimBindings:
