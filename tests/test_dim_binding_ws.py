@@ -43,10 +43,12 @@ async def test_list_returns_bindings():
     assert conn.result == (7, {"bindings": [{"id": "b1"}]})
 
 
-async def test_list_empty_when_not_loaded():
+async def test_list_errors_when_not_loaded():
     conn = _Conn()
     await dim_binding_ws.ws_list(_hass(), conn, {"id": 7})
-    assert conn.result == (7, {"bindings": []})
+    # not an empty list — an error, so the editor won't later save [] over stored bindings
+    assert conn.error[0] == 7 and conn.error[1] == "not_loaded"
+    assert conn.result is None
 
 
 async def test_save_replaces_and_returns():

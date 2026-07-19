@@ -27,7 +27,12 @@ DATA_BINDINGS = f"{DOMAIN}_dim_bindings"
 @websocket_api.async_response
 async def ws_list(hass: HomeAssistant, connection, msg) -> None:
     bindings = hass.data.get(DATA_BINDINGS)
-    connection.send_result(msg["id"], {"bindings": bindings.bindings if bindings is not None else []})
+    if bindings is None:
+        # Not loaded (e.g. mid reload, after unload popped it): error rather than an empty
+        # list, so the editor treats it as a load failure and can't later save [] over storage.
+        connection.send_error(msg["id"], "not_loaded", "Plejd is not loaded")
+        return
+    connection.send_result(msg["id"], {"bindings": bindings.bindings})
 
 
 @websocket_api.require_admin
