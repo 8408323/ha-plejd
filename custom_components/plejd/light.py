@@ -4,15 +4,20 @@ from __future__ import annotations
 
 from typing import Any
 
+import voluptuous as vol
 from homeassistant.components.light import ATTR_BRIGHTNESS, ColorMode, LightEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_platform
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .cloud import PlejdCloudDevice
 from .const import CATEGORY_LIGHT, DOMAIN
 from .coordinator import PlejdCoordinator
+
+SERVICE_START_DIM = "start_dim"
+SERVICE_STOP_DIM = "stop_dim"
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> None:
@@ -23,6 +28,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         for device in coordinator.devices
         if device.category == CATEGORY_LIGHT and device.address is not None
     )
+    # Remote hold-to-dim, as entity services so HA handles target expansion
+    # (entity/device/area = a whole Plejd room) and per-entity permission checks.
+    platform = entity_platform.async_get_current_platform()
+    platform.async_register_entity_service(
+        SERVICE_START_DIM, {vol.Required("direction"): vol.In(["up", "down"])}, "async_start_dim"
+    )
+    platform.async_register_entity_service(SERVICE_STOP_DIM, {}, "async_stop_dim")
 
 
 class PlejdLight(LightEntity):
@@ -73,6 +85,16 @@ class PlejdLight(LightEntity):
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         await self._coordinator.async_set_output(self._device.address, False, 0)
+
+    async def async_start_dim(self, direction: str) -> None:
+        """Start a smooth hold-to-dim ramp on this light (entity service)."""
+        if not self._device.dimmable:
+            return  # on/off outputs can't ramp; nothing to do
+        self._coordinator.dim_ramp.start(self._device.address, 1 if direction == "up" else -1)
+
+    async def async_stop_dim(self) -> None:
+        """Stop an in-progress ramp on this light, holding its brightness (entity service)."""
+        self._coordinator.dim_ramp.stop(self._device.address)
 
     async def async_added_to_hass(self) -> None:
         self.async_on_remove(self._coordinator.async_add_listener(self.async_write_ha_state))

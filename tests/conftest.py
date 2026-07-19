@@ -467,14 +467,12 @@ except ImportError:
     _dr.async_get = _dr_async_get  # type: ignore[attr-defined]
     sys.modules.setdefault("homeassistant.helpers.device_registry", _dr)
 
-    _er = types.ModuleType("homeassistant.helpers.entity_registry")
-
-    def _er_async_get(hass):
-        return getattr(hass, "entity_registry", None)
-
-    _er.async_get = _er_async_get  # type: ignore[attr-defined]
-    sys.modules.setdefault("homeassistant.helpers.entity_registry", _er)
-
     _ep = types.ModuleType("homeassistant.helpers.entity_platform")
     _ep.AddEntitiesCallback = object  # type: ignore[attr-defined]
+
+    class _CurrentPlatform:
+        def async_register_entity_service(self, name, schema, func):
+            return None
+
+    _ep.async_get_current_platform = lambda: _CurrentPlatform()  # type: ignore[attr-defined]
     sys.modules.setdefault("homeassistant.helpers.entity_platform", _ep)
