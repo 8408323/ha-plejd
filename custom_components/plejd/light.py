@@ -104,12 +104,11 @@ class PlejdLight(LightEntity):
 
 
 class PlejdRoomLight(LightEntity):
-    """A whole Plejd room as one light: on/off/brightness in a single group command.
+    """A whole Plejd room as one light: on/off/brightness in a single group command."""
 
-    Commands target the room's group mesh address, so every output in the room responds
-    to one 0x0098 (like the app dims a room) instead of HA fanning an area out to N
-    per-output commands. State is aggregated from the room's member outputs.
-    """
+    # Commands target the room's group mesh address, so every output in the room responds
+    # to one 0x0098 (like the app dims a room) instead of HA fanning an area out to N
+    # per-output commands. State is aggregated from the room's member outputs.
 
     _attr_has_entity_name = True
     _attr_name = None
