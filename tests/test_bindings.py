@@ -750,6 +750,21 @@ async def test_replace_rejects_malformed_presses(monkeypatch):
         {
             "presses": [{"trigger": {"x": 1}, "action": {"type": "service", "domain": "light", "service": 1}}]
         },  # service name must be a string
+        {"presses": [{"trigger": [{}], "action": {"type": "toggle"}}]},  # empty trigger inside a list
+        {
+            "presses": [{"trigger": {"x": 1}, "action": {"type": "scene", "entity_id": "scene."}}]
+        },  # scene entity_id needs a non-empty object_id
+        {
+            "presses": [{"trigger": {"x": 1}, "action": {"type": "scene", "entity_id": "scene.kvall bad"}}]
+        },  # scene entity_id must be a valid slug
+        {
+            "presses": [
+                {"trigger": {"x": 1}, "action": {"type": "service", "domain": "light.turn_on", "service": "turn_on"}}
+            ]
+        },  # service domain must be a valid slug, not a dotted entity id
+        {
+            "presses": [{"trigger": {"x": 1}, "action": {"type": "service", "domain": "light", "service": "turn on"}}]
+        },  # service name must be a valid slug, no spaces
     ]
     for binding in bad:
         with pytest.raises(ValueError):
