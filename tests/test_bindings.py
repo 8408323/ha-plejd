@@ -6,6 +6,7 @@ import asyncio
 import types
 
 import pytest
+from homeassistant.helpers import entity_registry as er
 from plejd import bindings as bindings_mod
 from plejd.bindings import DimRamp, PlejdDimBindings
 
@@ -24,6 +25,12 @@ class _Services:
 
 def _hass(data=None):
     return types.SimpleNamespace(services=_Services(), data=data if data is not None else {})
+
+
+def _hass_with_entities(entities):
+    """A hass whose entity registry maps entity_id -> integration platform."""
+    registry = er.EntityRegistry({eid: types.SimpleNamespace(platform=platform) for eid, platform in entities.items()})
+    return types.SimpleNamespace(services=_Services(), data={}, entity_registry=registry)
 
 
 async def _noop_sleep(_seconds):
@@ -360,6 +367,82 @@ async def test_concurrent_replaces_leave_consistent_triggers(monkeypatch):
     await asyncio.gather(pb.async_replace(a), pb.async_replace(b))
     live = sum(1 for key in ("up", "down", "stop") if pb.bindings[0].get(key))
     assert len(pb._unsubs) == live  # exactly the winner's triggers remain — no stale leak
+
+
+async def test_plejd_single_light_target_uses_native_dim(monkeypatch):
+    captured = []
+    monkeypatch.setattr(bindings_mod, "async_initialize_triggers", _spy_triggers(captured))
+    hass = _hass_with_entities({"light.kok": "plejd"})
+    hass.data[("store", bindings_mod.STORE_KEY)] = [
+        {"id": "b1", "targets": {"entity_id": ["light.kok"]}, "up": {"a": 1}, "down": {"b": 1}, "stop": {"c": 1}},
+    ]
+    pb = PlejdDimBindings(hass)
+    pb._ramp = _SpyRamp()
+    await pb.async_load()
+    await captured[0][1]()  # up
+    await captured[2][1]()  # stop
+    # a lone Plejd light rides its native ramp (start_dim/stop_dim → active transport), not the generic ramp
+    assert hass.services.calls == [
+        ("plejd", "start_dim", {"entity_id": ["light.kok"], "direction": "up"}),
+        ("plejd", "stop_dim", {"entity_id": ["light.kok"]}),
+    ]
+    assert pb._ramp.calls == []
+
+
+async def test_plejd_light_target_as_string_uses_native_dim(monkeypatch):
+    captured = []
+    monkeypatch.setattr(bindings_mod, "async_initialize_triggers", _spy_triggers(captured))
+    hass = _hass_with_entities({"light.kok": "plejd"})
+    hass.data[("store", bindings_mod.STORE_KEY)] = [
+        {"id": "b1", "targets": {"entity_id": "light.kok"}, "up": {"a": 1}, "stop": {"c": 1}},  # stored as a string
+    ]
+    pb = PlejdDimBindings(hass)
+    await pb.async_load()
+    await captured[0][1]()
+    assert hass.services.calls == [("plejd", "start_dim", {"entity_id": ["light.kok"], "direction": "up"})]
+
+
+async def test_non_plejd_light_target_uses_generic_ramp(monkeypatch):
+    captured = []
+    monkeypatch.setattr(bindings_mod, "async_initialize_triggers", _spy_triggers(captured))
+    hass = _hass_with_entities({"light.hue": "hue"})
+    hass.data[("store", bindings_mod.STORE_KEY)] = [
+        {"id": "b1", "targets": {"entity_id": ["light.hue"]}, "up": {"a": 1}, "stop": {"c": 1}},
+    ]
+    pb = PlejdDimBindings(hass)
+    pb._ramp = _SpyRamp()
+    await pb.async_load()
+    await captured[0][1]()
+    assert pb._ramp.calls == [("start", "b1", {"entity_id": ["light.hue"]}, "up")]
+    assert hass.services.calls == []  # non-Plejd light → generic ramp, no plejd service
+
+
+async def test_area_target_uses_generic_ramp(monkeypatch):
+    captured = []
+    monkeypatch.setattr(bindings_mod, "async_initialize_triggers", _spy_triggers(captured))
+    hass = _hass_with_entities({})
+    hass.data[("store", bindings_mod.STORE_KEY)] = [
+        {"id": "b1", "targets": {"area_id": ["kitchen"]}, "up": {"a": 1}, "stop": {"c": 1}},
+    ]
+    pb = PlejdDimBindings(hass)
+    pb._ramp = _SpyRamp()
+    await pb.async_load()
+    await captured[0][1]()
+    assert pb._ramp.calls == [("start", "b1", {"area_id": ["kitchen"]}, "up")]  # area can't use the per-light ramp
+
+
+async def test_non_light_plejd_entity_uses_generic_ramp(monkeypatch):
+    captured = []
+    monkeypatch.setattr(bindings_mod, "async_initialize_triggers", _spy_triggers(captured))
+    hass = _hass_with_entities({"switch.plejd_relay": "plejd"})
+    hass.data[("store", bindings_mod.STORE_KEY)] = [
+        {"id": "b1", "targets": {"entity_id": ["switch.plejd_relay"]}, "up": {"a": 1}, "stop": {"c": 1}},
+    ]
+    pb = PlejdDimBindings(hass)
+    pb._ramp = _SpyRamp()
+    await pb.async_load()
+    await captured[0][1]()
+    assert pb._ramp.calls == [("start", "b1", {"entity_id": ["switch.plejd_relay"]}, "up")]  # only lights dim
 
 
 async def test_binding_with_start_but_no_stop_is_rejected(monkeypatch):

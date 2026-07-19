@@ -3,9 +3,10 @@
 A binding maps a remote's hold/release actions (any HA device trigger — IKEA, Hue, ZHA,
 Zigbee2MQTT, …) to smooth hold-to-dim of a target: any Home Assistant light or a whole
 area, Plejd or not. Bindings are stored here and their triggers attached via HA's generic
-trigger machinery; when one fires, a brightness-step ramp runs on the target via
-`light.turn_on` (so it works for every light, and rides Plejd's acked path when the
-target is Plejd).
+trigger machinery. When a trigger fires, a target that is a single Plejd light rides
+Plejd's native ramp (`start_dim`/`stop_dim` over the site's chosen transport, with local
+level tracking); every other target — an area, a device, multiple or non-Plejd entities —
+uses a generic `light.turn_on` brightness-step ramp so it works for every light.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from typing import Any
 from uuid import uuid4
 
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.trigger import async_initialize_triggers
 
@@ -26,6 +28,13 @@ _LOGGER = logging.getLogger(__name__)
 
 STORE_VERSION = 1
 STORE_KEY = f"{DOMAIN}.dim_bindings"
+
+# Plejd's own hold-to-dim entity services (light.py). A binding that targets a single
+# Plejd light is driven through these so it rides the site's chosen transport
+# (gateway/BLE, per CONF_TRANSPORT) with local level tracking, instead of the generic
+# state-read-back ramp — which can plateau on stale BLE state for gateway-less installs.
+SERVICE_START_DIM = "start_dim"
+SERVICE_STOP_DIM = "stop_dim"
 
 # Brightness delta per tick (percent), tick spacing, and a safety cap so a missed
 # release event can't ramp forever.
@@ -192,6 +201,7 @@ class PlejdDimBindings:
             # A hold with no release path would ramp to DIM_MAX_DURATION on every press;
             # reject the whole binding rather than attach start triggers that can't stop.
             raise ValueError("dim binding has a start trigger but no stop trigger")
+        plejd_light = self._plejd_light(binding)
         # Attach atomically: if any trigger fails, roll back the ones already attached for
         # this binding, so we never leave a ramp that can start but not stop.
         attached: list = []
@@ -199,15 +209,34 @@ class PlejdDimBindings:
             for key, direction in (("up", "up"), ("down", "down")):
                 trigger = binding.get(key)
                 if trigger:
-                    await self._attach_trigger(attached, trigger, self._start_action(bid, target, direction))
+                    action = self._start_action(bid, target, direction, plejd_light)
+                    await self._attach_trigger(attached, trigger, action)
             stop = binding.get("stop")
             if stop:
-                await self._attach_trigger(attached, stop, self._stop_action(bid))
+                await self._attach_trigger(attached, stop, self._stop_action(bid, plejd_light))
         except Exception:
             for unsub in attached:
                 unsub()
             raise
         self._unsubs.extend(attached)
+
+    def _plejd_light(self, binding: dict) -> str | None:
+        """The entity_id if the binding targets exactly one Plejd light, else None.
+
+        Those ride Plejd's native ramp (over the chosen transport); everything else —
+        areas, devices, multiple or non-Plejd entities — uses the generic ramp.
+        """
+        target = _target(binding)
+        entities = target.get("entity_id")
+        if isinstance(entities, str):
+            entities = [entities]
+        if list(target) != ["entity_id"] or not isinstance(entities, list) or len(entities) != 1:
+            return None
+        entity_id = entities[0]
+        if not entity_id.startswith("light."):
+            return None
+        entry = er.async_get(self._hass).async_get(entity_id)
+        return entity_id if entry is not None and entry.platform == DOMAIN else None
 
     async def _attach_trigger(self, attached: list, trigger, action) -> None:
         # Attach each config on its own so a partial failure in a multi-trigger slot is
@@ -221,17 +250,30 @@ class PlejdDimBindings:
                 raise RuntimeError("dim binding trigger failed to initialize")
             attached.append(unsub)
 
-    def _start_action(self, bid, target, direction):
+    def _start_action(self, bid, target, direction, plejd_light):
         async def _action(run_variables=None, context=None):
             if self._closed:  # a trigger firing during unload-race cleanup mustn't start a ramp
                 return
-            self._ramp.start(bid, target, direction)
+            if plejd_light is not None:
+                await self._hass.services.async_call(
+                    DOMAIN,
+                    SERVICE_START_DIM,
+                    {"entity_id": [plejd_light], "direction": direction},
+                    blocking=True,
+                )
+            else:
+                self._ramp.start(bid, target, direction)
 
         return _action
 
-    def _stop_action(self, bid):
+    def _stop_action(self, bid, plejd_light):
         async def _action(run_variables=None, context=None):
-            self._ramp.stop(bid)
+            if plejd_light is not None:
+                await self._hass.services.async_call(
+                    DOMAIN, SERVICE_STOP_DIM, {"entity_id": [plejd_light]}, blocking=True
+                )
+            else:
+                self._ramp.stop(bid)
 
         return _action
 

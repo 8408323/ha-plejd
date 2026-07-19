@@ -467,6 +467,22 @@ except ImportError:
     _dr.async_get = _dr_async_get  # type: ignore[attr-defined]
     sys.modules.setdefault("homeassistant.helpers.device_registry", _dr)
 
+    _er = types.ModuleType("homeassistant.helpers.entity_registry")
+
+    class _EntityRegistry:
+        def __init__(self, entities=None):
+            self._entities = entities or {}
+
+        def async_get(self, entity_id):
+            return self._entities.get(entity_id)
+
+    def _er_async_get(hass):
+        return getattr(hass, "entity_registry", None) or _EntityRegistry()
+
+    _er.async_get = _er_async_get  # type: ignore[attr-defined]
+    _er.EntityRegistry = _EntityRegistry  # type: ignore[attr-defined]
+    sys.modules.setdefault("homeassistant.helpers.entity_registry", _er)
+
     _ep = types.ModuleType("homeassistant.helpers.entity_platform")
     _ep.AddEntitiesCallback = object  # type: ignore[attr-defined]
 
