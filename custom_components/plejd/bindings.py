@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from typing import Any
 from uuid import uuid4
@@ -64,6 +65,65 @@ def _target(binding: dict) -> dict[str, Any]:
 def _is_stopless(binding: dict) -> bool:
     """True if the binding has a start trigger (up/down) but no stop trigger to release it."""
     return bool((binding.get("up") or binding.get("down")) and not binding.get("stop"))
+
+
+# A "press" maps one remote trigger (any button, any press type) to an instantaneous action
+# on the binding's target — the general counterpart to the hold-to-dim up/down/stop triggers.
+PRESS_ACTIONS = ("toggle", "on", "off", "scene", "service")
+
+# HA's actual slug convention: lowercase alphanumeric segments joined by single
+# underscores — no leading/trailing/double underscore (matches HA's own entity-id and
+# service-name validators). A stricter check here catches typos that would otherwise
+# only surface as a failed hass.services.async_call when the remote fires.
+_SLUG_RE = re.compile(r"^[a-z0-9]+(?:_[a-z0-9]+)*$")
+_SCENE_ENTITY_RE = re.compile(r"^scene\.[a-z0-9]+(?:_[a-z0-9]+)*$")
+
+
+def _validate_presses(binding: dict) -> None:
+    """Reject a binding whose press mappings are malformed.
+
+    Raised from both the save path (async_replace, before persisting) and the load path
+    (_attach, as a safety net for legacy/hand-edited storage).
+    """
+    presses = binding.get("presses")
+    if presses is None:
+        return
+    if not isinstance(presses, list):
+        raise InvalidDimBinding("binding presses must be a list")
+    for press in presses:
+        if not isinstance(press, dict):
+            raise InvalidDimBinding("each press entry must be a mapping")
+        trigger = press.get("trigger")
+        if not trigger:
+            raise InvalidDimBinding("binding press has no trigger")
+        trigger_configs = trigger if isinstance(trigger, list) else [trigger]
+        if not all(isinstance(t, dict) and t for t in trigger_configs):
+            raise InvalidDimBinding("binding press trigger must be a non-empty mapping (or a list of them)")
+        if not all(isinstance(t.get("platform"), str) and t.get("platform") for t in trigger_configs):
+            # HA's trigger helper reads CONF_PLATFORM to dispatch to the right trigger
+            # integration; without it, async_initialize_triggers fails and _async_attach
+            # only logs and skips the binding — save-time is where this should be caught.
+            raise InvalidDimBinding("binding press trigger must include a platform")
+        action = press.get("action")
+        if action is not None and not isinstance(action, dict):
+            raise InvalidDimBinding("press action must be a mapping")
+        action = action or {}
+        atype = action.get("type")
+        if atype not in PRESS_ACTIONS:
+            raise InvalidDimBinding(f"unknown press action type: {atype!r}")
+        if atype == "scene":
+            entity_id = action.get("entity_id")
+            if not isinstance(entity_id, str) or not _SCENE_ENTITY_RE.match(entity_id):
+                raise InvalidDimBinding("scene press action needs a valid scene.* entity_id")
+        if atype == "service":
+            domain, service = action.get("domain"), action.get("service")
+            if not (isinstance(domain, str) and _SLUG_RE.match(domain)):
+                raise InvalidDimBinding("service press action needs a valid domain")
+            if not (isinstance(service, str) and _SLUG_RE.match(service)):
+                raise InvalidDimBinding("service press action needs a valid service name")
+            data = action.get("data")
+            if data is not None and not isinstance(data, dict):
+                raise InvalidDimBinding("service press action data must be a mapping")
 
 
 def _ensure_ids(bindings: list[dict]) -> bool:
@@ -192,6 +252,7 @@ class PlejdDimBindings:
                 # _async_attach would otherwise swallow the per-binding error and still
                 # report a saved-but-non-functional binding to the client.
                 raise InvalidDimBinding(_ERR_STOPLESS_BINDING)
+            _validate_presses(binding)
         _ensure_ids(bindings)
         # Serialize the whole save→swap→re-attach so two overlapping saves can't interleave
         # and leave both trigger sets live. Save first so the in-memory list and the live
@@ -240,6 +301,7 @@ class PlejdDimBindings:
             # Load-path safety net for legacy/hand-edited storage (async_replace rejects
             # these before saving): a hold with no release would ramp to DIM_MAX_DURATION.
             raise InvalidDimBinding(_ERR_STOPLESS_BINDING)
+        _validate_presses(binding)  # load-path guard: malformed presses log + skip this binding
         plejd_light = self._plejd_light(binding)
         # Attach atomically: if any trigger fails, roll back the ones already attached for
         # this binding, so we never leave a ramp that can start but not stop.
@@ -253,6 +315,10 @@ class PlejdDimBindings:
             stop = binding.get("stop")
             if stop:
                 await self._attach_trigger(attached, stop, self._stop_action(bid, plejd_light))
+            for press in binding.get("presses") or []:
+                trigger = press.get("trigger")
+                if trigger:
+                    await self._attach_trigger(attached, trigger, self._press_action(target, press.get("action") or {}))
         except Exception:
             for unsub in attached:
                 unsub()
@@ -315,6 +381,32 @@ class PlejdDimBindings:
                 self._ramp.stop(bid)
 
         return _action
+
+    def _press_action(self, target, action):
+        async def _action(run_variables=None, context=None):
+            if self._closed:  # unload raced an attach; don't run after teardown
+                return
+            await self._run_press(target, action)
+
+        return _action
+
+    async def _run_press(self, target: dict[str, Any], action: dict) -> None:
+        """Run one press action on the target (any remote trigger → any HA action)."""
+        atype = action.get("type")
+        if atype in ("toggle", "on", "off"):
+            if not target:
+                return  # nothing to act on
+            service = {"toggle": "toggle", "on": "turn_on", "off": "turn_off"}[atype]
+            await self._hass.services.async_call("homeassistant", service, dict(target), blocking=True)
+        elif atype == "scene":
+            await self._hass.services.async_call(
+                "scene", "turn_on", {"entity_id": [action["entity_id"]]}, blocking=True
+            )
+        elif atype == "service":
+            # Escape hatch: call any service. The binding target is merged in so a service
+            # like light.turn_on applies to it; explicit data wins on conflict.
+            data = {**target, **(action.get("data") or {})}
+            await self._hass.services.async_call(action["domain"], action["service"], data, blocking=True)
 
     def _detach(self) -> None:
         for unsub in self._unsubs:
