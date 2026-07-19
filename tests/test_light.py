@@ -26,6 +26,17 @@ def _device(category="light", dimmable=True, address=5):
     )
 
 
+class _SpyRamp:
+    def __init__(self):
+        self.calls = []
+
+    def start(self, address, direction):
+        self.calls.append(("start", address, direction))
+
+    def stop(self, address):
+        self.calls.append(("stop", address))
+
+
 class _Coordinator:
     def __init__(self, devices, state=None):
         self.devices = devices
@@ -33,6 +44,7 @@ class _Coordinator:
         self.commands = []
         self.listeners = []
         self.available = True
+        self.dim_ramp = _SpyRamp()
 
     def state_for(self, address):
         return self._state
@@ -126,3 +138,45 @@ async def test_added_to_hass_subscribes():
     light = PlejdLight(coord, _device())
     await light.async_added_to_hass()
     assert len(coord.listeners) == 1
+
+
+# ── Remote hold-to-dim entity services ────────────────────────────────────────
+
+
+async def test_setup_entry_registers_dim_entity_services(monkeypatch):
+    import plejd.light as light_mod
+
+    registered = []
+
+    class _Platform:
+        def async_register_entity_service(self, name, schema, func):
+            registered.append((name, func))
+
+    monkeypatch.setattr(light_mod.entity_platform, "async_get_current_platform", lambda: _Platform())
+    coord = _Coordinator([_device()])
+    entry = types.SimpleNamespace(runtime_data=coord)
+    await async_setup_entry(None, entry, lambda entities: None)
+    assert (light_mod.SERVICE_START_DIM, "async_start_dim") in registered
+    assert (light_mod.SERVICE_STOP_DIM, "async_stop_dim") in registered
+
+
+async def test_async_start_dim_ramps_dimmable_light():
+    coord = _Coordinator([])
+    light = PlejdLight(coord, _device(dimmable=True, address=7))
+    await light.async_start_dim("up")
+    await light.async_start_dim("down")
+    assert coord.dim_ramp.calls == [("start", 7, 1), ("start", 7, -1)]
+
+
+async def test_async_start_dim_noop_for_non_dimmable_light():
+    coord = _Coordinator([])
+    light = PlejdLight(coord, _device(dimmable=False, address=7))
+    await light.async_start_dim("up")
+    assert coord.dim_ramp.calls == []  # on/off outputs can't ramp
+
+
+async def test_async_stop_dim_stops_ramp():
+    coord = _Coordinator([])
+    light = PlejdLight(coord, _device(address=7))
+    await light.async_stop_dim()
+    assert coord.dim_ramp.calls == [("stop", 7)]

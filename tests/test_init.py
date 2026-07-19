@@ -7,7 +7,13 @@ from unittest.mock import AsyncMock
 
 import plejd
 import pytest
-from plejd import PLATFORMS, SERVICE_ADD_DEVICE, SERVICE_SCAN_DEVICES, async_setup_entry, async_unload_entry
+from plejd import (
+    PLATFORMS,
+    SERVICE_ADD_DEVICE,
+    SERVICE_SCAN_DEVICES,
+    async_setup_entry,
+    async_unload_entry,
+)
 
 
 class _FakeCoordinator:

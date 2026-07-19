@@ -80,6 +80,7 @@ from .const import (
     TRANSPORT_BLE,
     TRANSPORT_GATEWAY,
 )
+from .dim_ramp import PlejdDimRamp
 from .gateway_transport import PlejdGatewayConnection
 from .protocol import Command, MotionEvent, OutputSettings, OutputState, decode_motion, decode_notify_events
 
@@ -148,6 +149,8 @@ class PlejdCoordinator:
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         self.hass = hass
         self._entry = entry  # for runtime reauth (e.g. a rename hitting expired credentials)
+        # Remote hold-to-dim ramps (light.start_dim/stop_dim entity services drive this).
+        self.dim_ramp = PlejdDimRamp(hass, self)
         # Tolerate entries stored before a field existed (e.g. output_index).
         self.devices = [PlejdCloudDevice(**{"output_index": 0, **device}) for device in entry.data[CONF_DEVICES]]
         self.scenes = [PlejdCloudScene(**scene) for scene in entry.data.get(CONF_SCENES, [])]
@@ -796,6 +799,7 @@ class PlejdCoordinator:
 
     async def async_shutdown(self) -> None:
         self._closed = True
+        self.dim_ramp.shutdown()
         if self._clock_unsub is not None:
             self._clock_unsub()
             self._clock_unsub = None
