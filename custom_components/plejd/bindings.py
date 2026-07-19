@@ -142,12 +142,14 @@ class PlejdDimBindings:
         self._unsubs: list = []
         self._ramp = DimRamp(hass)
         self._lock = asyncio.Lock()
+        self._closed = False
 
     @property
     def bindings(self) -> list[dict]:
         return self._bindings
 
     async def async_load(self) -> None:
+        # Runs once at setup, before shutdown is wired up, so no teardown race to guard here.
         # Serialize with replace (shared lock) so triggers are never attached twice; commit
         # in-memory state only after the read/save, so a failed load leaves an empty,
         # consistent manager (no triggers attached, nothing listed).
@@ -169,7 +171,12 @@ class PlejdDimBindings:
             await self._store.async_save(bindings)
             self._bindings = bindings
             self._detach()
+            self._ramp.shutdown()  # a live ramp's stop trigger may be gone now; don't let it run on
+            if self._closed:
+                return
             await self._async_attach()
+            if self._closed:  # unload raced this save → don't leave triggers live past teardown
+                self._detach()
 
     async def _async_attach(self) -> None:
         for binding in self._bindings:
@@ -228,5 +235,8 @@ class PlejdDimBindings:
         self._unsubs = []
 
     def shutdown(self) -> None:
+        # Sync teardown (runs outside _lock): flag so an in-flight save re-checks and
+        # doesn't attach triggers after unload.
+        self._closed = True
         self._detach()
         self._ramp.shutdown()
