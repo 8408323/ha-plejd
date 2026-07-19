@@ -505,9 +505,9 @@ async def test_start_action_noops_after_close(monkeypatch):
     pb._ramp = _SpyRamp()
     await pb.async_load()
     start_action = captured[0][1]  # the "up" start action
-    pb._closed = True  # integration unloaded
+    pb.shutdown()
     await start_action()
-    assert pb._ramp.calls == []  # a trigger firing after teardown starts no ramp
+    assert not any(c[0] == "start" for c in pb._ramp.calls)  # a trigger firing after teardown starts no ramp
 
 
 async def test_replace_cancels_live_ramps(monkeypatch):
@@ -599,3 +599,246 @@ async def test_load_persists_reassigned_duplicate_ids(monkeypatch):
     assert pb.bindings[0]["id"] == "dup"
     assert pb.bindings[1]["id"] != "dup"
     assert hass.data[("store", bindings_mod.STORE_KEY)][1]["id"] == pb.bindings[1]["id"]
+
+
+# ── press actions (any trigger → any action) ──────────────────────────────────
+
+
+async def _load_one(monkeypatch, hass, binding):
+    monkeypatch.setattr(bindings_mod, "async_initialize_triggers", _spy_triggers(captured := []))
+    hass.data[("store", bindings_mod.STORE_KEY)] = [binding]
+    pb = PlejdDimBindings(hass)
+    await pb.async_load()
+    return pb, captured
+
+
+async def test_press_toggle_calls_homeassistant_toggle(monkeypatch):
+    hass = _hass()
+    _, captured = await _load_one(
+        monkeypatch,
+        hass,
+        {
+            "id": "b1",
+            "targets": {"entity_id": ["light.a"]},
+            "presses": [{"trigger": {"platform": "device", "x": 1}, "action": {"type": "toggle"}}],
+        },
+    )
+    await captured[0][1]()  # fire the press trigger
+    assert hass.services.calls == [("homeassistant", "toggle", {"entity_id": ["light.a"]})]
+
+
+async def test_press_on_and_off_map_to_turn_on_off(monkeypatch):
+    hass = _hass()
+    _, captured = await _load_one(
+        monkeypatch,
+        hass,
+        {
+            "id": "b1",
+            "targets": {"area_id": ["kitchen"]},
+            "presses": [
+                {"trigger": {"platform": "device", "a": 1}, "action": {"type": "on"}},
+                {"trigger": {"platform": "device", "b": 1}, "action": {"type": "off"}},
+            ],
+        },
+    )
+    await captured[0][1]()
+    await captured[1][1]()
+    assert hass.services.calls == [
+        ("homeassistant", "turn_on", {"area_id": ["kitchen"]}),
+        ("homeassistant", "turn_off", {"area_id": ["kitchen"]}),
+    ]
+
+
+async def test_press_scene_activates_scene(monkeypatch):
+    hass = _hass()
+    _, captured = await _load_one(
+        monkeypatch,
+        hass,
+        {
+            "id": "b1",
+            "targets": {},
+            "presses": [
+                {"trigger": {"platform": "device", "x": 1}, "action": {"type": "scene", "entity_id": "scene.kvall"}}
+            ],
+        },
+    )
+    await captured[0][1]()
+    assert hass.services.calls == [("scene", "turn_on", {"entity_id": ["scene.kvall"]})]
+
+
+async def test_press_service_merges_target_and_data(monkeypatch):
+    hass = _hass()
+    _, captured = await _load_one(
+        monkeypatch,
+        hass,
+        {
+            "id": "b1",
+            "targets": {"entity_id": ["light.a"]},
+            "presses": [
+                {
+                    "trigger": {"platform": "device", "x": 1},
+                    "action": {
+                        "type": "service",
+                        "domain": "light",
+                        "service": "turn_on",
+                        "data": {"brightness_pct": 40},
+                    },
+                }
+            ],
+        },
+    )
+    await captured[0][1]()
+    assert hass.services.calls == [("light", "turn_on", {"entity_id": ["light.a"], "brightness_pct": 40})]
+
+
+async def test_press_toggle_on_empty_target_is_noop(monkeypatch):
+    hass = _hass()
+    _, captured = await _load_one(
+        monkeypatch,
+        hass,
+        {
+            "id": "b1",
+            "targets": {},
+            "presses": [{"trigger": {"platform": "device", "x": 1}, "action": {"type": "toggle"}}],
+        },
+    )
+    await captured[0][1]()
+    assert hass.services.calls == []  # nothing to toggle
+
+
+async def test_press_action_noops_after_close(monkeypatch):
+    hass = _hass()
+    pb, captured = await _load_one(
+        monkeypatch,
+        hass,
+        {
+            "id": "b1",
+            "targets": {"entity_id": ["light.a"]},
+            "presses": [{"trigger": {"platform": "device", "x": 1}, "action": {"type": "toggle"}}],
+        },
+    )
+    pb.shutdown()
+    await captured[0][1]()
+    assert hass.services.calls == []  # a trigger firing after teardown runs nothing
+
+
+async def test_replace_rejects_malformed_presses(monkeypatch):
+    monkeypatch.setattr(bindings_mod, "async_initialize_triggers", _spy_triggers([]))
+    pb = PlejdDimBindings(_hass())
+    await pb.async_load()
+    bad = [
+        {"presses": [{"action": {"type": "toggle"}}]},  # no trigger
+        {"presses": [{"trigger": {"platform": "device", "x": 1}, "action": {"type": "bogus"}}]},  # unknown type
+        {"presses": [{"trigger": {"platform": "device", "x": 1}, "action": {"type": "scene"}}]},  # scene w/o entity_id
+        {
+            "presses": [{"trigger": {"platform": "device", "x": 1}, "action": {"type": "service", "domain": "light"}}]
+        },  # no service
+        {"presses": "not-a-list"},  # wrong type for presses
+        {"presses": [{"trigger": {"platform": "device", "x": 1}, "action": "not-a-dict"}]},  # wrong type for action
+        {"presses": ["not-a-dict"]},  # wrong type for a press entry
+        {
+            "presses": [
+                {"trigger": {"platform": "device", "x": 1}, "action": {"type": "scene", "entity_id": ["scene.kvall"]}}
+            ]
+        },  # entity_id must be a single string, not a list
+        {
+            "presses": [
+                {
+                    "trigger": {"platform": "device", "x": 1},
+                    "action": {"type": "service", "domain": "light", "service": "turn_on", "data": ["bad"]},
+                }
+            ]
+        },  # data must be a mapping
+        {"presses": [{"trigger": "bad", "action": {"type": "toggle"}}]},  # trigger must be a mapping
+        {"presses": [{"trigger": ["bad"], "action": {"type": "toggle"}}]},  # or a list of mappings
+        {
+            "presses": [
+                {"trigger": {"platform": "device", "x": 1}, "action": {"type": "scene", "entity_id": "light.kok"}}
+            ]
+        },  # scene entity_id must target a scene.* entity
+        {
+            "presses": [
+                {
+                    "trigger": {"platform": "device", "x": 1},
+                    "action": {"type": "service", "domain": 1, "service": "turn_on"},
+                }
+            ]
+        },  # service domain must be a string
+        {
+            "presses": [
+                {
+                    "trigger": {"platform": "device", "x": 1},
+                    "action": {"type": "service", "domain": "light", "service": 1},
+                }
+            ]
+        },  # service name must be a string
+        {"presses": [{"trigger": [{}], "action": {"type": "toggle"}}]},  # empty trigger inside a list
+        {
+            "presses": [{"trigger": {"platform": "device", "x": 1}, "action": {"type": "scene", "entity_id": "scene."}}]
+        },  # scene entity_id needs a non-empty object_id
+        {
+            "presses": [
+                {"trigger": {"platform": "device", "x": 1}, "action": {"type": "scene", "entity_id": "scene.kvall bad"}}
+            ]
+        },  # scene entity_id must be a valid slug
+        {
+            "presses": [
+                {
+                    "trigger": {"platform": "device", "x": 1},
+                    "action": {"type": "service", "domain": "light.turn_on", "service": "turn_on"},
+                }
+            ]
+        },  # service domain must be a valid slug, not a dotted entity id
+        {
+            "presses": [
+                {
+                    "trigger": {"platform": "device", "x": 1},
+                    "action": {"type": "service", "domain": "light", "service": "turn on"},
+                }
+            ]
+        },  # service name must be a valid slug, no spaces
+        {"presses": [{"trigger": {"x": 1}, "action": {"type": "toggle"}}]},  # trigger needs a platform key
+        {"presses": [{"trigger": {"platform": "", "x": 1}, "action": {"type": "toggle"}}]},  # platform can't be empty
+        {"presses": [{"trigger": {"platform": 1}, "action": {"type": "toggle"}}]},  # platform must be a string
+        {
+            "presses": [
+                {"trigger": {"platform": "device", "x": 1}, "action": {"type": "scene", "entity_id": "scene._bad"}}
+            ]
+        },  # scene entity_id can't start with an underscore
+        {
+            "presses": [
+                {"trigger": {"platform": "device", "x": 1}, "action": {"type": "scene", "entity_id": "scene.bad_"}}
+            ]
+        },  # scene entity_id can't end with an underscore
+        {
+            "presses": [
+                {
+                    "trigger": {"platform": "device", "x": 1},
+                    "action": {"type": "service", "domain": "bad__domain", "service": "turn_on"},
+                }
+            ]
+        },  # service domain can't have a double underscore
+    ]
+    for binding in bad:
+        with pytest.raises(ValueError):
+            await pb.async_replace([{"id": "b1", "targets": {"entity_id": ["light.a"]}, **binding}])
+
+
+async def test_load_skips_binding_with_malformed_presses(monkeypatch):
+    captured = []
+    monkeypatch.setattr(bindings_mod, "async_initialize_triggers", _spy_triggers(captured))
+    logged = []
+    monkeypatch.setattr(
+        bindings_mod._LOGGER, "warning", lambda *a, **k: logged.append(a[0] % a[1:] if len(a) > 1 else a[0])
+    )
+    hass = _hass()
+    hass.data[("store", bindings_mod.STORE_KEY)] = [
+        {"id": "b1", "targets": {"entity_id": ["light.a"]}, "presses": "not-a-list"},
+        {"id": "b2", "targets": {"entity_id": ["light.b"]}, "up": {"x": 1}, "stop": {"s": 1}},
+    ]
+    pb = PlejdDimBindings(hass)
+    await pb.async_load()
+    # b1 has malformed presses — logged as a warning, no triggers attached for it
+    assert any("b1" in w for w in logged)
+    # b2 is well-formed and attached normally (up + stop = 2 triggers)
+    assert len(captured) == 2
