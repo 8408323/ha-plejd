@@ -296,6 +296,39 @@ test("_updateMotion falls back to the entity's friendly name when no device_id i
   assert.match(motion.innerHTML, /Clear/);
 });
 
+test("_updateMotion reports unavailable and unknown motion sensors distinctly from clear", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const motion = { innerHTML: "" };
+
+  panel.querySelector = (selector) => (selector === "#plejd-motion" ? motion : null);
+  panel._hass = {
+    states: {
+      "binary_sensor.hallway_motion": {
+        entity_id: "binary_sensor.hallway_motion",
+        state: "unavailable",
+        attributes: { friendly_name: "Hallway Motion", device_class: "motion" },
+      },
+      "binary_sensor.garage_motion": {
+        entity_id: "binary_sensor.garage_motion",
+        state: "unknown",
+        attributes: { friendly_name: "Garage Motion", device_class: "motion" },
+      },
+    },
+    entities: {
+      "binary_sensor.hallway_motion": { platform: "plejd", device_id: "dev.hallway" },
+      "binary_sensor.garage_motion": { platform: "plejd", device_id: "dev.garage" },
+    },
+    devices: { "dev.hallway": { name: "Hallway" }, "dev.garage": { name: "Garage" } },
+  };
+
+  panel._updateMotion();
+
+  assert.equal((motion.innerHTML.match(/Unavailable/g) || []).length, 2);
+  assert.doesNotMatch(motion.innerHTML, /Clear/);
+  assert.doesNotMatch(motion.innerHTML, /Detected/);
+});
+
 test("_updateMotion does not crash on a site with no motion sensors", () => {
   const PanelClass = loadPanelClass();
   const panel = new PanelClass();
@@ -364,6 +397,7 @@ test("first hass assignment loads area and device registries over websocket", as
   panel._loadBindings = () => {};
   panel._scheduleLightsUpdate = () => {};
   panel._renderEditor = () => {};
+  panel._updateMotion = () => {};
 
   panel.hass = {
     states: {},
@@ -390,6 +424,51 @@ test("first hass assignment loads area and device registries over websocket", as
   assert.equal(panel._devices()[0].name, "Remote Hall");
   assert.equal(panel._areaName("area.kitchen"), "Kitchen");
   assert.equal(panel._deviceName("dev.remote"), "Remote Hall");
+});
+
+test("registry load refreshes the motion card so a device id placeholder becomes the friendly name", async () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const motion = { innerHTML: "" };
+
+  panel._renderShell = () => {};
+  panel._loadBindings = () => {};
+  panel._scheduleLightsUpdate = () => {};
+  panel._renderEditor = () => {};
+  panel.querySelector = (selector) => (selector === "#plejd-motion" ? motion : null);
+
+  panel.hass = {
+    states: {
+      "binary_sensor.hallway_motion": {
+        entity_id: "binary_sensor.hallway_motion",
+        state: "off",
+        attributes: { friendly_name: "Hallway Motion", device_class: "motion" },
+      },
+    },
+    entities: {
+      "binary_sensor.hallway_motion": { platform: "plejd", device_id: "dev.hallway" },
+    },
+    // No hass.devices entry yet (registries not pushed to the frontend store): before the
+    // registry websocket call resolves, _deviceName falls back to the raw device id.
+    devices: {},
+    callWS(msg) {
+      if (msg.type === "config/area_registry/list") return Promise.resolve([]);
+      if (msg.type === "config/device_registry/list") {
+        return Promise.resolve([{ id: "dev.hallway", name: "Hallway" }]);
+      }
+      throw new Error(`unexpected ws call: ${msg.type}`);
+    },
+  };
+
+  // Simulate the initial motion render (scheduled separately via _scheduleLightsUpdate,
+  // stubbed above) happening before the registries resolve.
+  panel._updateMotion();
+  assert.match(motion.innerHTML, /dev\.hallway/);
+
+  await panel._registriesPromise;
+
+  assert.match(motion.innerHTML, /Hallway/);
+  assert.doesNotMatch(motion.innerHTML, /dev\.hallway/);
 });
 
 test("trigger change listeners keep _form in sync so re-renders preserve selections", () => {
@@ -447,6 +526,7 @@ test("registry loading failure keeps registries empty and logs a warning", async
   panel._loadBindings = () => {};
   panel._scheduleLightsUpdate = () => {};
   panel._renderEditor = () => {};
+  panel._updateMotion = () => {};
 
   panel.hass = {
     states: {},

@@ -165,6 +165,9 @@ class PlejdPanel extends HTMLElement {
       } finally {
         this._registriesPromise = null;
         this._renderEditor();
+        // The motion card may have rendered device ids as a placeholder before this
+        // resolved (see _deviceName); refresh it now that names are available.
+        this._updateMotion();
       }
     })();
     return this._registriesPromise;
@@ -381,6 +384,7 @@ class PlejdPanel extends HTMLElement {
     const rows = sensors
       .map((s) => {
         const name = this._motionDeviceName(s);
+        const unavailable = ["unavailable", "unknown"].includes(s.state);
         const detected = s.state === "on";
         const deviceId = this._hass.entities?.[s.entity_id]?.device_id;
         const illuminance = this._illuminanceFor(deviceId);
@@ -388,7 +392,7 @@ class PlejdPanel extends HTMLElement {
           illuminance && !["unavailable", "unknown"].includes(illuminance.state)
             ? `${illuminance.state} lx`
             : null;
-        const status = detected ? "Detected" : "Clear";
+        const status = unavailable ? "Unavailable" : detected ? "Detected" : "Clear";
         const dot = detected ? "var(--state-light-active-color, #fdd835)" : "var(--disabled-text-color, #9e9e9e)";
         return `
           <div style="display:flex;align-items:center;gap:12px;padding:10px 4px;border-bottom:1px solid var(--divider-color,#e0e0e0)">
