@@ -32,6 +32,7 @@ from .const import (
     CONF_INPUTS,
     CONF_MOTION,
     CONF_RESOURCE_SET_ID,
+    CONF_ROOMS,
     CONF_SCENES,
     CONF_SITE_ID,
 )
@@ -129,6 +130,7 @@ async def async_add_device(
             CONF_INPUTS: [asdict(i) for i in fresh_site.inputs],
             CONF_MOTION: [asdict(m) for m in fresh_site.motion],
             CONF_SCENES: [asdict(s) for s in fresh_site.scenes],
+            CONF_ROOMS: [asdict(r) for r in fresh_site.rooms],
             CONF_GATEWAYS: fresh_site.gateways,
             CONF_RESOURCE_SET_ID: fresh_site.resource_set_id,
             CONF_DEVICE_ADDRESSES: fresh_site.device_addresses,

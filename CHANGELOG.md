@@ -16,6 +16,20 @@ All notable changes to this project are documented here. The format follows
   `light.turn_on`/`light.turn_off`, so any Home Assistant light works, not only
   Plejd's. Configure target lights and the active window from **Settings →
   Devices & Services → Plejd → Configure → Holiday mode**.
+- **Remote button profiles (backend).** Groups a device's raw HA device triggers
+  into friendly, per-button "profiles" for the (upcoming) dashboard button-press
+  editor: a fully generic grouping/humanizing fallback works for any remote from
+  any manufacturer with any number of buttons (groups by trigger `subtype` when
+  present, humanizes raw type/subtype strings); a handful of built-in profiles
+  (IKEA TRADFRI on/off switch, STYRBAR, RODRET; Philips Hue dimmer switch and Tap
+  dial switch; Aqara/Xiaomi WXKG and Opple switches; SONOFF SNZB-01) give nicer
+  named buttons for common remotes on the standard Zigbee2MQTT action convention;
+  and a Store-backed custom-override manager lets an admin define/replace a
+  device's button profile via WebSocket, effective immediately with no release
+  needed. The existing `plejd/device_triggers` WebSocket command now also returns
+  a `buttons` key (grouped view, custom override > built-in profile > generic)
+  alongside the unchanged `triggers` key. Backend-only; frontend consumption is a
+  follow-up.
 - **Remote bindings: any trigger → any action.** Beyond hold-to-dim, a binding
   can now map *any* remote trigger (any button, short/long press, hold,
   release, click, …) to an instantaneous action on its target: **toggle**,
@@ -27,6 +41,12 @@ All notable changes to this project are documented here. The format follows
   pickers), with conditional fields per action type and client-side validation
   before saving. The bindings list also now shows a "N press action(s)"
   summary alongside each binding's up/down/stop.
+- **Whole-room lights (responsive, one command).** Each Plejd room is now exposed
+  as a group light that switches/dims the entire room in a **single** `0x0098`
+  mesh command to the room's group address — the way the Plejd app controls a
+  room — instead of Home Assistant fanning an area out to one command per output
+  (which lagged, especially over the gateway). Built from the cloud site's
+  `roomAddress` + `outputGroups`; room state is aggregated from its member outputs.
 
 ## [0.10.0] - 2026-07-19
 

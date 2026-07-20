@@ -639,3 +639,48 @@ async def test_unload_failure_does_not_resume_holiday_mode_that_was_already_off(
     # ...but NOT resumed: it wasn't running before the veto, so resuming it would start a
     # hidden timer behind a switch entity that still reads off (#89 review).
     assert _FakeHolidayMode.instances[-1].started is False
+
+
+# ── Remote profiles wiring ──────────────────────────────────────────────────────
+
+
+async def test_setup_loads_remote_profiles_and_registers_ws(monkeypatch):
+    from plejd.remote_profile_ws import DATA_REMOTE_PROFILES
+
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    _FakeCoordinator.instances.clear()
+    hass, entry = _hass(), _entry()
+    await async_setup_entry(hass, entry)
+    assert DATA_REMOTE_PROFILES in hass.data  # profiles manager available for the WS API
+    assert "ws_commands" in hass.data
+
+
+async def test_unload_cleans_up_remote_profiles(monkeypatch):
+    from plejd.remote_profile_ws import DATA_REMOTE_PROFILES
+
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    _FakeCoordinator.instances.clear()
+    hass, entry = _hass(), _entry()
+    unloads: list = []
+    entry.async_on_unload = unloads.append
+    await async_setup_entry(hass, entry)
+    assert DATA_REMOTE_PROFILES in hass.data
+    for unload in unloads:
+        unload()
+    assert DATA_REMOTE_PROFILES not in hass.data
+
+
+async def test_setup_survives_remote_profile_load_failure(monkeypatch):
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    _FakeCoordinator.instances.clear()
+
+    class _BadProfiles:
+        def __init__(self, hass):
+            pass
+
+        async def async_load(self):
+            raise ValueError("corrupt store")
+
+    monkeypatch.setattr(plejd, "PlejdRemoteProfiles", _BadProfiles)
+    hass, entry = _hass(), _entry()
+    assert await async_setup_entry(hass, entry) is True  # storage error must not abort setup
