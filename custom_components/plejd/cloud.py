@@ -108,6 +108,18 @@ class PlejdCloudScene:
 
 
 @dataclass
+class PlejdCloudRoom:
+    """A Plejd room: its group mesh address (one 0x0098 controls the whole room) plus member output addresses."""
+
+    room_id: str
+    name: str
+    address: int  # the room's group mesh address — target of set_group_state_and_level
+    member_addresses: list[int]
+    dimmable: bool  # True if any member output supports brightness (vs. on/off only)
+    dimmable_addresses: list[int]  # subset of member_addresses that support brightness
+
+
+@dataclass
 class PlejdCloudSite:
     """A site: its crypto key, mesh key, devices, scenes, and any gateway."""
 
@@ -126,6 +138,8 @@ class PlejdCloudSite:
     # every physical device's own mesh address (outputs, sensors, gateway) — distinct from
     # an output's address; this is what NotifyEvents/fault polling must target.
     device_addresses: dict[str, int] = field(default_factory=dict)
+    # rooms with a group address, so a whole room is controlled in one 0x0098 command.
+    rooms: list[PlejdCloudRoom] = field(default_factory=list)
 
 
 def _headers(token: str | None = None) -> dict[str, str]:
@@ -388,7 +402,8 @@ def parse_site(site: dict) -> PlejdCloudSite:
     mesh_key: str = mesh.get("meshKey") or ""
 
     device_address = site.get("deviceAddress") or {}
-    output_address = site.get("outputAddress") or {}
+    output_address = site.get("outputAddress")
+    output_address = output_address if isinstance(output_address, dict) else {}
     hardware_by_id = {d.get("deviceId"): d for d in site.get("plejdDevices") or []}
 
     devices: list[PlejdCloudDevice] = []
@@ -489,6 +504,77 @@ def parse_site(site: dict) -> PlejdCloudSite:
     if resource_set_id is None and len(resource_sets) == 1:
         resource_set_id = resource_sets[0].get("objectId")
 
+    # Rooms carry a group mesh address (roomAddress: roomId -> address); outputGroups maps
+    # each output to the group addresses it belongs to. Dimming a room = one 0x0098 to its
+    # group address (every member responds at once), the way the app controls a room.
+    room_address = site.get("roomAddress")
+    room_address = room_address if isinstance(room_address, dict) else {}
+    output_groups = site.get("outputGroups")
+    output_groups = output_groups if isinstance(output_groups, dict) else {}
+    raw_rooms = site.get("rooms")
+    raw_rooms = raw_rooms if isinstance(raw_rooms, list) else []
+    room_titles = {
+        r.get("roomId"): (r.get("title") if isinstance(r.get("title"), str) else "").strip()
+        for r in raw_rooms
+        if isinstance(r, dict)
+    }
+    category_by_address = {d.address: d.category for d in devices if d.address is not None}
+    dimmable_by_address = {d.address: d.dimmable for d in devices if d.address is not None}
+    members_by_group: dict[int, list[int]] = {}
+    # Group addresses with at least one non-light member: a group command (0x0098) is
+    # unconditional and would also toggle/dim a cover, switch, etc. sharing the address,
+    # so a room with any non-light member is excluded from the aggregate light entity
+    # entirely rather than risk commanding an output it isn't meant to control.
+    non_light_groups: set[int] = set()
+    for device_id, out_map in output_groups.items():
+        if not isinstance(out_map, dict):
+            continue  # untrusted cloud data: skip a malformed per-device group-membership map
+        dev_out_addr = output_address.get(device_id)
+        dev_out_addr = dev_out_addr if isinstance(dev_out_addr, dict) else {}
+        for out_idx, groups in out_map.items():
+            # Mirror the device parser's own fallback: a single-output light can be
+            # missing from outputAddress and controlled via its deviceAddress instead.
+            out_addr = dev_out_addr.get(str(out_idx), device_address.get(device_id))
+            if out_addr is None:
+                continue
+            try:
+                addr = int(out_addr)
+            except (TypeError, ValueError):
+                continue
+            is_light = category_by_address.get(addr) == CATEGORY_LIGHT
+            for group in groups if isinstance(groups, list) else []:
+                try:
+                    group_addr = int(group)
+                except (TypeError, ValueError):
+                    continue
+                if is_light:
+                    members_by_group.setdefault(group_addr, []).append(addr)
+                else:
+                    non_light_groups.add(group_addr)
+    rooms: list[PlejdCloudRoom] = []
+    for room_id, addr in room_address.items():
+        try:
+            group_addr = int(addr)
+        except (TypeError, ValueError):
+            continue
+        if not 1 <= group_addr <= 255:
+            continue  # mesh addresses are single-byte (encode_command masks with & 0xFF); 0 is broadcast-like
+        if group_addr in non_light_groups:
+            continue  # a group command would also hit a non-light member sharing this address
+        members = sorted(set(members_by_group.get(group_addr, [])))
+        if not members:
+            continue  # a room with no controllable outputs isn't worth a group entity
+        rooms.append(
+            PlejdCloudRoom(
+                room_id=room_id,
+                name=room_titles.get(room_id) or "Room",
+                address=group_addr,
+                member_addresses=members,
+                dimmable=any(dimmable_by_address.get(m) for m in members),
+                dimmable_addresses=[m for m in members if dimmable_by_address.get(m)],
+            )
+        )
+
     meta = site.get("site") or site  # id/title are nested under "site" in the real payload
     device_addresses: dict[str, int] = {}
     for device_id, addr in device_address.items():
@@ -510,4 +596,5 @@ def parse_site(site: dict) -> PlejdCloudSite:
         resource_set_id=resource_set_id,
         firmware_by_device=firmware_by_device,
         device_addresses=device_addresses,
+        rooms=rooms,
     )
