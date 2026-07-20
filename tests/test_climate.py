@@ -69,6 +69,13 @@ def test_attributes():
     assert c._attr_unique_id == "t1" and c._attr_device_info["model"] == "TRM-01"
 
 
+def test_target_temperature_has_a_default_before_any_setpoint_is_sent():
+    # A null target on a fresh entity would disable a UI's +/- controls (target == null
+    # reads as "no reading yet"), blocking the very first setpoint change entirely.
+    c = PlejdClimate(_Coordinator([]), _device())
+    assert c._attr_target_temperature == 21.0
+
+
 async def test_set_temperature_sends_setpoint():
     coord = _Coordinator([])
     c = PlejdClimate(coord, _device())

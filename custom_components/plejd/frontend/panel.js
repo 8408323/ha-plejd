@@ -60,6 +60,12 @@ class PlejdPanel extends HTMLElement {
     this._notice = "";
     this._busy = false;
     this._lightsFrame = null;
+    // entity_id -> optimistic target temperature from a just-sent setpoint tap, until
+    // hass's own push catches up. Repeated taps arrive well within that round-trip, so
+    // reading hass.states directly on every tap would recompute from the same pre-tap
+    // snapshot each time instead of accumulating (two quick + taps both landing on the
+    // same +1 step instead of reaching +2).
+    this._climateOverrides = {};
     const useAnimationFrame = Boolean(
       globalThis.requestAnimationFrame && globalThis.cancelAnimationFrame,
     );
@@ -365,13 +371,14 @@ class PlejdPanel extends HTMLElement {
     const rows = climates
       .map((s) => {
         const name = s.attributes.friendly_name || s.entity_id;
-        const current = s.attributes.current_temperature;
-        const target = s.attributes.temperature;
+        const override = this._climateOverrides[s.entity_id];
+        const realTarget = s.attributes.temperature;
+        if (override !== undefined && override === realTarget) delete this._climateOverrides[s.entity_id];
+        const target = override !== undefined ? override : realTarget;
         const disabled = target == null || s.state === "unavailable";
         return `
           <div style="display:flex;align-items:center;gap:12px;padding:10px 4px;border-bottom:1px solid var(--divider-color,#e0e0e0)">
             <span style="flex:1">${esc(name)}</span>
-            <span style="color:var(--secondary-text-color,#727272)">${current != null ? `${current}°C` : "—"}</span>
             <button data-climate-dec="${esc(s.entity_id)}" type="button" style="${BTN};padding:4px 12px" ${disabled ? "disabled" : ""} aria-label="Decrease target temperature">−</button>
             <span style="min-width:56px;text-align:center">${target != null ? `${target}°C` : "—"}</span>
             <button data-climate-inc="${esc(s.entity_id)}" type="button" style="${BTN};padding:4px 12px" ${disabled ? "disabled" : ""} aria-label="Increase target temperature">+</button>
@@ -390,14 +397,16 @@ class PlejdPanel extends HTMLElement {
   _wireClimate(el, climates) {
     const byId = Object.fromEntries(climates.map((s) => [s.entity_id, s]));
     el.querySelectorAll("[data-climate-inc]").forEach((btn) =>
-      btn.addEventListener("click", () =>
-        this._stepClimate(byId[btn.getAttribute("data-climate-inc")], 1),
-      ),
+      btn.addEventListener("click", () => {
+        this._stepClimate(byId[btn.getAttribute("data-climate-inc")], 1);
+        this._updateClimate();
+      }),
     );
     el.querySelectorAll("[data-climate-dec]").forEach((btn) =>
-      btn.addEventListener("click", () =>
-        this._stepClimate(byId[btn.getAttribute("data-climate-dec")], -1),
-      ),
+      btn.addEventListener("click", () => {
+        this._stepClimate(byId[btn.getAttribute("data-climate-dec")], -1);
+        this._updateClimate();
+      }),
     );
   }
 
@@ -405,17 +414,26 @@ class PlejdPanel extends HTMLElement {
   // service straight away, no debounce/ramp pacing needed.
   _stepClimate(state, direction) {
     if (!state) return;
-    const target = state.attributes.temperature;
+    // Prefer our own optimistic override over hass.states: a repeated tap well within
+    // the round-trip to the backend must accumulate from the last tap's intent, not the
+    // pre-tap state hass hasn't caught up to yet.
+    const override = this._climateOverrides[state.entity_id];
+    const target = override !== undefined ? override : state.attributes.temperature;
     if (target == null) return;
     const step = state.attributes.target_temp_step || 0.5;
     let next = Math.round((target + direction * step) * 100) / 100;
     const { min_temp: min, max_temp: max } = state.attributes;
     if (min != null) next = Math.max(min, next);
     if (max != null) next = Math.min(max, next);
+    this._climateOverrides[state.entity_id] = next;
     this._callService("climate", "set_temperature", {
       entity_id: state.entity_id,
       temperature: next,
-    }).catch((err) => console.warn("Plejd panel: failed to set climate temperature", err));
+    }).catch((err) => {
+      console.warn("Plejd panel: failed to set climate temperature", err);
+      if (this._climateOverrides[state.entity_id] === next) delete this._climateOverrides[state.entity_id];
+      this._updateClimate();
+    });
   }
 
   _triggerOptions(deviceId, selected) {
