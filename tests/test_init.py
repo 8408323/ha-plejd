@@ -170,6 +170,20 @@ async def test_reload_listener_skips_when_schedule_ws_reloading_manually():
     hass.data[schedule_ws.DATA_MANUAL_RELOAD] = entry.entry_id
     await _async_reload_entry(hass, entry)
     assert getattr(hass.config_entries, "reloaded", None) is None
+    # The suppressed reload isn't just dropped: it's marked pending so the in-flight manual
+    # reload runs a follow-up for it once done (issue #94 thread 2), rather than this
+    # concurrent options change never taking effect.
+    assert hass.data[schedule_ws.DATA_RELOAD_PENDING] == entry.entry_id
+
+
+async def test_reload_listener_does_not_mark_pending_for_a_different_entry():
+    from plejd import _async_reload_entry, schedule_ws
+
+    hass, entry = _hass(), _entry()
+    hass.data[schedule_ws.DATA_MANUAL_RELOAD] = "some-other-entry"
+    await _async_reload_entry(hass, entry)
+    assert hass.config_entries.reloaded == "e1"
+    assert schedule_ws.DATA_RELOAD_PENDING not in hass.data
 
 
 def test_every_platform_module_is_forwarded():

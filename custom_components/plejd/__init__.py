@@ -139,6 +139,11 @@ async def _async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     # Skip when the schedule WebSocket API is already reloading this entry itself (it awaits
     # the reload to report success/failure back to the dashboard) - avoids a double reload.
     if hass.data.get(schedule_ws.DATA_MANUAL_RELOAD) == entry.entry_id:
+        # This listener call may be for a different options change than the one being
+        # reloaded (e.g. a concurrent options-flow edit) and it may land after that reload
+        # already read entry state - mark it so the in-flight reload runs a follow-up once
+        # it's done, instead of this change being dropped until some later unrelated reload.
+        hass.data[schedule_ws.DATA_RELOAD_PENDING] = entry.entry_id
         return
     await hass.config_entries.async_reload(entry.entry_id)
 

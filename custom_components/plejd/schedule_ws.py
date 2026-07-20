@@ -34,6 +34,11 @@ DATA_ENTRY = f"{DOMAIN}_schedule_entry"
 # listener (_async_reload_entry in __init__.py) skips its reload instead of racing this one.
 DATA_MANUAL_RELOAD = f"{DOMAIN}_schedule_manual_reload"
 
+# Set by _async_reload_entry when it skips its reload because of DATA_MANUAL_RELOAD above, so
+# _async_persist knows to run a follow-up reload for that other options change once its own
+# reload is done, instead of silently dropping it.
+DATA_RELOAD_PENDING = f"{DOMAIN}_schedule_reload_pending"
+
 _NEXT_ID_KEY = "next_schedule_id"
 
 
@@ -131,9 +136,7 @@ async def ws_add(hass: HomeAssistant, connection, msg) -> None:
         _NEXT_ID_KEY: next_id + 1,
         CONF_TRANSPORT: _current_transport(entry),
     }
-    if not await _async_persist(hass, connection, msg, entry, options):
-        return
-    connection.send_result(msg["id"], {"schedules": schedules})
+    await _async_persist(hass, connection, msg, entry, options, {"schedules": schedules})
 
 
 @websocket_api.require_admin
@@ -162,13 +165,11 @@ async def ws_delete(hass: HomeAssistant, connection, msg) -> None:
     current: list[dict] = list(entry.options.get(CONF_SCHEDULES, []))
     kept = [s for s in current if s["id"] != msg["schedule_id"]]
     options = {**entry.options, CONF_SCHEDULES: kept, CONF_TRANSPORT: _current_transport(entry)}
-    if not await _async_persist(hass, connection, msg, entry, options):
-        return
-    connection.send_result(msg["id"], {"schedules": kept})
+    await _async_persist(hass, connection, msg, entry, options, {"schedules": kept})
 
 
-async def _async_persist(hass: HomeAssistant, connection, msg, entry, options: dict) -> bool:
-    """Save `options` on the entry and reload it so the switch platform picks up the change."""
+async def _async_persist(hass: HomeAssistant, connection, msg, entry, options: dict, result: dict) -> None:
+    """Save `options` on the entry, reload it, and send the WS response for `result`."""
     # Claim the manual-reload so the entry's update listener (_async_reload_entry) doesn't
     # also reload for this same options change - we need this reload's own success/failure.
     hass.data[DATA_MANUAL_RELOAD] = entry.entry_id
@@ -178,13 +179,27 @@ async def _async_persist(hass: HomeAssistant, connection, msg, entry, options: d
     except Exception:  # noqa: BLE001 - log the detail server-side, return a stable generic message
         _LOGGER.exception("Plejd: failed to save schedules")
         connection.send_error(msg["id"], "save_failed", "Could not save schedules")
-        return False
+        return
     finally:
         hass.data.pop(DATA_MANUAL_RELOAD, None)
+        if hass.data.get(DATA_RELOAD_PENDING) == entry.entry_id:
+            # A concurrent options change's own reload was suppressed by the guard above while
+            # ours was in flight; it may have landed after we already read entry state, so give
+            # it a reload of its own instead of dropping it silently (see _async_reload_entry).
+            hass.data.pop(DATA_RELOAD_PENDING, None)
+            try:
+                await hass.config_entries.async_reload(entry.entry_id)
+            except Exception:  # noqa: BLE001 - best-effort follow-up; already logged if the underlying issue recurs
+                _LOGGER.warning("Plejd: follow-up reload for a concurrent option change failed")
     if reloaded is False:
-        connection.send_error(msg["id"], "reload_failed", "Schedule saved, but Plejd failed to reload; try again")
-        return False
-    return True
+        # Send a result, not an error: `options` are already persisted above, and an error with
+        # no data would leave the dashboard showing its old list, where a "try again" click adds
+        # a second, duplicate schedule instead of seeing the one that already saved.
+        connection.send_result(
+            msg["id"], {**result, "reload_failed": "Schedule saved, but Plejd failed to reload; try again"}
+        )
+        return
+    connection.send_result(msg["id"], result)
 
 
 def async_register(hass: HomeAssistant) -> None:
