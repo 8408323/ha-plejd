@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable, Coroutine
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import timedelta
 from typing import Any
 
@@ -290,6 +290,8 @@ class PlejdCoordinator:
     @callback
     def _on_event(self, command: Command) -> None:
         if command.command in (CMD_GROUP_STATE_AND_LEVEL, CMD_OUTPUT_STATE_AND_LEVEL):
+            if command.command == CMD_GROUP_STATE_AND_LEVEL:
+                self._fan_group_state_to_members(command)
             for update in list(self._listeners):
                 update()
         elif command.command == CMD_INPUT_BUTTON:
@@ -600,6 +602,14 @@ class PlejdCoordinator:
                 if need_rooms:
                     self.rooms = site.rooms
                     self._rooms_from_legacy_entry = False
+                    # Persist to entry.data, not just the in-memory coordinator: the light
+                    # platform only builds PlejdRoomLight entities from CONF_ROOMS at setup,
+                    # so an unpersisted backfill would lose room entities on the next
+                    # restart/reload if the cloud is unreachable then (#86 review).
+                    self.hass.config_entries.async_update_entry(
+                        self._entry,
+                        data={**self._entry.data, CONF_ROOMS: [asdict(r) for r in site.rooms]},
+                    )
             except Exception:  # noqa: BLE001 - fault polling is best-effort; retry next interval
                 _LOGGER.debug("Plejd fault poll: could not resolve device addresses", exc_info=True)
         for address in set(self._device_addresses.values()):
@@ -752,6 +762,26 @@ class PlejdCoordinator:
         each one separately reports its own change over the mesh/gateway.
         """
         await self.async_set_output(address, on, level)
+        self._record_group_member_states(on, level, member_addresses)
+        self._notify_outputs()
+
+    def _fan_group_state_to_members(self, command: Command) -> None:
+        """Reflect an externally-initiated room broadcast (e.g. the Plejd app) in each member.
+
+        Like our own group commands (see async_set_group_output), a group broadcast is
+        keyed by the room's own group address, not by any member's address, so
+        PlejdRoomLight (which reads member state) would otherwise stay stale until each
+        member separately reports its own change.
+        """
+        room = next((r for r in self.rooms if r.address == command.address), None)
+        if room is None:
+            return
+        state = protocol.decode_output_state(command)
+        if state is None:
+            return
+        self._record_group_member_states(state.on, state.level, room.member_addresses)
+
+    def _record_group_member_states(self, on: bool, level: int, member_addresses: list[int]) -> None:
         for member in member_addresses:
             if on:
                 member_level = level
@@ -763,7 +793,6 @@ class PlejdCoordinator:
                 prior = self.state_for(member)
                 member_level = prior.level if prior is not None else level
             self._record_output_state(member, OutputState(output=member, on=on, level=member_level))
-        self._notify_outputs()
 
     def _record_output_state(self, address: int, state: OutputState) -> None:
         if self._active == "gateway" and self._gateway is not None:

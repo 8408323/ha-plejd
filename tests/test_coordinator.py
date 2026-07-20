@@ -73,7 +73,11 @@ def _info(address, rssi=-50):
 
 
 def _hass(infos=(), ble=None):
-    return types.SimpleNamespace(service_infos=list(infos), ble_devices=ble or {})
+    return types.SimpleNamespace(
+        service_infos=list(infos),
+        ble_devices=ble or {},
+        config_entries=types.SimpleNamespace(async_update_entry=lambda entry, data: setattr(entry, "data", data)),
+    )
 
 
 def _patch_connect(monkeypatch, client):
@@ -277,6 +281,72 @@ def test_output_event_notifies_listeners():
     remove()
     c._on_event(state_cmd)
     assert seen == [1]
+
+
+def _entry_with_room(room=None):
+    entry = _entry(discovered=None)
+    entry.data[CONF_ROOMS] = [
+        room
+        or {
+            "room_id": "r1",
+            "name": "Kök",
+            "address": 14,
+            "member_addresses": [5, 6],
+            "dimmable": True,
+            "dimmable_addresses": [5, 6],
+        }
+    ]
+    return entry
+
+
+async def _connected_coordinator_with_room(monkeypatch):
+    client = _FakeClient()
+    _patch_connect(monkeypatch, client)
+    ble = types.SimpleNamespace(address="01:02:03:04:05:a0")
+    hass = _hass([_info("01:02:03:04:05:a0")], {"01:02:03:04:05:a0": ble})
+    c = PlejdCoordinator(hass, _entry_with_room())
+    await c.async_start()
+    return c
+
+
+async def test_group_state_event_fans_out_to_room_members(monkeypatch):
+    """A room-group broadcast from outside HA (e.g. the Plejd app) must update member state too."""
+    from plejd.const import CMD_GROUP_STATE_AND_LEVEL
+    from plejd.protocol import Command
+
+    c = await _connected_coordinator_with_room(monkeypatch)
+    state_cmd = Command(address=14, command_type=0x10, command=CMD_GROUP_STATE_AND_LEVEL, data=bytes([1, 0, 200]))
+    c._on_event(state_cmd)
+    assert c.state_for(5).on is True and c.state_for(5).level == 200
+    assert c.state_for(6).on is True and c.state_for(6).level == 200
+
+
+async def test_group_state_event_off_preserves_member_levels(monkeypatch):
+    from plejd.const import CMD_GROUP_STATE_AND_LEVEL
+    from plejd.protocol import Command
+
+    c = await _connected_coordinator_with_room(monkeypatch)
+    c._on_event(Command(address=14, command_type=0x10, command=CMD_GROUP_STATE_AND_LEVEL, data=bytes([1, 0, 200])))
+    c._on_event(Command(address=14, command_type=0x10, command=CMD_GROUP_STATE_AND_LEVEL, data=bytes([0, 0, 0])))
+    assert c.state_for(5).on is False and c.state_for(5).level == 200
+
+
+async def test_group_state_event_for_unknown_group_address_is_ignored(monkeypatch):
+    from plejd.const import CMD_GROUP_STATE_AND_LEVEL
+    from plejd.protocol import Command
+
+    c = await _connected_coordinator_with_room(monkeypatch)
+    c._on_event(Command(address=99, command_type=0x10, command=CMD_GROUP_STATE_AND_LEVEL, data=bytes([1, 0, 200])))
+    assert c.state_for(5) is None and c.state_for(6) is None
+
+
+async def test_group_state_event_with_short_payload_is_ignored(monkeypatch):
+    from plejd.const import CMD_GROUP_STATE_AND_LEVEL
+    from plejd.protocol import Command
+
+    c = await _connected_coordinator_with_room(monkeypatch)
+    c._on_event(Command(address=14, command_type=0x10, command=CMD_GROUP_STATE_AND_LEVEL, data=bytes([1])))
+    assert c.state_for(5) is None
 
 
 def test_button_event_dispatches_press_and_release():
@@ -1732,9 +1802,12 @@ async def test_poll_faults_resolves_addresses_from_cloud_when_not_cached(monkeyp
 
 async def test_poll_faults_resolves_rooms_from_cloud_when_entry_predates_room_groups(monkeypatch):
     """Entries added before CONF_ROOMS existed (missing key, not an empty list) backfill it via a cloud fetch."""
+    from dataclasses import asdict
+
     from plejd.cloud import PlejdCloudRoom
 
-    c = PlejdCoordinator(_hass(), _cloud_entry())  # has credentials, CONF_ROOMS absent from entry.data
+    entry = _cloud_entry()  # has credentials, CONF_ROOMS absent from entry.data
+    c = PlejdCoordinator(_hass(), entry)
     assert c.rooms == [] and c._rooms_from_legacy_entry is True
     room = PlejdCloudRoom(
         room_id="r1", name="Kök", address=14, member_addresses=[11], dimmable=True, dimmable_addresses=[11]
@@ -1756,6 +1829,9 @@ async def test_poll_faults_resolves_rooms_from_cloud_when_entry_predates_room_gr
     await c._async_poll_faults(None)
     assert c.rooms == [room]
     assert c._rooms_from_legacy_entry is False
+    # Persisted to entry.data, not just the in-memory coordinator, so the room light
+    # entity survives a restart/reload even if the cloud is unreachable at that point.
+    assert entry.data[CONF_ROOMS] == [asdict(room)]
 
     await c._async_poll_faults(None)
     assert fetches == [1]  # cached — no repeat fetch once rooms are resolved
