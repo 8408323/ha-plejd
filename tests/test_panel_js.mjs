@@ -82,6 +82,7 @@ test("hass updates coalesce lights and scenes renders to one animation frame", (
     loads += 1;
   };
   panel._loadSchedules = () => {};
+  panel._scheduleCoversUpdate = () => {};
   panel._updateLights = () => {
     lights += 1;
   };
@@ -132,6 +133,7 @@ test("disconnect cancels a queued lights render", () => {
   panel._renderShell = () => {};
   panel._loadBindings = () => {};
   panel._loadSchedules = () => {};
+  panel._scheduleCoversUpdate = () => {};
   panel._updateLights = () => {};
   panel._updateMotion = () => {};
   panel._updateHealth = () => {};
@@ -179,6 +181,7 @@ test("disconnect cancels a queued setTimeout fallback when requestAnimationFrame
   panel._renderShell = () => {};
   panel._loadBindings = () => {};
   panel._loadSchedules = () => {};
+  panel._scheduleCoversUpdate = () => {};
   panel._updateLights = () => {};
   panel._updateMotion = () => {};
   panel._updateHealth = () => {};
@@ -227,6 +230,64 @@ test("_updateLights renders the current Plejd lights list", () => {
   assert.match(lights.innerHTML, /50%/);
   assert.match(lights.innerHTML, /Patio/);
   assert.doesNotMatch(lights.innerHTML, /Other vendor/);
+});
+
+test("hass updates coalesce covers renders to one animation frame", () => {
+  const frames = [];
+  const PanelClass = loadPanelClass({
+    requestAnimationFrame(callback) {
+      frames.push(callback);
+      return frames.length;
+    },
+    cancelAnimationFrame() {},
+  });
+  const panel = new PanelClass();
+  let covers = 0;
+
+  panel._renderShell = () => {};
+  panel._loadBindings = () => {};
+  panel._loadSchedules = () => {};
+  panel._scheduleLightsUpdate = () => {};
+  panel._updateCovers = () => {
+    covers += 1;
+  };
+
+  panel.hass = { states: {} };
+  panel.hass = { states: {} };
+  panel.hass = { states: {} };
+
+  assert.equal(frames.length, 1);
+  assert.equal(covers, 0);
+
+  frames.shift()();
+  assert.equal(covers, 1);
+
+  panel.hass = { states: {} };
+  assert.equal(frames.length, 1);
+});
+
+test("disconnect cancels a queued covers render", () => {
+  const cancelled = [];
+  const PanelClass = loadPanelClass({
+    requestAnimationFrame() {
+      return 42;
+    },
+    cancelAnimationFrame(frame) {
+      cancelled.push(frame);
+    },
+  });
+  const panel = new PanelClass();
+
+  panel._renderShell = () => {};
+  panel._loadBindings = () => {};
+  panel._loadSchedules = () => {};
+  panel._scheduleLightsUpdate = () => {};
+  panel._updateCovers = () => {};
+  panel.hass = { states: {} };
+  panel.disconnectedCallback();
+
+  assert.deepEqual(cancelled, [42]);
+  assert.equal(panel._coversFrame, null);
 });
 
 test("_updateLights disables the toggle and slider for an unavailable light", () => {
@@ -858,6 +919,500 @@ test("a stale brightness failure does not clear a newer optimistic toggle overri
   assert.equal(panel._toggleOverrides["light.kitchen"], true);
   assert.equal(panel._brightnessOverrides["light.kitchen"], 80);
 });
+
+test("_updateCovers renders the current Plejd covers list", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const covers = { innerHTML: "", querySelectorAll: () => [] };
+
+  panel.querySelector = (selector) => (selector === "#plejd-covers" ? covers : null);
+  panel._hass = {
+    states: {
+      "cover.kitchen_blind": {
+        entity_id: "cover.kitchen_blind",
+        state: "open",
+        attributes: { friendly_name: "Kitchen <Blind>", current_position: 42, supported_features: 15 },
+      },
+      "cover.hall_blind": {
+        entity_id: "cover.hall_blind",
+        state: "closed",
+        attributes: { friendly_name: "Hall Blind", supported_features: 11 },
+      },
+      "cover.other": {
+        entity_id: "cover.other",
+        state: "open",
+        attributes: { friendly_name: "Other vendor" },
+      },
+    },
+    entities: {
+      "cover.kitchen_blind": { platform: "plejd" },
+      "cover.hall_blind": { platform: "plejd" },
+      "cover.other": { platform: "other" },
+    },
+  };
+
+  panel._updateCovers();
+
+  assert.match(covers.innerHTML, />2<\/span>/);
+  assert.match(covers.innerHTML, /Kitchen &lt;Blind&gt;/);
+  assert.match(covers.innerHTML, /42%/);
+  assert.match(covers.innerHTML, /Hall Blind/);
+  assert.doesNotMatch(covers.innerHTML, /Other vendor/);
+});
+
+test("_updateCovers only adds a position slider for covers that support SET_POSITION", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const covers = { innerHTML: "", querySelectorAll: () => [] };
+
+  panel.querySelector = () => covers;
+  panel._hass = {
+    states: {
+      "cover.a": {
+        entity_id: "cover.a",
+        state: "open",
+        attributes: { friendly_name: "Cover A", current_position: 30, supported_features: 15 },
+      },
+      "cover.b": {
+        entity_id: "cover.b",
+        state: "closed",
+        attributes: { friendly_name: "Cover B", supported_features: 11 }, // no SET_POSITION bit
+      },
+    },
+    entities: {
+      "cover.a": { platform: "plejd" },
+      "cover.b": { platform: "plejd" },
+    },
+  };
+
+  panel._updateCovers();
+
+  assert.match(covers.innerHTML, /data-cover-position="cover\.a"/);
+  assert.doesNotMatch(covers.innerHTML, /data-cover-position="cover\.b"/);
+  assert.match(covers.innerHTML, /data-cover-open="cover\.b"/);
+  assert.match(covers.innerHTML, /data-cover-close="cover\.b"/);
+  assert.match(covers.innerHTML, /data-cover-stop="cover\.b"/);
+});
+
+test("_updateCovers clamps an out-of-range position and drops a hostile one instead of interpolating it raw", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const covers = { innerHTML: "", querySelectorAll: () => [] };
+
+  panel.querySelector = () => covers;
+  panel._hass = {
+    states: {
+      "cover.a": {
+        entity_id: "cover.a",
+        state: "open",
+        attributes: { friendly_name: "Cover A", current_position: 142, supported_features: 15 },
+      },
+      "cover.b": {
+        entity_id: "cover.b",
+        state: "open",
+        attributes: {
+          friendly_name: "Cover B",
+          current_position: '0" autofocus onfocus="window.pwned=1',
+          supported_features: 15,
+        },
+      },
+    },
+    entities: {
+      "cover.a": { platform: "plejd" },
+      "cover.b": { platform: "plejd" },
+    },
+  };
+
+  panel._updateCovers();
+
+  assert.match(covers.innerHTML, /value="100" data-cover-position="cover\.a"/);
+  assert.doesNotMatch(covers.innerHTML, /onfocus/);
+  assert.match(covers.innerHTML, /data-cover-position="cover\.b"/);
+});
+
+test("_updateCovers leaves the slider without a value (native midpoint) when the position is unknown", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const covers = { innerHTML: "", querySelectorAll: () => [] };
+
+  panel.querySelector = () => covers;
+  panel._hass = {
+    states: {
+      "cover.hall_blind": {
+        entity_id: "cover.hall_blind",
+        state: "open",
+        attributes: { friendly_name: "Hall Blind", supported_features: 15 },
+      },
+    },
+    entities: { "cover.hall_blind": { platform: "plejd" } },
+  };
+
+  panel._updateCovers();
+
+  assert.doesNotMatch(covers.innerHTML, /value="0"/);
+  assert.match(covers.innerHTML, /<input type="range" min="0" max="100" data-cover-position="cover\.hall_blind"/);
+  assert.match(covers.innerHTML, />open<\/span>/); // label falls back to state, not a fake 0%
+
+  panel._coverPositionOverrides["cover.hall_blind"] = 65;
+  panel._updateCovers();
+
+  assert.match(covers.innerHTML, /value="65" data-cover-position="cover\.hall_blind"/);
+});
+
+test("_updateCovers skips rebuilding the list while a slider is mid-drag", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const covers = { innerHTML: "unchanged", querySelectorAll: () => [] };
+
+  panel.querySelector = () => covers;
+  panel._hass = { states: {}, entities: {} };
+  panel._draggingCoverEntity = "cover.kitchen_blind";
+
+  panel._updateCovers();
+
+  assert.equal(covers.innerHTML, "unchanged");
+});
+
+test("_updateCovers shows a fallback message and does not crash with no covers or no hass", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const covers = { innerHTML: "", querySelectorAll: () => [] };
+  panel.querySelector = () => covers;
+
+  panel._hass = { states: {}, entities: {} };
+  panel._updateCovers();
+  assert.match(covers.innerHTML, /No Plejd covers found\./);
+
+  panel._hass = undefined;
+  assert.doesNotThrow(() => panel._updateCovers());
+});
+
+test("_updateCovers no-ops when the covers element is not in the DOM yet", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel.querySelector = () => null;
+  panel._hass = { states: {} };
+  assert.doesNotThrow(() => panel._updateCovers());
+});
+
+function makeCoverRowEl(entityId, position) {
+  const listeners = {};
+  const openBtn = { getAttribute: () => entityId, addEventListener: (ev, fn) => (listeners.open = fn) };
+  const closeBtn = { getAttribute: () => entityId, addEventListener: (ev, fn) => (listeners.close = fn) };
+  const stopBtn = { getAttribute: () => entityId, addEventListener: (ev, fn) => (listeners.stop = fn) };
+  const slider = {
+    getAttribute: () => entityId,
+    value: String(position),
+    addEventListener: (ev, fn) => {
+      listeners[ev] = fn;
+    },
+  };
+  const el = {
+    querySelectorAll: (sel) => {
+      if (sel === "[data-cover-open]") return [openBtn];
+      if (sel === "[data-cover-close]") return [closeBtn];
+      if (sel === "[data-cover-stop]") return [stopBtn];
+      if (sel === "[data-cover-position]") return [slider];
+      return [];
+    },
+  };
+  return { el, listeners, slider };
+}
+
+test("clicking a cover's Open/Close/Stop buttons calls the matching cover service", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const calls = [];
+  panel._callService = (domain, service, data) => {
+    calls.push({ domain, service, data });
+    return Promise.resolve();
+  };
+  panel.querySelector = () => null;
+
+  const { el, listeners } = makeCoverRowEl("cover.kitchen_blind", 42);
+  panel._wireCovers(el);
+
+  listeners.open();
+  listeners.close();
+  listeners.stop();
+
+  assert.deepEqual(plain(calls), [
+    { domain: "cover", service: "open_cover", data: { entity_id: "cover.kitchen_blind" } },
+    { domain: "cover", service: "close_cover", data: { entity_id: "cover.kitchen_blind" } },
+    { domain: "cover", service: "stop_cover", data: { entity_id: "cover.kitchen_blind" } },
+  ]);
+});
+
+test("releasing the position slider sends set_cover_position once, wired on change not input", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const calls = [];
+  panel._callService = (domain, service, data) => {
+    calls.push({ domain, service, data });
+    return Promise.resolve();
+  };
+  panel.querySelector = () => null;
+
+  const { el, listeners, slider } = makeCoverRowEl("cover.kitchen_blind", 42);
+  panel._wireCovers(el);
+
+  assert.equal(typeof listeners.change, "function"); // fires on release, not per drag tick like "input" would
+
+  slider.value = "77";
+  listeners.change({ target: slider });
+
+  assert.deepEqual(plain(calls), [
+    { domain: "cover", service: "set_cover_position", data: { entity_id: "cover.kitchen_blind", position: 77 } },
+  ]);
+});
+
+test("dragging a cover position slider marks it active until release", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._callService = () => Promise.resolve();
+  panel.querySelector = () => null;
+
+  const { el, listeners, slider } = makeCoverRowEl("cover.kitchen_blind", 42);
+  panel._wireCovers(el);
+
+  listeners.input({ target: slider });
+  assert.equal(panel._draggingCoverEntity, "cover.kitchen_blind");
+
+  slider.value = "60";
+  listeners.change({ target: slider });
+  assert.equal(panel._draggingCoverEntity, null);
+});
+
+test("releasing a cover position slider remembers the sent value as an optimistic override", async () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._callService = () => Promise.resolve();
+  panel.querySelector = () => null;
+
+  const { el, listeners, slider } = makeCoverRowEl("cover.kitchen_blind", 42);
+  panel._wireCovers(el);
+
+  slider.value = "65";
+  listeners.change({ target: slider });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(panel._coverPositionOverrides["cover.kitchen_blind"], 65);
+});
+
+test("releasing a cover position slider schedules a re-render so the slider reflects the override", async () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._callService = () => Promise.resolve();
+  let scheduled = 0;
+  panel._scheduleCoversUpdate = () => {
+    scheduled += 1;
+  };
+
+  const { el, listeners, slider } = makeCoverRowEl("cover.kitchen_blind", 42);
+  panel._wireCovers(el);
+
+  slider.value = "65";
+  listeners.change({ target: slider });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(scheduled, 1);
+});
+
+test("clicking Open/Close schedules a re-render so the slider reflects the commanded position", async () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._callService = () => Promise.resolve();
+  let scheduled = 0;
+  panel._scheduleCoversUpdate = () => {
+    scheduled += 1;
+  };
+
+  const { el, listeners } = makeCoverRowEl("cover.kitchen_blind", 42);
+  panel._wireCovers(el);
+
+  listeners.open();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(scheduled, 1);
+});
+
+test("clicking Stop schedules a re-render like the other cover actions", async () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._callService = () => Promise.resolve();
+  let scheduled = 0;
+  panel._scheduleCoversUpdate = () => {
+    scheduled += 1;
+  };
+
+  const { el, listeners } = makeCoverRowEl("cover.kitchen_blind", 42);
+  panel._wireCovers(el);
+
+  listeners.stop();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(scheduled, 1);
+});
+
+test("a failed cover service call is caught and logged, not thrown", async () => {
+  const warnings = [];
+  const PanelClass = loadPanelClass({
+    console: { ...console, warn: (...args) => warnings.push(args) },
+  });
+  const panel = new PanelClass();
+  panel._callService = () => Promise.reject(new Error("boom"));
+  panel.querySelector = () => null;
+
+  const { el, listeners } = makeCoverRowEl("cover.kitchen_blind", 42);
+  panel._wireCovers(el);
+
+  listeners.open();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0][0], /open_cover failed for cover\.kitchen_blind/);
+});
+
+test("a rejected set_cover_position does not record an optimistic override", async () => {
+  const warnings = [];
+  const PanelClass = loadPanelClass({
+    console: { ...console, warn: (...args) => warnings.push(args) },
+  });
+  const panel = new PanelClass();
+  panel._callService = () => Promise.reject(new Error("boom"));
+  panel.querySelector = () => null;
+
+  const { el, listeners, slider } = makeCoverRowEl("cover.kitchen_blind", 42);
+  panel._wireCovers(el);
+
+  slider.value = "77";
+  listeners.change({ target: slider });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(panel._coverPositionOverrides["cover.kitchen_blind"], undefined);
+});
+
+test("clicking Open/Close records the just-commanded position as the slider override", async () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._callService = () => Promise.resolve();
+  panel.querySelector = () => null;
+
+  const { el, listeners } = makeCoverRowEl("cover.kitchen_blind", 42);
+  panel._wireCovers(el);
+
+  listeners.open();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(panel._coverPositionOverrides["cover.kitchen_blind"], 100);
+
+  listeners.close();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(panel._coverPositionOverrides["cover.kitchen_blind"], 0);
+});
+
+test("clicking Stop does not touch the slider override", async () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._callService = () => Promise.resolve();
+  panel.querySelector = () => null;
+  panel._coverPositionOverrides["cover.kitchen_blind"] = 65;
+
+  const { el, listeners } = makeCoverRowEl("cover.kitchen_blind", 42);
+  panel._wireCovers(el);
+
+  listeners.stop();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(panel._coverPositionOverrides["cover.kitchen_blind"], 65);
+});
+
+test("a rejected Open/Close call does not record an optimistic override", async () => {
+  const PanelClass = loadPanelClass({ console: { ...console, warn: () => {} } });
+  const panel = new PanelClass();
+  panel._callService = () => Promise.reject(new Error("boom"));
+  panel.querySelector = () => null;
+
+  const { el, listeners } = makeCoverRowEl("cover.kitchen_blind", 42);
+  panel._wireCovers(el);
+
+  listeners.open();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(panel._coverPositionOverrides["cover.kitchen_blind"], undefined);
+});
+
+test("a pointer-cancelled slider drag clears the drag guard so renders resume", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._callService = () => Promise.resolve();
+  panel.querySelector = () => null;
+
+  const { el, listeners, slider } = makeCoverRowEl("cover.kitchen_blind", 42);
+  panel._wireCovers(el);
+
+  listeners.input({ target: slider });
+  assert.equal(panel._draggingCoverEntity, "cover.kitchen_blind");
+
+  listeners.pointercancel();
+  assert.equal(panel._draggingCoverEntity, null);
+});
+
+test("a pointer-cancelled slider drag schedules a catch-up render", () => {
+  const frames = [];
+  const PanelClass = loadPanelClass({
+    requestAnimationFrame(callback) {
+      frames.push(callback);
+      return frames.length;
+    },
+    cancelAnimationFrame() {},
+  });
+  const panel = new PanelClass();
+  panel._callService = () => Promise.resolve();
+
+  const { el, listeners, slider } = makeCoverRowEl("cover.kitchen_blind", 42);
+  panel._wireCovers(el);
+
+  listeners.input({ target: slider });
+  frames.length = 0; // discard the drag-start frame; only the cancel's own catch-up matters
+
+  listeners.pointercancel();
+
+  assert.equal(frames.length, 1); // a hass push skipped mid-drag is not left stale forever
+});
+
+test("disconnectedCallback clears a stuck drag guard so a reconnect's render isn't skipped forever", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._draggingCoverEntity = "cover.kitchen_blind";
+
+  panel.disconnectedCallback();
+
+  assert.equal(panel._draggingCoverEntity, null);
+});
+
+test("_updateCovers treats a blank current_position as unknown, not closed", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const covers = { innerHTML: "", querySelectorAll: () => [] };
+
+  panel.querySelector = () => covers;
+  panel._hass = {
+    states: {
+      "cover.a": {
+        entity_id: "cover.a",
+        state: "open",
+        attributes: { friendly_name: "Cover A", current_position: "   ", supported_features: 15 },
+      },
+    },
+    entities: { "cover.a": { platform: "plejd" } },
+  };
+
+  panel._updateCovers();
+
+  assert.doesNotMatch(covers.innerHTML, /value="0"/);
+  assert.match(covers.innerHTML, />open<\/span>/); // label falls back to state, not a fake 0%
+});
+
 
 // ── climate ──────────────────────────────────────────────────────────────────
 
@@ -1547,6 +2102,7 @@ test("first hass assignment loads area and device registries over websocket", as
   panel._loadBindings = () => {};
   panel._loadSchedules = () => {};
   panel._scheduleLightsUpdate = () => {};
+  panel._scheduleCoversUpdate = () => {};
   panel._renderEditor = () => {};
   panel._updateMotion = () => {};
   panel._updateHealth = () => {};
@@ -1720,6 +2276,7 @@ test("registry loading failure keeps registries empty and logs a warning", async
   panel._loadBindings = () => {};
   panel._loadSchedules = () => {};
   panel._scheduleLightsUpdate = () => {};
+  panel._scheduleCoversUpdate = () => {};
   panel._renderEditor = () => {};
   panel._updateMotion = () => {};
   panel._updateHealth = () => {};
