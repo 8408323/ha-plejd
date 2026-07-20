@@ -359,6 +359,7 @@ test("first hass assignment loads area and device registries over websocket", as
   panel._loadBindings = () => {};
   panel._scheduleLightsUpdate = () => {};
   panel._renderEditor = () => {};
+  panel._updateHealth = () => {};
 
   panel.hass = {
     states: {},
@@ -385,6 +386,48 @@ test("first hass assignment loads area and device registries over websocket", as
   assert.equal(panel._devices()[0].name, "Remote Hall");
   assert.equal(panel._areaName("area.kitchen"), "Kitchen");
   assert.equal(panel._deviceName("dev.remote"), "Remote Hall");
+});
+
+test("registries resolving after the health card's first render refreshes it with device names instead of leaving raw ids", async () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const health = { innerHTML: "" };
+
+  panel._renderShell = () => {};
+  panel._loadBindings = () => {};
+  panel._scheduleLightsUpdate = () => {};
+  panel.querySelector = (selector) => (selector === "#plejd-health" ? health : null);
+
+  panel.hass = {
+    states: {
+      "binary_sensor.kitchen_dimmer_fault": {
+        entity_id: "binary_sensor.kitchen_dimmer_fault",
+        state: "on",
+        attributes: { friendly_name: "Kitchen dimmer Fault", device_class: "problem", active_faults: ["overtemperature"] },
+      },
+    },
+    entities: {
+      "binary_sensor.kitchen_dimmer_fault": { platform: "plejd", device_id: "dev.kitchen" },
+    },
+    // No hass.devices exposed yet, mirroring a quiet site where the first health render
+    // happens before config/device_registry/list resolves.
+    callWS(msg) {
+      if (msg.type === "config/area_registry/list") return Promise.resolve([]);
+      if (msg.type === "config/device_registry/list") {
+        return Promise.resolve([{ id: "dev.kitchen", name: "Kitchen dimmer" }]);
+      }
+      throw new Error(`unexpected ws call: ${msg.type}`);
+    },
+  };
+
+  // Simulate the scheduled health render firing before the registries promise settles.
+  panel._updateHealth();
+  assert.match(health.innerHTML, /dev\.kitchen/); // raw device id, not yet a name
+
+  await panel._registriesPromise;
+
+  assert.doesNotMatch(health.innerHTML, /dev\.kitchen/);
+  assert.match(health.innerHTML, /Kitchen dimmer/);
 });
 
 test("trigger change listeners keep _form in sync so re-renders preserve selections", () => {
@@ -442,6 +485,7 @@ test("registry loading failure keeps registries empty and logs a warning", async
   panel._loadBindings = () => {};
   panel._scheduleLightsUpdate = () => {};
   panel._renderEditor = () => {};
+  panel._updateHealth = () => {};
 
   panel.hass = {
     states: {},

@@ -165,6 +165,9 @@ class PlejdPanel extends HTMLElement {
       } finally {
         this._registriesPromise = null;
         this._renderEditor();
+        // The health card can render before this resolves (device ids as placeholders);
+        // refresh it here so a quiet site isn't stuck showing raw ids indefinitely.
+        this._updateHealth();
       }
     })();
     return this._registriesPromise;
