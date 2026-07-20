@@ -42,6 +42,8 @@ TO_REDACT = {
     "object_id",
     "address",
     "outputs",
+    "member_addresses",
+    "dimmable_addresses",
     "name",
     "room_id",
     "scene_id",

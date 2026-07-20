@@ -117,6 +117,11 @@
       "device_fault": {
         "name": "Fault"
       }
+    },
+    "switch": {
+      "holiday_mode": {
+        "name": "Holiday mode"
+      }
     }
   },
   "options": {
@@ -125,7 +130,8 @@
         "menu_options": {
           "schedules": "Manage schedules",
           "add_device": "Add a device",
-          "dashboard": "Show or hide the dashboard"
+          "dashboard": "Show or hide the dashboard",
+          "holiday_mode": "Holiday mode (presence simulation)"
         }
       },
       "schedules": {
@@ -161,6 +167,15 @@
         "description": "Show the Plejd dashboard in the sidebar (left navigation menu).",
         "data": {
           "show_panel": "Show dashboard in sidebar"
+        }
+      },
+      "holiday_mode": {
+        "title": "Holiday mode",
+        "description": "While the Holiday mode switch is on and the time of day is within this window, a random subset of the lights below turns on and off to make the home look occupied. Leave lights empty to use every Plejd light.",
+        "data": {
+          "lights": "Lights (empty = all Plejd lights)",
+          "window_start": "Active window start",
+          "window_end": "Active window end"
         }
       }
     },
