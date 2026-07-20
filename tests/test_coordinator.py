@@ -155,7 +155,10 @@ def test_pick_device_uses_rssi_without_preference():
     assert c._pick_device().address == "Y"
 
 
-async def test_set_output_writes_and_state_reflects(monkeypatch):
+async def test_set_output_reflects_state_immediately(monkeypatch):
+    """No notification replay needed - a second command sent right after must see this
+    state, not stale state (a fast on-then-off from the panel must not read "still off"
+    and send "on" again just because the real echo hasn't landed yet)."""
     client = _FakeClient()
     _patch_connect(monkeypatch, client)
     ble = types.SimpleNamespace(address="01:02:03:04:05:a0")
@@ -163,7 +166,59 @@ async def test_set_output_writes_and_state_reflects(monkeypatch):
     c = PlejdCoordinator(hass, _entry(discovered=None))
     await c.async_start()
     await c.async_set_output(5, True, 120)
-    # the written command, fed back as a notification, becomes the live state
+    assert c.state_for(5).on is True and c.state_for(5).level == 120
+
+
+async def test_set_output_notifies_listeners(monkeypatch):
+    client = _FakeClient()
+    _patch_connect(monkeypatch, client)
+    ble = types.SimpleNamespace(address="01:02:03:04:05:a0")
+    hass = _hass([_info("01:02:03:04:05:a0")], {"01:02:03:04:05:a0": ble})
+    c = PlejdCoordinator(hass, _entry(discovered=None))
+    await c.async_start()
+    seen = []
+    c.async_add_listener(lambda: seen.append(1))
+    await c.async_set_output(5, True, 120)
+    assert seen == [1]
+
+
+async def test_set_output_off_preserves_remembered_brightness(monkeypatch):
+    # Turning off must not zero out the remembered brightness - the protocol's off
+    # payload (level=0) is not "the light is now dim to 0", and a later turn_on()
+    # restore (PlejdLight.async_turn_on) relies on the prior level surviving.
+    client = _FakeClient()
+    _patch_connect(monkeypatch, client)
+    ble = types.SimpleNamespace(address="01:02:03:04:05:a0")
+    hass = _hass([_info("01:02:03:04:05:a0")], {"01:02:03:04:05:a0": ble})
+    c = PlejdCoordinator(hass, _entry(discovered=None))
+    await c.async_start()
+    await c.async_set_output(5, True, 150)
+    await c.async_set_output(5, False, 0)
+    assert c.state_for(5).on is False and c.state_for(5).level == 150
+
+
+async def test_set_output_off_falls_back_to_zero_for_unknown_prior_state(monkeypatch):
+    client = _FakeClient()
+    _patch_connect(monkeypatch, client)
+    ble = types.SimpleNamespace(address="01:02:03:04:05:a0")
+    hass = _hass([_info("01:02:03:04:05:a0")], {"01:02:03:04:05:a0": ble})
+    c = PlejdCoordinator(hass, _entry(discovered=None))
+    await c.async_start()
+    await c.async_set_output(9, False, 0)  # output 9 has no prior state at all
+    assert c.state_for(9).on is False and c.state_for(9).level == 0
+
+
+async def test_set_output_notification_replay_still_confirms_state(monkeypatch):
+    # A real device echo arriving after the optimistic update must not break anything -
+    # replaying the same written command back through the notification path still
+    # decodes to consistent state.
+    client = _FakeClient()
+    _patch_connect(monkeypatch, client)
+    ble = types.SimpleNamespace(address="01:02:03:04:05:a0")
+    hass = _hass([_info("01:02:03:04:05:a0")], {"01:02:03:04:05:a0": ble})
+    c = PlejdCoordinator(hass, _entry(discovered=None))
+    await c.async_start()
+    await c.async_set_output(5, True, 120)
     _, payload = client.writes[-1]
     client.notify_cb(None, bytearray(payload))
     assert c.state_for(5).level == 120
@@ -706,6 +761,68 @@ async def test_gateway_is_preferred_and_routes_commands(monkeypatch):
     assert c.state_for(11).level == 80
     await c.async_set_output(11, True, 80)
     assert c._gateway.writes[-1] == set_group_state_and_level(11, True, 80)
+
+
+async def test_gateway_off_preserves_prior_level_despite_ack_landing_before_write_returns(monkeypatch):
+    # Over the real gateway transport, a published ack is decoded into state_for() before
+    # write()'s own await returns - reading "prior level" only after the write would already
+    # see this command's own echo (off, level 0), losing the real remembered brightness.
+    from plejd.protocol import OutputState
+
+    monkeypatch.setattr(coordinator_mod, "PlejdGatewayConnection", _FakeGateway)
+    hass = _hass()
+    hass.session = object()
+    c = PlejdCoordinator(hass, _gateway_entry())
+    await c.async_start()
+    c._gateway.state = {11: OutputState(output=11, on=True, level=150)}
+
+    async def _write_with_early_ack(vector):
+        c._gateway.writes.append(vector)
+        # Simulate the ack's own state push landing before write() returns.
+        c._gateway.state[11] = OutputState(output=11, on=False, level=0)
+
+    monkeypatch.setattr(c._gateway, "write", _write_with_early_ack)
+    await c.async_set_output(11, False, 0)
+
+    assert c.state_for(11).on is False and c.state_for(11).level == 150
+
+
+async def test_gateway_set_output_does_not_overwrite_a_real_push_that_arrived_mid_write(monkeypatch):
+    # A physical switch (or another app instance) can change the same output while our own
+    # write is still in flight; that push already lands in state_for() (and already notified
+    # listeners via _on_event) before write() returns. Our own optimistic record must not
+    # then stomp that real, newer value with the one we merely intended to command.
+    from plejd.protocol import OutputState
+
+    monkeypatch.setattr(coordinator_mod, "PlejdGatewayConnection", _FakeGateway)
+    hass = _hass()
+    hass.session = object()
+    c = PlejdCoordinator(hass, _gateway_entry())
+    await c.async_start()
+    c._gateway.state = {11: OutputState(output=11, on=True, level=150)}
+
+    async def _write_with_concurrent_third_party_change(vector):
+        c._gateway.writes.append(vector)
+        # Someone else changed this output to a value we didn't command, while we were
+        # writing our own (on, 80) command.
+        c._gateway.state[11] = OutputState(output=11, on=True, level=30)
+
+    monkeypatch.setattr(c._gateway, "write", _write_with_concurrent_third_party_change)
+    await c.async_set_output(11, True, 80)
+
+    assert c.state_for(11).on is True and c.state_for(11).level == 30
+
+
+async def test_gateway_set_output_still_applies_its_own_state_when_nothing_else_changed(monkeypatch):
+    monkeypatch.setattr(coordinator_mod, "PlejdGatewayConnection", _FakeGateway)
+    hass = _hass()
+    hass.session = object()
+    c = PlejdCoordinator(hass, _gateway_entry())
+    await c.async_start()
+
+    await c.async_set_output(11, True, 80)
+
+    assert c.state_for(11).on is True and c.state_for(11).level == 80
 
 
 async def test_gateway_set_group_output_reflects_member_state(monkeypatch):

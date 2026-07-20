@@ -744,15 +744,46 @@ class PlejdCoordinator:
         """Delete an on-device time event."""
         await self._write_vector(protocol.remove_time_event(slot))
 
-    async def async_set_output(self, address: int, on: bool, level: int) -> None:
+    async def async_set_output(self, address: int, on: bool, level: int, *, notify: bool = True) -> None:
         """Send an on/off + level command for an output.
 
         Uses 0x0098 (`set_group_state_and_level`): the per-output cloud address alone
         identifies the target output, with no separate output byte — 0x00C8 with the
         per-output address broke every output past the first on a multi-output
         device (#71).
+
+        `notify=False` lets a caller that still has more state to record (e.g.
+        async_set_group_output's member states) defer the listener notification
+        until everything is consistent, instead of notifying mid-update.
         """
+        # Captured before the write, not after: over the gateway transport, a normal
+        # published ack is decoded into state_for() before _write_vector()'s own await
+        # returns, so reading "prior" afterward would already see this command's own
+        # echo (off, level 0) instead of the real previous level.
+        prior = self.state_for(address)
         await self._write_vector(protocol.set_group_state_and_level(address, on, level))
+        current = self.state_for(address)
+        # What our OWN command's echo literally looks like on the wire - level=0 for an
+        # off command regardless of the remembered brightness (the enriched value below
+        # is our own bookkeeping, not something the protocol's echo itself carries).
+        raw_echo = OutputState(output=address, on=on, level=level)
+        if current is not None and current != prior and current != raw_echo:
+            # Something else (a physical switch, the Plejd app, another output on this
+            # device) changed this output to a value we didn't command while our own
+            # write was in flight. Its own push already notified listeners with the
+            # real state (_on_event) - don't stomp that with our stale optimistic guess.
+            return
+        # Reflect the change immediately rather than waiting for the mesh's own echo:
+        # BLE writes are never acked, and even the gateway's ack isn't guaranteed to
+        # land before this returns. Without this, a command sent right after another
+        # (e.g. a fast on-then-off) reads stale state and computes the wrong direction.
+        # Turning off doesn't erase the remembered brightness - a real device keeps
+        # reporting its last dim position while off, so the off case preserves the
+        # prior level instead of the protocol's own off payload (always 0).
+        record_level = level if on else (prior.level if prior is not None else level)
+        self._record_output_state(address, OutputState(output=address, on=on, level=record_level))
+        if notify:
+            self._notify_outputs()
 
     async def async_all_off(self) -> None:
         """Turn off every light output in the site (mirrors the Plejd app's "all off")."""
@@ -780,7 +811,7 @@ class PlejdCoordinator:
         member's address, so member outputs would otherwise show stale state until
         each one separately reports its own change over the mesh/gateway.
         """
-        await self.async_set_output(address, on, level)
+        await self.async_set_output(address, on, level, notify=False)
         self._record_group_member_states(on, level, member_addresses)
         self._notify_outputs()
 
