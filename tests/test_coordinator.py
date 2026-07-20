@@ -219,6 +219,28 @@ async def test_all_off_one_output_failure_does_not_skip_the_rest(monkeypatch):
     assert sorted(attempted) == [5, 6]  # output 6 was still turned off despite output 5 failing
 
 
+async def test_all_off_raises_when_every_output_fails(monkeypatch):
+    """If no output was actually turned off, the caller must be told all_off failed."""
+    from homeassistant.exceptions import HomeAssistantError
+
+    dev2 = {**_DEV, "device_id": "d2", "address": 6}
+    entry = types.SimpleNamespace(
+        entry_id="e1",
+        data={CONF_CRYPTO_KEY: _KEY_HEX, CONF_DEVICES: [_DEV, dev2], CONF_DISCOVERED_ADDRESS: None},
+    )
+    c = PlejdCoordinator(_hass(), entry)
+    attempted: list[int] = []
+
+    async def _async_set_output(address, on, level):
+        attempted.append(address)
+        raise HomeAssistantError("not connected")
+
+    monkeypatch.setattr(c, "async_set_output", _async_set_output)
+    with pytest.raises(HomeAssistantError, match="failed to turn off any output"):
+        await c.async_all_off()
+    assert sorted(attempted) == [5, 6]  # both outputs were still attempted
+
+
 async def test_execute_scene_broadcasts(monkeypatch):
     client = _FakeClient()
     _patch_connect(monkeypatch, client)

@@ -731,15 +731,21 @@ class PlejdCoordinator:
     async def async_all_off(self) -> None:
         """Turn off every light output in the site (mirrors the Plejd app's "all off")."""
         seen: set[int] = set()
+        attempted = 0
+        succeeded = 0
         for device in self.devices:
             if device.category != CATEGORY_LIGHT or device.address is None or device.address in seen:
                 continue
             seen.add(device.address)
+            attempted += 1
             try:
                 await self.async_set_output(device.address, False, 0)
             except Exception:  # noqa: BLE001 - one output failing must not abort turning off the rest
                 _LOGGER.warning("Plejd all_off: failed to turn off output %s", device.address, exc_info=True)
                 continue
+            succeeded += 1
+        if attempted and not succeeded:
+            raise HomeAssistantError("Plejd all_off: failed to turn off any output")
 
     async def async_set_output_min_level(self, address: int, output: int, fraction: float) -> None:
         """Set an output's minimum dim level (0-1 fraction)."""
