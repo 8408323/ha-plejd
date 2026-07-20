@@ -81,10 +81,11 @@ test("hass updates coalesce lights and scenes renders to one animation frame", (
   panel._loadBindings = () => {
     loads += 1;
   };
+  panel._loadSchedules = () => {};
+  panel._scheduleCoversUpdate = () => {};
   panel._updateLights = () => {
     lights += 1;
   };
-  panel._scheduleCoversUpdate = () => {};
   panel._updateMotion = () => {
     motion += 1;
   };
@@ -131,8 +132,9 @@ test("disconnect cancels a queued lights render", () => {
 
   panel._renderShell = () => {};
   panel._loadBindings = () => {};
-  panel._updateLights = () => {};
+  panel._loadSchedules = () => {};
   panel._scheduleCoversUpdate = () => {};
+  panel._updateLights = () => {};
   panel._updateMotion = () => {};
   panel._updateHealth = () => {};
   panel.hass = { states: {} };
@@ -140,6 +142,28 @@ test("disconnect cancels a queued lights render", () => {
 
   assert.deepEqual(cancelled, [42]);
   assert.equal(panel._lightsFrame, null);
+});
+
+test("disconnect clears a stuck brightness-drag guard so a reconnect's render isn't skipped forever", () => {
+  const PanelClass = loadPanelClass({
+    requestAnimationFrame() {
+      return 42;
+    },
+    cancelAnimationFrame() {},
+  });
+  const panel = new PanelClass();
+  panel._renderShell = () => {};
+  panel._loadBindings = () => {};
+  panel._loadSchedules = () => {};
+  panel._updateLights = () => {};
+  panel._updateMotion = () => {};
+  panel._updateHealth = () => {};
+  panel.hass = { states: {} };
+  panel._draggingEntity = "light.kitchen"; // a drag was in progress when the panel was torn down
+
+  panel.disconnectedCallback();
+
+  assert.equal(panel._draggingEntity, null);
 });
 
 test("disconnect cancels a queued setTimeout fallback when requestAnimationFrame is unavailable", () => {
@@ -156,8 +180,9 @@ test("disconnect cancels a queued setTimeout fallback when requestAnimationFrame
 
   panel._renderShell = () => {};
   panel._loadBindings = () => {};
-  panel._updateLights = () => {};
+  panel._loadSchedules = () => {};
   panel._scheduleCoversUpdate = () => {};
+  panel._updateLights = () => {};
   panel._updateMotion = () => {};
   panel._updateHealth = () => {};
   panel.hass = { states: {} };
@@ -167,66 +192,10 @@ test("disconnect cancels a queued setTimeout fallback when requestAnimationFrame
   assert.equal(panel._lightsFrame, null);
 });
 
-test("hass updates coalesce covers renders to one animation frame", () => {
-  const frames = [];
-  const PanelClass = loadPanelClass({
-    requestAnimationFrame(callback) {
-      frames.push(callback);
-      return frames.length;
-    },
-    cancelAnimationFrame() {},
-  });
-  const panel = new PanelClass();
-  let covers = 0;
-
-  panel._renderShell = () => {};
-  panel._loadBindings = () => {};
-  panel._scheduleLightsUpdate = () => {};
-  panel._updateCovers = () => {
-    covers += 1;
-  };
-
-  panel.hass = { states: {} };
-  panel.hass = { states: {} };
-  panel.hass = { states: {} };
-
-  assert.equal(frames.length, 1);
-  assert.equal(covers, 0);
-
-  frames.shift()();
-  assert.equal(covers, 1);
-
-  panel.hass = { states: {} };
-  assert.equal(frames.length, 1);
-});
-
-test("disconnect cancels a queued covers render", () => {
-  const cancelled = [];
-  const PanelClass = loadPanelClass({
-    requestAnimationFrame() {
-      return 42;
-    },
-    cancelAnimationFrame(frame) {
-      cancelled.push(frame);
-    },
-  });
-  const panel = new PanelClass();
-
-  panel._renderShell = () => {};
-  panel._loadBindings = () => {};
-  panel._scheduleLightsUpdate = () => {};
-  panel._updateCovers = () => {};
-  panel.hass = { states: {} };
-  panel.disconnectedCallback();
-
-  assert.deepEqual(cancelled, [42]);
-  assert.equal(panel._coversFrame, null);
-});
-
 test("_updateLights renders the current Plejd lights list", () => {
   const PanelClass = loadPanelClass();
   const panel = new PanelClass();
-  const lights = { innerHTML: "" };
+  const lights = { innerHTML: "", querySelector: () => null, querySelectorAll: () => [] };
 
   panel.querySelector = (selector) => (selector === "#plejd-lights" ? lights : null);
   panel._hass = {
@@ -261,6 +230,694 @@ test("_updateLights renders the current Plejd lights list", () => {
   assert.match(lights.innerHTML, /50%/);
   assert.match(lights.innerHTML, /Patio/);
   assert.doesNotMatch(lights.innerHTML, /Other vendor/);
+});
+
+test("hass updates coalesce covers renders to one animation frame", () => {
+  const frames = [];
+  const PanelClass = loadPanelClass({
+    requestAnimationFrame(callback) {
+      frames.push(callback);
+      return frames.length;
+    },
+    cancelAnimationFrame() {},
+  });
+  const panel = new PanelClass();
+  let covers = 0;
+
+  panel._renderShell = () => {};
+  panel._loadBindings = () => {};
+  panel._loadSchedules = () => {};
+  panel._scheduleLightsUpdate = () => {};
+  panel._updateCovers = () => {
+    covers += 1;
+  };
+
+  panel.hass = { states: {} };
+  panel.hass = { states: {} };
+  panel.hass = { states: {} };
+
+  assert.equal(frames.length, 1);
+  assert.equal(covers, 0);
+
+  frames.shift()();
+  assert.equal(covers, 1);
+
+  panel.hass = { states: {} };
+  assert.equal(frames.length, 1);
+});
+
+test("disconnect cancels a queued covers render", () => {
+  const cancelled = [];
+  const PanelClass = loadPanelClass({
+    requestAnimationFrame() {
+      return 42;
+    },
+    cancelAnimationFrame(frame) {
+      cancelled.push(frame);
+    },
+  });
+  const panel = new PanelClass();
+
+  panel._renderShell = () => {};
+  panel._loadBindings = () => {};
+  panel._loadSchedules = () => {};
+  panel._scheduleLightsUpdate = () => {};
+  panel._updateCovers = () => {};
+  panel.hass = { states: {} };
+  panel.disconnectedCallback();
+
+  assert.deepEqual(cancelled, [42]);
+  assert.equal(panel._coversFrame, null);
+});
+
+test("_updateLights disables the toggle and slider for an unavailable light", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const lights = { innerHTML: "", querySelector: () => null, querySelectorAll: () => [] };
+
+  panel.querySelector = (selector) => (selector === "#plejd-lights" ? lights : null);
+  panel._hass = {
+    states: {
+      "light.kitchen": {
+        entity_id: "light.kitchen",
+        state: "unavailable",
+        attributes: { friendly_name: "Kitchen", supported_color_modes: ["brightness"] },
+      },
+    },
+    entities: { "light.kitchen": { platform: "plejd" } },
+  };
+
+  panel._updateLights();
+
+  assert.match(lights.innerHTML, /data-toggle="light\.kitchen"[^>]*role="switch"[^>]*disabled/);
+  assert.match(lights.innerHTML, /data-brightness="light\.kitchen" disabled/);
+  assert.match(lights.innerHTML, /data-level="light\.kitchen"[^>]*>unavailable/);
+});
+
+test("clicking an unavailable light's toggle or name does not send a service call", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._hass = {
+    states: { "light.kitchen": { state: "unavailable" } },
+    callService: () => {
+      throw new Error("should not be called");
+    },
+  };
+  panel.querySelector = () => null;
+
+  const listeners = {};
+  const span = {
+    getAttribute: () => "light.kitchen",
+    addEventListener: (ev, fn) => {
+      listeners[ev] = fn;
+    },
+  };
+  const el = { querySelectorAll: (sel) => (sel === "[data-toggle]" ? [span] : []) };
+
+  panel._wireLights(el);
+  assert.doesNotThrow(() => listeners.click());
+});
+
+test("_updateLights renders a brightness slider only for dimmable lights", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const lights = { innerHTML: "", querySelector: () => null, querySelectorAll: () => [] };
+
+  panel.querySelector = (selector) => (selector === "#plejd-lights" ? lights : null);
+  panel._hass = {
+    states: {
+      "light.kitchen": {
+        entity_id: "light.kitchen",
+        state: "on",
+        attributes: { friendly_name: "Kitchen", brightness: 128, supported_color_modes: ["brightness"] },
+      },
+      "light.hallway": {
+        entity_id: "light.hallway",
+        state: "on",
+        attributes: { friendly_name: "Hallway", supported_color_modes: ["onoff"] },
+      },
+    },
+    entities: {
+      "light.kitchen": { platform: "plejd" },
+      "light.hallway": { platform: "plejd" },
+    },
+  };
+
+  panel._updateLights();
+
+  assert.match(lights.innerHTML, /data-brightness="light\.kitchen"/);
+  assert.doesNotMatch(lights.innerHTML, /data-brightness="light\.hallway"/);
+});
+
+test("_updateLights skips rebuilding the list while a slider is mid-drag", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const lights = { innerHTML: "unchanged", querySelector: () => null, querySelectorAll: () => [] };
+
+  panel.querySelector = (selector) => (selector === "#plejd-lights" ? lights : null);
+  panel._hass = { states: {}, entities: {} };
+  panel._draggingEntity = "light.kitchen";
+
+  panel._updateLights();
+
+  assert.equal(lights.innerHTML, "unchanged");
+});
+
+test("clicking a light row's name calls light.turn_off when the light is on", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const calls = [];
+  panel._hass = {
+    states: { "light.kitchen": { state: "on" } },
+    callService: (domain, service, data) => {
+      calls.push({ domain, service, data });
+      return Promise.resolve();
+    },
+  };
+
+  const listeners = {};
+  const nameSpan = {
+    getAttribute: (name) => (name === "data-toggle" ? "light.kitchen" : null),
+    addEventListener: (ev, fn) => {
+      listeners[ev] = fn;
+    },
+  };
+  const el = { querySelectorAll: (sel) => (sel === "[data-toggle]" ? [nameSpan] : []) };
+  panel.querySelector = () => null; // no #plejd-lights mounted - the post-click re-render is a no-op
+
+  panel._wireLights(el);
+  listeners.click();
+
+  assert.equal(calls.length, 1);
+  assert.deepEqual(plain(calls[0]), { domain: "light", service: "turn_off", data: { entity_id: "light.kitchen" } });
+});
+
+test("clicking a light row's name calls light.turn_on when the light is off", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const calls = [];
+  panel._hass = {
+    states: { "light.kitchen": { state: "off" } },
+    callService: (domain, service, data) => {
+      calls.push({ domain, service, data });
+      return Promise.resolve();
+    },
+  };
+
+  const listeners = {};
+  const nameSpan = {
+    getAttribute: (name) => (name === "data-toggle" ? "light.kitchen" : null),
+    addEventListener: (ev, fn) => {
+      listeners[ev] = fn;
+    },
+  };
+  const el = { querySelectorAll: (sel) => (sel === "[data-toggle]" ? [nameSpan] : []) };
+  panel.querySelector = () => null; // no #plejd-lights mounted - the post-click re-render is a no-op
+
+  panel._wireLights(el);
+  listeners.click();
+
+  assert.equal(calls.length, 1);
+  assert.deepEqual(plain(calls[0]), { domain: "light", service: "turn_on", data: { entity_id: "light.kitchen" } });
+});
+
+test("rapid repeated clicks alternate on/off instead of repeating the same command", () => {
+  // hass.states only reflects the pre-click value until the real round-trip (mesh/gateway
+  // echo, then the websocket push back to this tab) lands - clicking again before that
+  // must not re-read the same stale state and send the same command twice.
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const calls = [];
+  panel._hass = {
+    states: { "light.kitchen": { state: "off" } }, // never changes during this test
+    callService: (domain, service, data) => {
+      calls.push({ domain, service, data });
+      return Promise.resolve();
+    },
+  };
+  panel.querySelector = () => null;
+
+  const listeners = {};
+  const nameSpan = {
+    getAttribute: (name) => (name === "data-toggle" ? "light.kitchen" : null),
+    addEventListener: (ev, fn) => {
+      listeners[ev] = fn;
+    },
+  };
+  const el = { querySelectorAll: (sel) => (sel === "[data-toggle]" ? [nameSpan] : []) };
+  panel._wireLights(el);
+
+  listeners.click();
+  listeners.click();
+  listeners.click();
+
+  assert.deepEqual(
+    calls.map((c) => c.service),
+    ["turn_on", "turn_off", "turn_on"],
+  );
+});
+
+test("dragging a brightness slider sends a live update on the first tick and updates the label", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const calls = [];
+  panel._hass = {
+    states: {},
+    callService: (domain, service, data) => {
+      calls.push({ domain, service, data });
+      return Promise.resolve();
+    },
+  };
+
+  const listeners = {};
+  const levelSpan = { textContent: "40%" };
+  const slider = {
+    value: "40",
+    getAttribute: (name) => (name === "data-brightness" ? "light.kitchen" : null),
+    addEventListener: (ev, fn) => {
+      listeners[ev] = fn;
+    },
+  };
+  const el = {
+    querySelectorAll: (sel) => (sel === "[data-brightness]" ? [slider] : []),
+    querySelector: (sel) => (sel === '[data-level="light.kitchen"]' ? levelSpan : null),
+  };
+
+  panel._wireLights(el);
+
+  slider.value = "72";
+  listeners.input();
+
+  assert.equal(levelSpan.textContent, "72%");
+  assert.equal(panel._draggingEntity, "light.kitchen");
+  // No prior send this drag, so the first tick ships immediately for direct feedback.
+  assert.equal(calls.length, 1);
+  assert.deepEqual(plain(calls[0]), {
+    domain: "light",
+    service: "turn_on",
+    data: { entity_id: "light.kitchen", brightness_pct: 72 },
+  });
+});
+
+test("further ticks within the throttle window are queued, not sent immediately, and the trailing tick reflects the latest value", async () => {
+  const timers = [];
+  let nextId = 1;
+  const PanelClass = loadPanelClass({
+    setTimeout(fn) {
+      const id = nextId++;
+      timers.push({ id, fn });
+      return id;
+    },
+    clearTimeout(id) {
+      const i = timers.findIndex((t) => t.id === id);
+      if (i !== -1) timers.splice(i, 1);
+    },
+  });
+  const panel = new PanelClass();
+  const calls = [];
+  panel._hass = {
+    states: {},
+    callService: (domain, service, data) => {
+      calls.push({ domain, service, data });
+      return Promise.resolve();
+    },
+  };
+
+  const listeners = {};
+  const levelSpan = { textContent: "40%" };
+  const slider = {
+    value: "40",
+    getAttribute: (name) => (name === "data-brightness" ? "light.kitchen" : null),
+    addEventListener: (ev, fn) => {
+      listeners[ev] = fn;
+    },
+  };
+  const el = {
+    querySelectorAll: (sel) => (sel === "[data-brightness]" ? [slider] : []),
+    querySelector: (sel) => (sel === '[data-level="light.kitchen"]' ? levelSpan : null),
+  };
+
+  panel._wireLights(el);
+
+  slider.value = "50";
+  listeners.input(); // first tick: sends immediately (no throttling to apply yet)
+  assert.equal(calls.length, 1);
+
+  slider.value = "60";
+  listeners.input(); // within the throttle window: queued, not sent
+  assert.equal(calls.length, 1);
+  assert.equal(timers.length, 1);
+
+  slider.value = "65";
+  listeners.input(); // still dragging: replaces the queued timer, not a second one
+  assert.equal(calls.length, 1);
+  assert.equal(timers.length, 1);
+
+  timers[0].fn(); // the throttle window elapses
+  // The first tick's send is still in flight (one send at a time, see _wireLights), so
+  // this one is queued behind it rather than firing immediately - let that first send's
+  // promise settle so the queued one fires.
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(calls.length, 2);
+  assert.deepEqual(plain(calls[1]), {
+    domain: "light",
+    service: "turn_on",
+    data: { entity_id: "light.kitchen", brightness_pct: 65 }, // the latest position, not 60
+  });
+});
+
+test("a slow round trip does not let a later throttled tick overlap the still-in-flight send", () => {
+  const timers = [];
+  let nextId = 1;
+  const PanelClass = loadPanelClass({
+    setTimeout(fn) {
+      const id = nextId++;
+      timers.push({ id, fn });
+      return id;
+    },
+    clearTimeout(id) {
+      const i = timers.findIndex((t) => t.id === id);
+      if (i !== -1) timers.splice(i, 1);
+    },
+  });
+  const panel = new PanelClass();
+  const calls = [];
+  panel._hass = {
+    states: {},
+    // Never resolves during this test - simulates a round trip slower than the throttle
+    // window, the scenario a fast drag would otherwise flood with overlapping sends.
+    callService: (domain, service, data) => {
+      calls.push({ domain, service, data });
+      return new Promise(() => {});
+    },
+  };
+
+  const listeners = {};
+  const levelSpan = { textContent: "40%" };
+  const slider = {
+    value: "40",
+    getAttribute: (name) => (name === "data-brightness" ? "light.kitchen" : null),
+    addEventListener: (ev, fn) => {
+      listeners[ev] = fn;
+    },
+  };
+  const el = {
+    querySelectorAll: (sel) => (sel === "[data-brightness]" ? [slider] : []),
+    querySelector: (sel) => (sel === '[data-level="light.kitchen"]' ? levelSpan : null),
+  };
+
+  panel._wireLights(el);
+
+  slider.value = "50";
+  listeners.input(); // sends immediately, never resolves
+  assert.equal(calls.length, 1);
+
+  slider.value = "60";
+  listeners.input(); // queued behind the throttle timer
+  timers[0].fn(); // throttle window elapses, but the first send is still in flight
+
+  // Still only the one in-flight call - the newer pct is coalesced, not fired alongside it.
+  assert.equal(calls.length, 1);
+});
+
+test("a queued brightness value is optimistic immediately, not only once it actually sends", () => {
+  const timers = [];
+  let nextId = 1;
+  const PanelClass = loadPanelClass({
+    setTimeout(fn) {
+      const id = nextId++;
+      timers.push({ id, fn });
+      return id;
+    },
+    clearTimeout(id) {
+      const i = timers.findIndex((t) => t.id === id);
+      if (i !== -1) timers.splice(i, 1);
+    },
+  });
+  const panel = new PanelClass();
+  panel._hass = { states: {}, callService: () => new Promise(() => {}) }; // never resolves
+
+  const listeners = {};
+  const levelSpan = { textContent: "" };
+  const slider = {
+    value: "40",
+    getAttribute: (name) => (name === "data-brightness" ? "light.kitchen" : null),
+    addEventListener: (ev, fn) => {
+      listeners[ev] = fn;
+    },
+  };
+  const el = {
+    querySelectorAll: (sel) => (sel === "[data-brightness]" ? [slider] : []),
+    querySelector: (sel) => (sel === '[data-level="light.kitchen"]' ? levelSpan : null),
+  };
+  panel._wireLights(el);
+
+  slider.value = "50";
+  listeners.input(); // sends immediately, never resolves
+  slider.value = "80";
+  listeners.input(); // queued behind the throttle timer
+  timers[0].fn(); // throttle window elapses; the send itself queues behind the in-flight one
+
+  // The row must reflect the latest requested value right away, even though the actual
+  // network send is still queued behind the in-flight one - a render firing before that
+  // queued send goes out (e.g. an unrelated hass push) must not show the stale 50.
+  assert.equal(panel._brightnessOverrides["light.kitchen"], 80);
+});
+
+test("a re-wired slider (e.g. after a re-render) still respects a send already in flight", () => {
+  const panel_ = new (loadPanelClass())();
+  panel_.querySelector = () => null;
+  const calls = [];
+  panel_._hass = { states: {}, callService: (d, s, data) => (calls.push({ d, s, data }), new Promise(() => {})) };
+
+  const makeSlider = () => {
+    const listeners = {};
+    const slider = {
+      value: "40",
+      getAttribute: (name) => (name === "data-brightness" ? "light.kitchen" : null),
+      addEventListener: (ev, fn) => {
+        listeners[ev] = fn;
+      },
+    };
+    const el = {
+      querySelectorAll: (sel) => (sel === "[data-brightness]" ? [slider] : []),
+      querySelector: () => null,
+    };
+    panel_._wireLights(el);
+    return { slider, listeners };
+  };
+
+  const first = makeSlider();
+  first.slider.value = "50";
+  first.listeners.change(); // sends immediately, never resolves - simulates a slow round trip
+  assert.equal(calls.length, 1);
+
+  // A re-render rebuilds the DOM and rewires a brand-new slider/closure for the same
+  // entity while the first send is still in flight.
+  const second = makeSlider();
+  second.slider.value = "90";
+  second.listeners.change();
+
+  // The second must not overlap the still-in-flight first call - it's coalesced instead.
+  assert.equal(calls.length, 1);
+});
+
+test("releasing the slider sends the exact final value and cancels a pending throttled send", async () => {
+  const timers = [];
+  let nextId = 1;
+  const cleared = [];
+  const PanelClass = loadPanelClass({
+    setTimeout(fn) {
+      const id = nextId++;
+      timers.push({ id, fn });
+      return id;
+    },
+    clearTimeout(id) {
+      cleared.push(id);
+      const i = timers.findIndex((t) => t.id === id);
+      if (i !== -1) timers.splice(i, 1);
+    },
+  });
+  const panel = new PanelClass();
+  const calls = [];
+  panel._hass = {
+    states: {},
+    callService: (domain, service, data) => {
+      calls.push({ domain, service, data });
+      return Promise.resolve();
+    },
+  };
+
+  const listeners = {};
+  const levelSpan = { textContent: "40%" };
+  const slider = {
+    value: "40",
+    getAttribute: (name) => (name === "data-brightness" ? "light.kitchen" : null),
+    addEventListener: (ev, fn) => {
+      listeners[ev] = fn;
+    },
+  };
+  const el = {
+    querySelectorAll: (sel) => (sel === "[data-brightness]" ? [slider] : []),
+    querySelector: (sel) => (sel === '[data-level="light.kitchen"]' ? levelSpan : null),
+  };
+
+  panel._wireLights(el);
+
+  slider.value = "50";
+  listeners.input(); // sends immediately
+  slider.value = "72";
+  listeners.input(); // throttled: queues a trailing send at 72
+
+  assert.equal(timers.length, 1);
+  const queuedTimerId = timers[0].id;
+
+  listeners.change();
+  // The first tick's send is still in flight, so this one is queued behind it - let that
+  // first send's promise settle so the queued one fires.
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(cleared, [queuedTimerId]); // the queued send is canceled, not left to fire later
+  assert.equal(calls.length, 2);
+  assert.deepEqual(plain(calls[1]), {
+    domain: "light",
+    service: "turn_on",
+    data: { entity_id: "light.kitchen", brightness_pct: 72 },
+  });
+  assert.equal(panel._draggingEntity, null);
+});
+
+test("releasing the slider schedules a catch-up render for any hass push skipped mid-drag", () => {
+  const frames = [];
+  const PanelClass = loadPanelClass({
+    requestAnimationFrame(callback) {
+      frames.push(callback);
+      return frames.length;
+    },
+    cancelAnimationFrame() {},
+  });
+  const panel = new PanelClass();
+  panel._hass = { states: {}, callService: () => Promise.resolve() };
+
+  const listeners = {};
+  const slider = {
+    value: "50",
+    getAttribute: (name) => (name === "data-brightness" ? "light.kitchen" : null),
+    addEventListener: (ev, fn) => {
+      listeners[ev] = fn;
+    },
+  };
+  const el = {
+    querySelectorAll: (sel) => (sel === "[data-brightness]" ? [slider] : []),
+    querySelector: () => null,
+  };
+
+  panel._wireLights(el);
+  listeners.change();
+
+  assert.equal(frames.length, 1); // a render was scheduled, not left for some later unrelated push
+});
+
+test("a failed toggle service call is caught and logged, not thrown", async () => {
+  const warnings = [];
+  const PanelClass = loadPanelClass({ console: { ...console, warn: (...args) => warnings.push(args) } });
+  const panel = new PanelClass();
+  panel._hass = { states: { "light.kitchen": { state: "off" } }, callService: () => Promise.reject(new Error("boom")) };
+  panel.querySelector = () => null;
+
+  await panel._toggleLight("light.kitchen", true);
+
+  assert.equal(warnings.length, 1);
+});
+
+test("a failed toggle drops its optimistic override instead of leaving the row stuck", async () => {
+  const PanelClass = loadPanelClass({ console: { ...console, warn: () => {} } });
+  const panel = new PanelClass();
+  panel._hass = { states: { "light.kitchen": { state: "off" } }, callService: () => Promise.reject(new Error("boom")) };
+  panel.querySelector = () => null;
+  panel._toggleOverrides = { "light.kitchen": true };
+
+  await panel._toggleLight("light.kitchen", true);
+
+  assert.deepEqual(panel._toggleOverrides, {});
+});
+
+test("a stale toggle failure does not clear a newer toggle intent with the same boolean value", async () => {
+  // Rapid clicks can repeat the same intent (off -> on -> off -> on): if the FIRST "on"
+  // call rejects after the SECOND "on" call has already re-set the same override value,
+  // a plain value comparison would incorrectly treat them as the same request and clear
+  // the still-current one.
+  const PanelClass = loadPanelClass({ console: { ...console, warn: () => {} } });
+  const panel = new PanelClass();
+  panel.querySelector = () => null;
+  let reject;
+  let sent = 0;
+  panel._hass = {
+    states: {},
+    callService: () => {
+      sent += 1;
+      return sent === 1 ? new Promise((_resolve, r) => (reject = r)) : Promise.resolve();
+    },
+  };
+
+  const first = panel._toggleLight("light.kitchen", true);
+  const second = panel._toggleLight("light.kitchen", true); // same intent, supersedes the first
+  await second;
+  reject(new Error("boom")); // the older, superseded call now rejects
+  await first.catch(() => {});
+
+  assert.equal(panel._toggleOverrides["light.kitchen"], true);
+});
+
+test("a failed brightness service call is caught and logged, not thrown", async () => {
+  const warnings = [];
+  const PanelClass = loadPanelClass({ console: { ...console, warn: (...args) => warnings.push(args) } });
+  const panel = new PanelClass();
+  panel._hass = { states: {}, callService: () => Promise.reject(new Error("boom")) };
+  panel.querySelector = () => null;
+
+  await panel._setLightBrightness("light.kitchen", 50);
+
+  assert.equal(warnings.length, 1);
+});
+
+test("a failed brightness service call rolls back both optimistic overrides", async () => {
+  const PanelClass = loadPanelClass({ console: { ...console, warn: () => {} } });
+  const panel = new PanelClass();
+  panel._hass = { states: {}, callService: () => Promise.reject(new Error("boom")) };
+  panel.querySelector = () => null;
+
+  await panel._setLightBrightness("light.kitchen", 50);
+
+  assert.equal(panel._toggleOverrides["light.kitchen"], undefined);
+  assert.equal(panel._brightnessOverrides["light.kitchen"], undefined);
+});
+
+test("a stale brightness failure does not clear a newer optimistic toggle override", async () => {
+  const PanelClass = loadPanelClass({ console: { ...console, warn: () => {} } });
+  const panel = new PanelClass();
+  panel.querySelector = () => null;
+  let reject;
+  let sent = 0;
+  panel._hass = {
+    states: {},
+    callService: () => {
+      sent += 1;
+      // The first (older) send never resolves during this test - only the second does.
+      return sent === 1 ? new Promise((_resolve, r) => (reject = r)) : Promise.resolve();
+    },
+  };
+
+  const first = panel._setLightBrightness("light.kitchen", 50);
+  const second = panel._setLightBrightness("light.kitchen", 80); // supersedes the first
+  await second;
+  reject(new Error("boom")); // the older, superseded send now rejects
+  await first.catch(() => {});
+
+  // The newer send's own optimistic state must survive the older, now-irrelevant failure.
+  assert.equal(panel._toggleOverrides["light.kitchen"], true);
+  assert.equal(panel._brightnessOverrides["light.kitchen"], 80);
 });
 
 test("_updateCovers renders the current Plejd covers list", () => {
@@ -734,7 +1391,7 @@ test("_updateCovers treats a blank current_position as unknown, not closed", () 
 test("_updateLights also refreshes the climate section on the same coalesced pass", () => {
   const PanelClass = loadPanelClass();
   const panel = new PanelClass();
-  const lights = { innerHTML: "" };
+  const lights = { innerHTML: "", querySelectorAll: () => [] };
   const climate = { innerHTML: "", querySelectorAll: () => [] };
 
   panel.querySelector = (selector) =>
@@ -1372,7 +2029,6 @@ test("_updateHealth is a no-op when the panel DOM isn't mounted yet", () => {
   assert.doesNotThrow(() => panel._updateHealth());
 });
 
-
 test("deleting a binding preserves an in-progress add form", async () => {
   const PanelClass = loadPanelClass();
   const panel = new PanelClass();
@@ -1416,6 +2072,7 @@ test("first hass assignment loads area and device registries over websocket", as
 
   panel._renderShell = () => {};
   panel._loadBindings = () => {};
+  panel._loadSchedules = () => {};
   panel._scheduleLightsUpdate = () => {};
   panel._scheduleCoversUpdate = () => {};
   panel._renderEditor = () => {};
@@ -1589,6 +2246,7 @@ test("registry loading failure keeps registries empty and logs a warning", async
 
   panel._renderShell = () => {};
   panel._loadBindings = () => {};
+  panel._loadSchedules = () => {};
   panel._scheduleLightsUpdate = () => {};
   panel._scheduleCoversUpdate = () => {};
   panel._renderEditor = () => {};
@@ -2286,4 +2944,366 @@ test("the bindings list summarizes press actions alongside up/down/stop", () => 
   assert.match(bindingsEl.innerHTML, /3 press actions/);
   assert.match(bindingsEl.innerHTML, /1 press action(?!s)/);
   assert.match(bindingsEl.innerHTML, /Remote B/); // press-only binding's device via its first press trigger
+});
+
+// ── schedules ────────────────────────────────────────────────────────────────
+
+function scheduleFormEl(values, days = []) {
+  const dayEls = days.map((day) => ({
+    checked: true,
+    getAttribute: (attr) => (attr === "data-sched-day" ? String(day) : null),
+  }));
+  return {
+    querySelector: (sel) => (sel in values ? { value: values[sel] } : null),
+    querySelectorAll: (sel) => (sel === "[data-sched-day]" ? dayEls : []),
+  };
+}
+
+test("_renderSchedules shows a loading state before the first list resolves", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const el = { innerHTML: "", querySelector: () => null, querySelectorAll: () => [] };
+  panel.querySelector = (sel) => (sel === "#plejd-schedules" ? el : null);
+
+  panel._renderSchedules();
+
+  assert.match(el.innerHTML, /Loading…/);
+});
+
+test("_renderSchedules shows a retry button after a failed load", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._schedulesLoadFailed = true;
+  panel._scheduleError = "Could not load schedules: boom";
+  const listeners = {};
+  const retryBtn = { addEventListener: (ev, fn) => (listeners[ev] = fn) };
+  const el = {
+    innerHTML: "",
+    querySelector: (sel) => (sel === "#sched-retry" ? retryBtn : null),
+    querySelectorAll: () => [],
+  };
+  panel.querySelector = (sel) => (sel === "#plejd-schedules" ? el : null);
+  let retried = false;
+  panel._retryScheduleLoad = () => {
+    retried = true;
+  };
+
+  panel._renderSchedules();
+  assert.match(el.innerHTML, /Could not load schedules: boom/);
+  listeners.click();
+  assert.equal(retried, true);
+});
+
+test("_renderSchedules lists existing schedules with days, time, scene, and fade", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._schedules = [{ id: 0, name: "Evening", days: [0, 6], time: "18:30:00", scene: 3, fade: 5 }];
+  panel._scheduleScenes = [{ index: 3, name: "Movie" }];
+  const el = { innerHTML: "", querySelector: () => null, querySelectorAll: () => [] };
+  panel.querySelector = (sel) => (sel === "#plejd-schedules" ? el : null);
+
+  panel._renderSchedules();
+
+  assert.match(el.innerHTML, /Evening/);
+  assert.match(el.innerHTML, /Mon, Sun/);
+  assert.match(el.innerHTML, /18:30:00/);
+  assert.match(el.innerHTML, /Movie/);
+  assert.match(el.innerHTML, /5s fade/);
+  assert.match(el.innerHTML, /data-sched-del="0"/);
+});
+
+test("_renderSchedules falls back to a placeholder scene name for an unknown index", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._schedules = [{ id: 0, name: "Morning", days: [], time: "06:00:00", scene: 9, fade: 0 }];
+  panel._scheduleScenes = [];
+  const el = { innerHTML: "", querySelector: () => null, querySelectorAll: () => [] };
+  panel.querySelector = (sel) => (sel === "#plejd-schedules" ? el : null);
+
+  panel._renderSchedules();
+
+  assert.match(el.innerHTML, /Scene 9/);
+  assert.match(el.innerHTML, /— · 06:00:00/); // no days selected
+});
+
+test("_renderSchedules shows a placeholder when there are no schedules yet", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._schedules = [];
+  const el = { innerHTML: "", querySelector: () => null, querySelectorAll: () => [] };
+  panel.querySelector = (sel) => (sel === "#plejd-schedules" ? el : null);
+
+  panel._renderSchedules();
+
+  assert.match(el.innerHTML, /No schedules yet\./);
+});
+
+test("_onScheduleSave rejects a blank name without calling the backend", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._schedules = [];
+  panel._renderSchedules = () => {};
+  let called = false;
+  panel._saveSchedule = () => {
+    called = true;
+  };
+  const el = scheduleFormEl({ "#sched-name": "  ", "#sched-scene": "3", "#sched-time": "06:00", "#sched-fade": "0" });
+
+  panel._onScheduleSave(el);
+
+  assert.equal(called, false);
+  assert.match(panel._scheduleError, /Name is required/);
+});
+
+test("_onScheduleSave rejects when no day is selected", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._renderSchedules = () => {};
+  let called = false;
+  panel._saveSchedule = () => {
+    called = true;
+  };
+  const el = scheduleFormEl({ "#sched-name": "X", "#sched-scene": "3", "#sched-time": "06:00", "#sched-fade": "0" });
+
+  panel._onScheduleSave(el);
+
+  assert.equal(called, false);
+  assert.match(panel._scheduleError, /Pick at least one day/);
+});
+
+test("_onScheduleSave rejects an invalid time", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._renderSchedules = () => {};
+  let called = false;
+  panel._saveSchedule = () => {
+    called = true;
+  };
+  const el = scheduleFormEl(
+    { "#sched-name": "X", "#sched-scene": "3", "#sched-time": "not-a-time", "#sched-fade": "0" },
+    [0],
+  );
+
+  panel._onScheduleSave(el);
+
+  assert.equal(called, false);
+  assert.match(panel._scheduleError, /Pick a valid time/);
+});
+
+test("_onScheduleSave rejects when no scene is picked", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._renderSchedules = () => {};
+  let called = false;
+  panel._saveSchedule = () => {
+    called = true;
+  };
+  const el = scheduleFormEl({ "#sched-name": "X", "#sched-scene": "", "#sched-time": "06:00", "#sched-fade": "0" }, [
+    0,
+  ]);
+
+  panel._onScheduleSave(el);
+
+  assert.equal(called, false);
+  assert.match(panel._scheduleError, /Pick a scene/);
+});
+
+test("_onScheduleSave rejects a negative fade", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._renderSchedules = () => {};
+  let called = false;
+  panel._saveSchedule = () => {
+    called = true;
+  };
+  const el = scheduleFormEl(
+    { "#sched-name": "X", "#sched-scene": "3", "#sched-time": "06:00", "#sched-fade": "-1" },
+    [0],
+  );
+
+  panel._onScheduleSave(el);
+
+  assert.equal(called, false);
+  assert.match(panel._scheduleError, /Fade must be zero or a positive number/);
+});
+
+test("_onScheduleSave sends a normalized payload when the form is valid", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._renderSchedules = () => {};
+  let payload;
+  panel._saveSchedule = (p) => {
+    payload = p;
+  };
+  const el = scheduleFormEl(
+    { "#sched-name": "  Evening  ", "#sched-scene": "3", "#sched-time": "18:30", "#sched-fade": "5" },
+    [6, 0],
+  );
+
+  panel._onScheduleSave(el);
+
+  assert.deepEqual(plain(payload), { name: "Evening", days: [0, 6], time: "18:30", scene: 3, fade: 5 });
+});
+
+test("_saveSchedule adds a schedule and resets the form on success", async () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._renderSchedules = () => {};
+  panel._scheduleForm = { name: "Evening", days: [0], time: "18:30", scene: "3", fade: 0 };
+  let sentMsg;
+  panel._callWS = (msg) => {
+    sentMsg = msg;
+    return Promise.resolve({ schedules: [{ id: 0, name: "Evening" }] });
+  };
+
+  await panel._saveSchedule({ name: "Evening", days: [0], time: "18:30", scene: 3, fade: 0 });
+
+  assert.equal(sentMsg.type, "plejd/schedules/add");
+  assert.deepEqual(panel._schedules, [{ id: 0, name: "Evening" }]);
+  assert.equal(panel._scheduleForm.name, "");
+  assert.deepEqual(plain(panel._scheduleForm.days), []);
+  assert.equal(panel._scheduleNotice, "Saved.");
+});
+
+test("_saveSchedule surfaces a reload_failed warning instead of a plain Saved notice", async () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._renderSchedules = () => {};
+  panel._scheduleForm = { name: "Evening", days: [0], time: "18:30", scene: "3", fade: 0 };
+  panel._callWS = () =>
+    Promise.resolve({
+      schedules: [{ id: 0, name: "Evening" }],
+      reload_failed: "Schedule saved, but Plejd failed to reload; try again",
+    });
+
+  await panel._saveSchedule({ name: "Evening", days: [0], time: "18:30", scene: 3, fade: 0 });
+
+  // The save DID succeed (the form still resets) - only the notice must warn that the
+  // integration didn't reload, instead of quietly saying "Saved." as if all were well.
+  assert.equal(panel._scheduleNotice, "Schedule saved, but Plejd failed to reload; try again");
+  assert.equal(panel._scheduleForm.name, "");
+});
+
+test("_saveSchedule surfaces a backend error without resetting the form", async () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._renderSchedules = () => {};
+  panel._scheduleForm = { name: "Evening", days: [0], time: "18:30", scene: "3", fade: 0 };
+  panel._callWS = () => Promise.reject(new Error("no_free_slots"));
+
+  await panel._saveSchedule({ name: "Evening", days: [0], time: "18:30", scene: 3, fade: 0 });
+
+  assert.equal(panel._scheduleError, "no_free_slots");
+  assert.equal(panel._scheduleForm.name, "Evening"); // not reset on failure
+  assert.equal(panel._scheduleBusy, false);
+});
+
+test("deleting a schedule preserves an in-progress add form", async () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._schedules = [{ id: 0, name: "Keep" }, { id: 1, name: "Drop" }];
+  panel._renderSchedules = () => {};
+  let sentMsg;
+  panel._callWS = (msg) => {
+    sentMsg = msg;
+    return Promise.resolve({ schedules: [{ id: 0, name: "Keep" }] });
+  };
+  const el = scheduleFormEl(
+    { "#sched-name": "New one", "#sched-scene": "3", "#sched-time": "07:00", "#sched-fade": "0" },
+    [1],
+  );
+
+  panel._onScheduleDelete(el, 1);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(sentMsg.type, "plejd/schedules/delete");
+  assert.equal(sentMsg.schedule_id, 1);
+  assert.deepEqual(panel._schedules, [{ id: 0, name: "Keep" }]);
+  assert.equal(panel._scheduleForm.name, "New one"); // in-progress add survives the delete
+});
+
+test("_deleteSchedule surfaces a reload_failed warning", async () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._renderSchedules = () => {};
+  panel._callWS = () =>
+    Promise.resolve({
+      schedules: [],
+      reload_failed: "Schedule saved, but Plejd failed to reload; try again",
+    });
+
+  await panel._deleteSchedule(1);
+
+  // The delete DID persist - the removed schedule may still be programmed on the device,
+  // so silence here would leave the user thinking it's gone when it might not be.
+  assert.equal(panel._scheduleNotice, "Schedule saved, but Plejd failed to reload; try again");
+});
+
+test("a day checkbox toggles the day in the form via _wireSchedules", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const listeners = {};
+  const dayEl = {
+    checked: true,
+    getAttribute: () => "2",
+    addEventListener: (ev, fn) => (listeners[ev] = fn),
+  };
+  const el = {
+    querySelectorAll: (sel) => (sel === "[data-sched-day]" ? [dayEl] : []),
+    querySelector: () => null,
+  };
+
+  panel._wireSchedules(el);
+  listeners.change({ target: dayEl });
+  assert.deepEqual(plain(panel._scheduleForm.days), [2]);
+
+  dayEl.checked = false;
+  listeners.change({ target: dayEl });
+  assert.deepEqual(plain(panel._scheduleForm.days), []);
+});
+
+test("_wireSchedules routes a delete button click through _onScheduleDelete", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  let deletedId;
+  panel._onScheduleDelete = (_el, id) => {
+    deletedId = id;
+  };
+  const listeners = {};
+  const delBtn = {
+    getAttribute: () => "4",
+    addEventListener: (ev, fn) => (listeners[ev] = fn),
+  };
+  const el = {
+    querySelectorAll: (sel) => (sel === "[data-sched-del]" ? [delBtn] : []),
+    querySelector: () => null,
+  };
+
+  panel._wireSchedules(el);
+  listeners.click();
+
+  assert.equal(deletedId, "4");
+});
+
+test("_onScheduleSave and _onScheduleDelete are no-ops while a save/delete is in flight", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._scheduleBusy = true;
+  let saveCalled = false;
+  let deleteCalled = false;
+  panel._saveSchedule = () => {
+    saveCalled = true;
+  };
+  panel._deleteSchedule = () => {
+    deleteCalled = true;
+  };
+  const el = scheduleFormEl({ "#sched-name": "X", "#sched-scene": "3", "#sched-time": "06:00", "#sched-fade": "0" }, [
+    0,
+  ]);
+
+  panel._onScheduleSave(el);
+  panel._onScheduleDelete(el, 1);
+
+  assert.equal(saveCalled, false);
+  assert.equal(deleteCalled, false);
 });

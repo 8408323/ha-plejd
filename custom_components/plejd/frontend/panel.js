@@ -1,8 +1,8 @@
 // Plejd dashboard — a custom Home Assistant sidebar panel (not a Lovelace view).
 // Home Assistant sets `hass`, `narrow`, `route`, and `panel` properties on this element.
-// It lists the site's Plejd lights, thermostats, and scenes, and hosts the remote →
-// light dim-binding editor: map a dimmer remote's hold/release device triggers to
-// smooth dimming of a light or area.
+// It lists the site's Plejd lights (tap to toggle, drag to dim), thermostats, and
+// scenes, and hosts the remote → light dim-binding editor: map a dimmer remote's
+// hold/release device triggers to smooth dimming of a light or area.
 
 const CARD = `
   background: var(--card-background-color, #fff);
@@ -21,6 +21,9 @@ const BTN = `
   background: var(--primary-color, #03a9f4); color: var(--text-primary-color, #fff);
 `;
 const LABEL = "display:block;font-size:.8rem;color:var(--secondary-text-color,#727272);margin:0 0 4px";
+// Minimum gap between live brightness commands while dragging a slider — matches
+// DIM_INTERVAL in dim_ramp.py, the same pacing the hold-to-dim ramp uses per tick.
+const DRAG_SEND_INTERVAL_MS = 100;
 
 // Entity/area/device names are user-controlled; escape before interpolating into innerHTML.
 const esc = (s) =>
@@ -61,6 +64,9 @@ const PRESS_ACTION_LABELS = {
   service: "Call service",
 };
 
+// Weekday labels for the schedule day picker (index 0=Mon..6=Sun, mirrors const.py WEEKDAYS).
+const WEEKDAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
 class PlejdPanel extends HTMLElement {
   constructor() {
     super();
@@ -75,6 +81,13 @@ class PlejdPanel extends HTMLElement {
     this._error = "";
     this._notice = "";
     this._busy = false;
+    this._schedules = null; // loaded list, null until the first WS list resolves (or a failed load)
+    this._schedulesLoadFailed = false;
+    this._scheduleScenes = []; // on-device scenes (index + name), for the scene picker
+    this._scheduleForm = { name: "", days: [], time: "07:00", scene: "", fade: 0 };
+    this._scheduleError = "";
+    this._scheduleNotice = "";
+    this._scheduleBusy = false;
     this._scenesError = "";
     this._lightsFrame = null;
     this._coversFrame = null;
@@ -85,6 +98,28 @@ class PlejdPanel extends HTMLElement {
     // entity_id of a position slider mid-drag, else null — guards _updateCovers so a hass
     // state push mid-drag can't replace the <input> before its release "change" handler runs.
     this._draggingCoverEntity = null;
+    this._draggingEntity = null; // entity_id of a brightness slider mid-drag, else null
+    // entity_id -> optimistic on/off from a just-sent toggle, until hass's own push catches
+    // up. Repeated clicks arrive well within the round-trip to the backend (mesh/gateway
+    // ack plus the websocket push back to this tab), so reading hass.states directly on
+    // every click reads the same pre-toggle value each time and sends the same command
+    // repeatedly instead of alternating - this is what a click actually just did.
+    this._toggleOverrides = {};
+    // entity_id -> optimistic brightness pct from a just-sent slider command, until hass's
+    // own push catches up. Mirrors _toggleOverrides: the catch-up render scheduled on slider
+    // release fires well before the real state push arrives, and without this it would
+    // redraw the slider back to the stale pre-drag value for a moment.
+    this._brightnessOverrides = {};
+    // entity_id -> integer, bumped on every toggle/brightness command for that light. Lets
+    // an async command's own failure handler tell whether a newer command has since
+    // superseded it (by value alone, the same true/pct can recur - e.g. off/on/off/on -
+    // so a stale rejection could otherwise clear an unrelated, newer optimistic override).
+    this._commandTokens = {};
+    // entity_id -> { sending, queuedPct } - brightness-send serialization, kept on the
+    // panel instance rather than a per-render closure so a mid-drag re-render (a new
+    // DOM element, a fresh _wireLights closure) doesn't lose track of a send already in
+    // flight and let a new drag's send overlap it.
+    this._brightnessSendState = {};
     // entity_id -> optimistic target temperature from a just-sent setpoint tap, until
     // hass's own push catches up. Repeated taps arrive well within that round-trip, so
     // reading hass.states directly on every tap would recompute from the same pre-tap
@@ -109,6 +144,7 @@ class PlejdPanel extends HTMLElement {
       this._renderShell();
       this._loadBindings();
       this._loadRegistries();
+      this._loadSchedules();
     }
     // Only the live lists (lights/climate/motion/scenes/health/covers) track state; leave
     // the editor DOM (and any in-progress form entry) untouched on the frequent hass updates.
@@ -142,6 +178,7 @@ class PlejdPanel extends HTMLElement {
     // fire its release "change" event on this detached node; clear the guard so a future
     // reconnect's render isn't skipped forever.
     this._draggingCoverEntity = null;
+    this._draggingEntity = null;
   }
 
   // ── data ──────────────────────────────────────────────────────────────────
@@ -240,6 +277,79 @@ class PlejdPanel extends HTMLElement {
     } finally {
       this._busy = false;
       this._renderEditor();
+    }
+  }
+
+  // A fresh token for entityId, so this command's own failure handler can later tell
+  // whether a newer command has since superseded it (see _commandTokens above).
+  _nextCommandToken(entityId) {
+    const token = (this._commandTokens[entityId] || 0) + 1;
+    this._commandTokens[entityId] = token;
+    return token;
+  }
+
+  async _toggleLight(entityId, turnOn) {
+    const token = this._nextCommandToken(entityId);
+    this._toggleOverrides[entityId] = turnOn;
+    try {
+      await this._hass.callService("light", turnOn ? "turn_on" : "turn_off", { entity_id: entityId });
+    } catch (err) {
+      console.warn("Plejd panel: failed to toggle light", entityId, err);
+      // The command never went out - don't keep claiming it did. Drop the optimistic
+      // override, but only if no newer command for this entity has superseded it.
+      if (this._commandTokens[entityId] === token) {
+        delete this._toggleOverrides[entityId];
+        this._updateLights();
+      }
+    }
+  }
+
+  // Records the optimistic on/pct intent immediately - even when the actual send below
+  // ends up queued behind an in-flight one - so a render in the meantime (e.g. the
+  // catch-up render on slider release) shows the truly-latest requested value instead of
+  // whatever was last actually sent.
+  _recordBrightnessIntent(entityId, pct) {
+    const token = this._nextCommandToken(entityId);
+    this._toggleOverrides[entityId] = true; // brightness_pct always turns the light on
+    this._brightnessOverrides[entityId] = pct;
+    return token;
+  }
+
+  async _setLightBrightness(entityId, pct) {
+    const token = this._recordBrightnessIntent(entityId, pct);
+    let state = this._brightnessSendState[entityId];
+    if (!state) {
+      state = { sending: false, queuedPct: null };
+      this._brightnessSendState[entityId] = state;
+    }
+    // One send in flight at a time: a slow round-trip can otherwise overlap sends, and
+    // since they aren't guaranteed to land in the order they were sent, an older one
+    // could reach the transport after a newer one and leave the light at a stale
+    // brightness. While a send is in flight, remember only the latest requested pct
+    // (like PlejdDimRamp._run's own coalescing) and fire that once it completes.
+    if (state.sending) {
+      state.queuedPct = pct;
+      return;
+    }
+    state.sending = true;
+    try {
+      await this._hass.callService("light", "turn_on", { entity_id: entityId, brightness_pct: pct });
+    } catch (err) {
+      console.warn("Plejd panel: failed to set brightness", entityId, err);
+      // Only roll back if no newer command for this entity (toggle or brightness) has
+      // superseded this one - it may have already succeeded, or still be in flight.
+      if (this._commandTokens[entityId] === token) {
+        delete this._brightnessOverrides[entityId];
+        delete this._toggleOverrides[entityId];
+        this._updateLights();
+      }
+    } finally {
+      state.sending = false;
+      if (state.queuedPct !== null) {
+        const next = state.queuedPct;
+        state.queuedPct = null;
+        this._setLightBrightness(entityId, next);
+      }
     }
   }
 
@@ -473,11 +583,13 @@ class PlejdPanel extends HTMLElement {
         <div id="plejd-scenes" style="${CARD};margin-top:16px"></div>
         <div id="plejd-health" style="${CARD};margin-top:16px"></div>
         <div id="plejd-covers" style="${CARD};margin-top:16px"></div>
+        <div id="plejd-schedules" style="${CARD};margin-top:16px"></div>
         <div id="plejd-bindings" style="${CARD};margin-top:16px"></div>
       </div>`;
     this._updateScenes();
     this._updateHealth();
     this._renderEditor();
+    this._renderSchedules();
   }
 
   _scheduleLightsUpdate() {
@@ -494,19 +606,48 @@ class PlejdPanel extends HTMLElement {
   _updateLights() {
     const el = this.querySelector("#plejd-lights");
     if (!el) return;
+    // A slider mid-drag owns its own DOM node (native pointer capture); replacing the
+    // whole list via innerHTML would kill the drag. Skip this refresh and pick it back
+    // up once the drag ends and the next hass update schedules one.
+    if (this._draggingEntity) return;
     const lights = this._lights();
     const rows = lights
       .map((s) => {
         const name = s.attributes.friendly_name || s.entity_id;
-        const on = s.state === "on";
+        const unavailable = s.state === "unavailable";
+        const override = this._toggleOverrides[s.entity_id];
+        const realOn = s.state === "on";
+        if (override !== undefined && override === realOn) delete this._toggleOverrides[s.entity_id];
+        const on = override !== undefined ? override : realOn;
         const bri = s.attributes.brightness;
-        const level = on && bri != null ? `${Math.round((bri / 255) * 100)}%` : on ? "on" : "off";
-        const dot = on ? "var(--state-light-active-color, #fdd835)" : "var(--disabled-text-color, #9e9e9e)";
+        const realPct = bri != null ? Math.round((bri / 255) * 100) : 100;
+        const briOverride = this._brightnessOverrides[s.entity_id];
+        if (briOverride !== undefined && briOverride === realPct) delete this._brightnessOverrides[s.entity_id];
+        const pct = briOverride !== undefined ? briOverride : realPct;
+        const level = unavailable ? "unavailable" : on && bri != null ? `${pct}%` : on ? "on" : "off";
+        const dimmable = Array.isArray(s.attributes.supported_color_modes)
+          ? s.attributes.supported_color_modes.includes("brightness")
+          : bri != null;
+        const slider = dimmable
+          ? `<input type="range" min="1" max="100" value="${pct}" data-brightness="${esc(s.entity_id)}" ${unavailable ? "disabled" : ""} style="width:100%;margin-top:6px;accent-color:var(--primary-color,#03a9f4)">`
+          : "";
+        // An explicit switch (not just a plain dot) so on/off is an obvious, discoverable
+        // control rather than "click the name and hope" - the name stays clickable too
+        // as a larger, redundant hit target. Disabled (not just dimmed) when unavailable:
+        // clicking can't succeed, so don't invite an optimistic render nothing will confirm.
+        const toggle = `
+          <button type="button" data-toggle="${esc(s.entity_id)}" role="switch" aria-checked="${on}" aria-label="${on ? "Turn off" : "Turn on"} ${esc(name)}" ${unavailable ? "disabled" : ""}
+            style="width:34px;height:20px;flex:none;padding:0;border:none;border-radius:10px;cursor:${unavailable ? "not-allowed" : "pointer"};position:relative;opacity:${unavailable ? ".5" : "1"};background:${on ? "var(--primary-color, #03a9f4)" : "var(--disabled-text-color, #9e9e9e)"}">
+            <span style="position:absolute;top:2px;left:${on ? "16px" : "2px"};width:16px;height:16px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.3)"></span>
+          </button>`;
         return `
-          <div style="display:flex;align-items:center;gap:12px;padding:10px 4px;border-bottom:1px solid var(--divider-color,#e0e0e0)">
-            <span style="width:10px;height:10px;border-radius:50%;background:${dot};flex:none"></span>
-            <span style="flex:1">${esc(name)}</span>
-            <span style="color:var(--secondary-text-color,#727272)">${level}</span>
+          <div style="padding:10px 4px;border-bottom:1px solid var(--divider-color,#e0e0e0)">
+            <div style="display:flex;align-items:center;gap:12px">
+              ${toggle}
+              <span data-toggle="${esc(s.entity_id)}" style="flex:1;${unavailable ? "cursor:not-allowed;opacity:.5" : "cursor:pointer"}">${esc(name)}</span>
+              <span data-level="${esc(s.entity_id)}" style="color:var(--secondary-text-color,#727272)">${level}</span>
+            </div>
+            ${slider}
           </div>`;
       })
       .join("");
@@ -516,8 +657,78 @@ class PlejdPanel extends HTMLElement {
         <span style="color:var(--secondary-text-color,#727272);font-size:.9rem">${lights.length}</span>
       </div>
       ${rows || '<p style="color:var(--secondary-text-color,#727272)">No Plejd lights found.</p>'}`;
+    this._wireLights(el);
     // Climate rides the same coalesced hass-update frame as the lights list above.
     this._updateClimate();
+  }
+
+  _wireLights(el) {
+    el.querySelectorAll("[data-toggle]").forEach((span) => {
+      const entityId = span.getAttribute("data-toggle");
+      span.addEventListener("click", () => {
+        // The toggle <button> respects `disabled`, but the name <span> is a plain element -
+        // guard it here too so an unavailable light can't get an optimistic render for a
+        // service call that can't succeed.
+        if (this._hass.states[entityId]?.state === "unavailable") return;
+        // Prefer our own optimistic override over hass.states: a repeated click well
+        // within the round-trip to the backend must alternate off the last click's
+        // intent, not the pre-click state hass hasn't caught up to yet.
+        const isOn =
+          entityId in this._toggleOverrides ? this._toggleOverrides[entityId] : this._hass.states[entityId]?.state === "on";
+        const nextOn = !isOn;
+        this._toggleLight(entityId, nextOn);
+        this._updateLights();
+      });
+    });
+    el.querySelectorAll("[data-brightness]").forEach((slider) => {
+      const entityId = slider.getAttribute("data-brightness");
+      let lastSent = 0;
+      let pendingTimer = null;
+      // _setLightBrightness serializes/coalesces the actual send itself (state kept on
+      // the panel instance, not here) - this closure only throttles how often it's asked
+      // to send during a drag.
+      const sendNow = (pct) => {
+        lastSent = Date.now();
+        this._setLightBrightness(entityId, pct);
+      };
+      // 'input' fires on every drag tick — send live so the light tracks the slider for
+      // direct feedback, but throttled to DRAG_SEND_INTERVAL_MS (matches the hold-to-dim
+      // ramp's own tick pacing, DIM_INTERVAL in dim_ramp.py) so a fast drag doesn't flood
+      // the mesh; a trailing timer guarantees the final position mid-pause still ships.
+      slider.addEventListener("input", () => {
+        this._draggingEntity = entityId;
+        const levelEl = el.querySelector(`[data-level="${entityId}"]`);
+        if (levelEl) levelEl.textContent = `${slider.value}%`;
+        if (pendingTimer !== null) {
+          clearTimeout(pendingTimer);
+          pendingTimer = null;
+        }
+        const elapsed = Date.now() - lastSent;
+        if (elapsed >= DRAG_SEND_INTERVAL_MS) {
+          sendNow(Number(slider.value));
+        } else {
+          pendingTimer = setTimeout(() => {
+            pendingTimer = null;
+            sendNow(Number(slider.value));
+          }, DRAG_SEND_INTERVAL_MS - elapsed);
+        }
+      });
+      // 'change' fires once on release/keystroke — always send the exact final value,
+      // canceling any still-pending throttled send so it can't overwrite it afterward.
+      slider.addEventListener("change", () => {
+        this._draggingEntity = null;
+        if (pendingTimer !== null) {
+          clearTimeout(pendingTimer);
+          pendingTimer = null;
+        }
+        sendNow(Number(slider.value));
+        // A hass push that arrived mid-drag was skipped (_updateLights() no-ops while
+        // _draggingEntity is set) and _lightsFrame is already clear by then, so nothing
+        // would otherwise re-render until some later, unrelated push happens to arrive -
+        // catch up now instead of leaving the rest of the list stale.
+        this._scheduleLightsUpdate();
+      });
+    });
   }
 
   _updateClimate() {
@@ -1186,6 +1397,255 @@ class PlejdPanel extends HTMLElement {
   _fail(message) {
     this._error = message;
     this._renderEditor();
+  }
+
+  // ── schedules ─────────────────────────────────────────────────────────────
+  //
+  // On-device weekly time -> scene schedules (mirrors the config-flow "Configure ->
+  // Schedules" dialog). Self-contained: its own load/save calls, form state, and render,
+  // independent of the dim-binding editor above.
+
+  async _loadSchedules() {
+    this._schedulesLoadFailed = false;
+    try {
+      const res = await this._callWS({ type: "plejd/schedules/list" });
+      this._schedules = res.schedules || [];
+      this._scheduleScenes = res.scenes || [];
+    } catch (err) {
+      // Keep _schedules unset (not []): mirrors _loadBindings — offer a retry rather than
+      // risk rendering an add form with no valid scene baseline.
+      this._schedules = null;
+      this._schedulesLoadFailed = true;
+      this._scheduleError = `Could not load schedules: ${err.message || err}`;
+    }
+    this._renderSchedules();
+  }
+
+  _retryScheduleLoad() {
+    this._scheduleError = "";
+    this._schedules = null;
+    this._schedulesLoadFailed = false;
+    this._renderSchedules();
+    this._loadSchedules();
+  }
+
+  async _saveSchedule(payload) {
+    this._scheduleBusy = true;
+    this._scheduleError = "";
+    this._scheduleNotice = "";
+    this._renderSchedules();
+    try {
+      const res = await this._callWS({ type: "plejd/schedules/add", ...payload });
+      this._schedules = res.schedules || [];
+      // Saved but the integration didn't reload (see schedule_ws._async_persist) - the
+      // switch may not exist/be programmed yet, so this needs a warning, not "Saved.".
+      this._scheduleNotice = res.reload_failed || "Saved.";
+      this._scheduleForm = { name: "", days: [], time: "07:00", scene: "", fade: 0 };
+    } catch (err) {
+      this._scheduleError = err.message || String(err);
+    } finally {
+      this._scheduleBusy = false;
+      this._renderSchedules();
+    }
+  }
+
+  async _deleteSchedule(scheduleId) {
+    this._scheduleBusy = true;
+    this._scheduleError = "";
+    this._scheduleNotice = "";
+    this._renderSchedules();
+    try {
+      const res = await this._callWS({ type: "plejd/schedules/delete", schedule_id: Number(scheduleId) });
+      this._schedules = res.schedules || [];
+      // Deleted but the integration didn't reload - the removed schedule may still be
+      // programmed on the device, so this needs a warning, not silence.
+      if (res.reload_failed) this._scheduleNotice = res.reload_failed;
+    } catch (err) {
+      this._scheduleError = err.message || String(err);
+    } finally {
+      this._scheduleBusy = false;
+      this._renderSchedules();
+    }
+  }
+
+  _sceneName(index) {
+    return this._scheduleScenes.find((s) => s.index === index)?.name || `Scene ${index}`;
+  }
+
+  _renderSchedules() {
+    const el = this.querySelector("#plejd-schedules");
+    if (!el) return;
+
+    if (this._schedules === null) {
+      el.innerHTML = this._schedulesLoadFailed
+        ? `
+          <h2 style="font-weight:500;font-size:1.05rem;margin:0 0 8px">Schedules</h2>
+          <p style="color:var(--error-color,#db4437);margin:0 0 12px">${esc(this._scheduleError)}</p>
+          <button id="sched-retry" style="${BTN}">Retry</button>`
+        : `
+          <h2 style="font-weight:500;font-size:1.05rem;margin:0 0 8px">Schedules</h2>
+          <p style="color:var(--secondary-text-color,#727272);margin:0">Loading…</p>`;
+      el.querySelector("#sched-retry")?.addEventListener("click", () => this._retryScheduleLoad());
+      return;
+    }
+
+    const list = this._schedules.length
+      ? this._schedules
+          .map((s) => {
+            const days = s.days?.length ? s.days.map((d) => WEEKDAY_LABELS[d]).join(", ") : "—";
+            const fade = s.fade ? ` · ${s.fade}s fade` : "";
+            return `
+              <div style="display:flex;align-items:center;gap:12px;padding:10px 4px;border-bottom:1px solid var(--divider-color,#e0e0e0)">
+                <div style="flex:1">
+                  <div>${esc(s.name)}</div>
+                  <div style="font-size:.8rem;color:var(--secondary-text-color,#727272)">
+                    ${esc(days)} · ${esc(s.time)} · ${esc(this._sceneName(s.scene))}${fade}
+                  </div>
+                </div>
+                <button data-sched-del="${s.id}" style="${BTN};background:var(--error-color,#db4437)">Delete</button>
+              </div>`;
+          })
+          .join("")
+      : '<p style="color:var(--secondary-text-color,#727272);margin:0 0 12px">No schedules yet.</p>';
+
+    const sceneOpts = this._scheduleScenes
+      .map(
+        (s) =>
+          `<option value="${s.index}" ${String(this._scheduleForm.scene) === String(s.index) ? "selected" : ""}>${esc(s.name)}</option>`,
+      )
+      .join("");
+
+    const dayBoxes = WEEKDAY_LABELS.map(
+      (label, i) => `
+        <label style="display:flex;align-items:center;gap:4px;font-size:.9rem">
+          <input type="checkbox" data-sched-day="${i}" ${this._scheduleForm.days.includes(i) ? "checked" : ""}>
+          ${label}
+        </label>`,
+    ).join("");
+
+    const feedback = this._scheduleError
+      ? `<p style="color:var(--error-color,#db4437);margin:12px 0 0">${esc(this._scheduleError)}</p>`
+      : this._scheduleNotice
+        ? `<p style="color:var(--secondary-text-color,#727272);margin:12px 0 0">${esc(this._scheduleNotice)}</p>`
+        : "";
+
+    el.innerHTML = `
+      <h2 style="font-weight:500;font-size:1.05rem;margin:0 0 4px">Schedules</h2>
+      <p style="color:var(--secondary-text-color,#727272);margin:0 0 12px">
+        Run a scene automatically on a weekly schedule, straight from the mesh — no automation needed.
+      </p>
+      ${list}
+      <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--divider-color,#e0e0e0)">
+        <h3 style="font-weight:500;font-size:.95rem;margin:0 0 12px">Add a schedule</h3>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div>
+            <label for="sched-name" style="${LABEL}">Name</label>
+            <input id="sched-name" style="${INPUT}" value="${esc(this._scheduleForm.name)}" placeholder="Evening lights">
+          </div>
+          <div>
+            <label for="sched-scene" style="${LABEL}">Scene</label>
+            <select id="sched-scene" style="${INPUT}">
+              <option value="">Select a scene…</option>
+              ${sceneOpts}
+            </select>
+          </div>
+        </div>
+        <div style="margin-top:12px">
+          <span style="${LABEL}">Days</span>
+          <div style="display:flex;gap:12px;flex-wrap:wrap">${dayBoxes}</div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px">
+          <div>
+            <label for="sched-time" style="${LABEL}">Time</label>
+            <input id="sched-time" type="time" style="${INPUT}" value="${esc(this._scheduleForm.time)}">
+          </div>
+          <div>
+            <label for="sched-fade" style="${LABEL}">Fade (seconds, optional)</label>
+            <input id="sched-fade" type="number" min="0" style="${INPUT}" value="${esc(String(this._scheduleForm.fade))}">
+          </div>
+        </div>
+        ${feedback}
+        <div style="margin-top:16px;text-align:right">
+          <button id="sched-save" style="${BTN}" ${this._scheduleBusy ? "disabled" : ""}>${this._scheduleBusy ? "Saving…" : "Add schedule"}</button>
+        </div>
+      </div>`;
+
+    this._wireSchedules(el);
+  }
+
+  _wireSchedules(el) {
+    el.querySelectorAll("[data-sched-del]").forEach((btn) =>
+      btn.addEventListener("click", () => this._onScheduleDelete(el, btn.getAttribute("data-sched-del"))),
+    );
+    el.querySelector("#sched-name")?.addEventListener("input", (e) => {
+      this._scheduleForm.name = e.target.value;
+    });
+    el.querySelector("#sched-scene")?.addEventListener("change", (e) => {
+      this._scheduleForm.scene = e.target.value;
+    });
+    el.querySelector("#sched-time")?.addEventListener("input", (e) => {
+      this._scheduleForm.time = e.target.value;
+    });
+    el.querySelector("#sched-fade")?.addEventListener("input", (e) => {
+      this._scheduleForm.fade = e.target.value;
+    });
+    el.querySelectorAll("[data-sched-day]").forEach((cb) => {
+      cb.addEventListener("change", (e) => {
+        const day = Number(cb.getAttribute("data-sched-day"));
+        this._scheduleForm.days = e.target.checked
+          ? [...this._scheduleForm.days, day]
+          : this._scheduleForm.days.filter((d) => d !== day);
+      });
+    });
+    el.querySelector("#sched-save")?.addEventListener("click", () => this._onScheduleSave(el));
+  }
+
+  _readScheduleForm(el) {
+    const val = (id) => el.querySelector(id)?.value ?? "";
+    this._scheduleForm.name = val("#sched-name");
+    this._scheduleForm.scene = val("#sched-scene");
+    this._scheduleForm.time = val("#sched-time");
+    this._scheduleForm.fade = val("#sched-fade");
+    const days = [];
+    el.querySelectorAll("[data-sched-day]").forEach((cb) => {
+      if (cb.checked) days.push(Number(cb.getAttribute("data-sched-day")));
+    });
+    this._scheduleForm.days = days;
+  }
+
+  _onScheduleSave(el) {
+    if (this._scheduleBusy) return;
+    this._readScheduleForm(el);
+    this._scheduleError = this._scheduleNotice = "";
+
+    const name = this._scheduleForm.name.trim();
+    if (!name) return this._failSchedule("Name is required.");
+    if (!this._scheduleForm.days.length) return this._failSchedule("Pick at least one day.");
+    if (!/^\d{2}:\d{2}$/.test(this._scheduleForm.time)) return this._failSchedule("Pick a valid time.");
+    if (this._scheduleForm.scene === "") return this._failSchedule("Pick a scene.");
+    const fade = Number(this._scheduleForm.fade === "" ? 0 : this._scheduleForm.fade);
+    if (!Number.isFinite(fade) || fade < 0) {
+      return this._failSchedule("Fade must be zero or a positive number of seconds.");
+    }
+
+    this._saveSchedule({
+      name,
+      days: [...this._scheduleForm.days].sort((a, b) => a - b),
+      time: this._scheduleForm.time,
+      scene: Number(this._scheduleForm.scene),
+      fade,
+    });
+  }
+
+  _onScheduleDelete(el, id) {
+    if (this._scheduleBusy) return;
+    this._readScheduleForm(el); // keep any in-progress add entry across the delete's re-render
+    this._deleteSchedule(id);
+  }
+
+  _failSchedule(message) {
+    this._scheduleError = message;
+    this._renderSchedules();
   }
 }
 
