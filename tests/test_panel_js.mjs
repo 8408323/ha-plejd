@@ -71,6 +71,7 @@ test("hass updates coalesce lights renders to one animation frame", () => {
   let shells = 0;
   let loads = 0;
   let lights = 0;
+  let health = 0;
 
   panel._renderShell = () => {
     shells += 1;
@@ -81,6 +82,9 @@ test("hass updates coalesce lights renders to one animation frame", () => {
   panel._updateLights = () => {
     lights += 1;
   };
+  panel._updateHealth = () => {
+    health += 1;
+  };
 
   panel.hass = { states: {} };
   panel.hass = { states: {} };
@@ -90,9 +94,11 @@ test("hass updates coalesce lights renders to one animation frame", () => {
   assert.equal(loads, 1);
   assert.equal(frames.length, 1);
   assert.equal(lights, 0);
+  assert.equal(health, 0);
 
   frames.shift()();
   assert.equal(lights, 1);
+  assert.equal(health, 1);
 
   panel.hass = { states: {} };
   assert.equal(frames.length, 1);
@@ -113,6 +119,7 @@ test("disconnect cancels a queued lights render", () => {
   panel._renderShell = () => {};
   panel._loadBindings = () => {};
   panel._updateLights = () => {};
+  panel._updateHealth = () => {};
   panel.hass = { states: {} };
   panel.disconnectedCallback();
 
@@ -135,6 +142,7 @@ test("disconnect cancels a queued setTimeout fallback when requestAnimationFrame
   panel._renderShell = () => {};
   panel._loadBindings = () => {};
   panel._updateLights = () => {};
+  panel._updateHealth = () => {};
   panel.hass = { states: {} };
   panel.disconnectedCallback();
 
@@ -182,6 +190,130 @@ test("_updateLights renders the current Plejd lights list", () => {
   assert.doesNotMatch(lights.innerHTML, /Other vendor/);
 });
 
+// ── device health ────────────────────────────────────────────────────────────
+
+test("_updateHealth shows an all-healthy state when no fault sensor is active", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const health = { innerHTML: "" };
+
+  panel.querySelector = (selector) => (selector === "#plejd-health" ? health : null);
+  panel._hass = {
+    states: {
+      "binary_sensor.kitchen_dimmer_fault": {
+        entity_id: "binary_sensor.kitchen_dimmer_fault",
+        state: "off",
+        attributes: { friendly_name: "Kitchen dimmer Fault", device_class: "problem", active_faults: [] },
+      },
+    },
+    entities: {
+      "binary_sensor.kitchen_dimmer_fault": { platform: "plejd", device_id: "dev.kitchen" },
+    },
+    devices: { "dev.kitchen": { name: "Kitchen dimmer" } },
+  };
+
+  panel._updateHealth();
+
+  assert.match(health.innerHTML, /All devices healthy/);
+  assert.match(health.innerHTML, />0<\/span>/);
+  assert.doesNotMatch(health.innerHTML, /Kitchen dimmer/);
+});
+
+test("_updateHealth lists each faulted device with its name and active fault flags", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const health = { innerHTML: "" };
+
+  panel.querySelector = (selector) => (selector === "#plejd-health" ? health : null);
+  panel._hass = {
+    states: {
+      "binary_sensor.kitchen_dimmer_fault": {
+        entity_id: "binary_sensor.kitchen_dimmer_fault",
+        state: "on",
+        attributes: {
+          friendly_name: "Kitchen dimmer Fault",
+          device_class: "problem",
+          active_faults: ["overtemperature", "soft_overcurrent"],
+        },
+      },
+      "binary_sensor.hall_switch_fault": {
+        entity_id: "binary_sensor.hall_switch_fault",
+        state: "off",
+        attributes: { friendly_name: "Hall switch Fault", device_class: "problem", active_faults: [] },
+      },
+      "binary_sensor.other_vendor_problem": {
+        entity_id: "binary_sensor.other_vendor_problem",
+        state: "on",
+        attributes: { friendly_name: "Other vendor problem", device_class: "problem" },
+      },
+    },
+    entities: {
+      "binary_sensor.kitchen_dimmer_fault": { platform: "plejd", device_id: "dev.kitchen" },
+      "binary_sensor.hall_switch_fault": { platform: "plejd", device_id: "dev.hall" },
+      "binary_sensor.other_vendor_problem": { platform: "other" },
+    },
+    devices: { "dev.kitchen": { name: "Kitchen dimmer" }, "dev.hall": { name: "Hall switch" } },
+  };
+
+  panel._updateHealth();
+
+  assert.match(health.innerHTML, />1<\/span>/);
+  assert.match(health.innerHTML, /Kitchen dimmer/);
+  assert.match(health.innerHTML, /overtemperature/);
+  assert.match(health.innerHTML, /soft overcurrent/);
+  assert.doesNotMatch(health.innerHTML, /Hall switch/); // not faulted, so not listed
+  assert.doesNotMatch(health.innerHTML, /Other vendor problem/); // not our platform
+  assert.doesNotMatch(health.innerHTML, /All devices healthy/);
+});
+
+test("_updateHealth falls back to the entity's friendly name when no device_id is registered", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const health = { innerHTML: "" };
+
+  panel.querySelector = (selector) => (selector === "#plejd-health" ? health : null);
+  panel._hass = {
+    states: {
+      "binary_sensor.gateway_fault": {
+        entity_id: "binary_sensor.gateway_fault",
+        state: "on",
+        attributes: { friendly_name: "Gateway Fault", device_class: "problem", active_faults: ["hard_fault"] },
+      },
+    },
+    entities: {
+      "binary_sensor.gateway_fault": { platform: "plejd" },
+    },
+    devices: {},
+  };
+
+  panel._updateHealth();
+
+  assert.match(health.innerHTML, /Gateway Fault/);
+});
+
+test("_updateHealth does not crash on a site with no fault sensors", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const health = { innerHTML: "" };
+
+  panel.querySelector = (selector) => (selector === "#plejd-health" ? health : null);
+  panel._hass = { states: {} };
+
+  panel._updateHealth();
+
+  assert.match(health.innerHTML, /All devices healthy/);
+});
+
+test("_updateHealth is a no-op when the panel DOM isn't mounted yet", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+
+  panel.querySelector = () => null;
+  panel._hass = { states: {} };
+
+  assert.doesNotThrow(() => panel._updateHealth());
+});
+
 test("deleting a binding preserves an in-progress add form", async () => {
   const PanelClass = loadPanelClass();
   const panel = new PanelClass();
@@ -227,6 +359,7 @@ test("first hass assignment loads area and device registries over websocket", as
   panel._loadBindings = () => {};
   panel._scheduleLightsUpdate = () => {};
   panel._renderEditor = () => {};
+  panel._updateHealth = () => {};
 
   panel.hass = {
     states: {},
@@ -253,6 +386,48 @@ test("first hass assignment loads area and device registries over websocket", as
   assert.equal(panel._devices()[0].name, "Remote Hall");
   assert.equal(panel._areaName("area.kitchen"), "Kitchen");
   assert.equal(panel._deviceName("dev.remote"), "Remote Hall");
+});
+
+test("registries resolving after the health card's first render refreshes it with device names instead of leaving raw ids", async () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const health = { innerHTML: "" };
+
+  panel._renderShell = () => {};
+  panel._loadBindings = () => {};
+  panel._scheduleLightsUpdate = () => {};
+  panel.querySelector = (selector) => (selector === "#plejd-health" ? health : null);
+
+  panel.hass = {
+    states: {
+      "binary_sensor.kitchen_dimmer_fault": {
+        entity_id: "binary_sensor.kitchen_dimmer_fault",
+        state: "on",
+        attributes: { friendly_name: "Kitchen dimmer Fault", device_class: "problem", active_faults: ["overtemperature"] },
+      },
+    },
+    entities: {
+      "binary_sensor.kitchen_dimmer_fault": { platform: "plejd", device_id: "dev.kitchen" },
+    },
+    // No hass.devices exposed yet, mirroring a quiet site where the first health render
+    // happens before config/device_registry/list resolves.
+    callWS(msg) {
+      if (msg.type === "config/area_registry/list") return Promise.resolve([]);
+      if (msg.type === "config/device_registry/list") {
+        return Promise.resolve([{ id: "dev.kitchen", name: "Kitchen dimmer" }]);
+      }
+      throw new Error(`unexpected ws call: ${msg.type}`);
+    },
+  };
+
+  // Simulate the scheduled health render firing before the registries promise settles.
+  panel._updateHealth();
+  assert.match(health.innerHTML, /dev\.kitchen/); // raw device id, not yet a name
+
+  await panel._registriesPromise;
+
+  assert.doesNotMatch(health.innerHTML, /dev\.kitchen/);
+  assert.match(health.innerHTML, /Kitchen dimmer/);
 });
 
 test("trigger change listeners keep _form in sync so re-renders preserve selections", () => {
@@ -310,6 +485,7 @@ test("registry loading failure keeps registries empty and logs a warning", async
   panel._loadBindings = () => {};
   panel._scheduleLightsUpdate = () => {};
   panel._renderEditor = () => {};
+  panel._updateHealth = () => {};
 
   panel.hass = {
     states: {},
