@@ -14,12 +14,16 @@ class _FakeCoord:
         self._states = states or {}
         self.devices = list(devices)
         self.sets: list[tuple[int, bool, int]] = []
+        self.group_sets: list[tuple[int, bool, int, list[int]]] = []
 
     def state_for(self, address):
         return self._states.get(address)
 
     async def async_set_output(self, address, on, level):
         self.sets.append((address, on, level))
+
+    async def async_set_group_output(self, address, on, level, member_addresses):
+        self.group_sets.append((address, on, level, list(member_addresses)))
 
 
 def _ramp(coord, **kw):
@@ -87,6 +91,53 @@ async def test_ramp_up_walks_in_steps():
     await ramp._tasks[11]
     await _drain()
     assert coord.sets == [(11, True, 225), (11, True, 250), (11, True, DIM_MAX)]
+
+
+# ── `current` seed (targets with no state read-back of their own, e.g. a room group) ──
+
+
+async def test_ramp_up_uses_seeded_current_instead_of_coordinator_state():
+    coord = _FakeCoord()  # no per-output state at all for a group address
+    ramp = _ramp(coord, step=25, interval=0)
+    ramp.start(99, 1, current=(True, 200))
+    await ramp._tasks[99]
+    await _drain()
+    assert coord.sets == [(99, True, 225), (99, True, 250), (99, True, DIM_MAX)]
+
+
+async def test_ramp_down_seeded_off_is_noop():
+    coord = _FakeCoord()
+    ramp = _ramp(coord, step=25, interval=0)
+    ramp.start(99, -1, current=(False, 0))
+    await ramp._tasks[99]
+    await _drain()
+    assert coord.sets == []  # seeded as off -> nothing to dim down, coordinator state ignored
+
+
+# ── `member_addresses` (a room's group address, so each tick also updates members) ──
+
+
+async def test_ramp_with_member_addresses_routes_through_group_output():
+    coord = _FakeCoord()
+    ramp = _ramp(coord, step=25, interval=0)
+    ramp.start(14, 1, current=(True, 200), member_addresses=[5, 6])
+    await ramp._tasks[14]
+    await _drain()
+    assert coord.sets == []  # never the plain per-output write
+    assert coord.group_sets == [
+        (14, True, 225, [5, 6]),
+        (14, True, 250, [5, 6]),
+        (14, True, DIM_MAX, [5, 6]),
+    ]
+
+
+async def test_ramp_without_member_addresses_uses_plain_output():
+    coord = _FakeCoord({11: OutputState(output=11, on=True, level=200)})
+    ramp = _ramp(coord, step=25, interval=0)
+    ramp.start(11, 1)  # no member_addresses -> a normal single-output ramp
+    await ramp._tasks[11]
+    await _drain()
+    assert coord.group_sets == []
 
 
 # ── stop / restart / shutdown ─────────────────────────────────────────────────

@@ -65,6 +65,12 @@ scan_new_devices:
     Scan for unprovisioned Plejd devices in Bluetooth range and fire
     plejd_new_devices_found with what was found.
 
+all_off:
+  name: All lights off
+  description: >-
+    Turn off every Plejd light output in the site in one action, mirroring the
+    Plejd app's site-wide "all off" control.
+
 start_dim:
   name: Start dimming
   description: >-

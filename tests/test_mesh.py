@@ -6,6 +6,7 @@ from plejd.mesh import PlejdMesh
 from plejd.protocol import (
     CMD_OUTPUT_STATE_AND_LEVEL,
     TYPE_READ,
+    OutputState,
     decode_command,
     execute_scene,
     set_output_state_and_level,
@@ -65,3 +66,9 @@ def test_state_returns_a_copy():
     snapshot = mesh.state
     snapshot.clear()
     assert 2 in mesh.state  # mutating the snapshot doesn't affect the engine
+
+
+def test_set_state_records_locally():
+    mesh = _mesh()
+    mesh.set_state(9, OutputState(output=0, on=True, level=200))
+    assert mesh.state[9] == OutputState(output=0, on=True, level=200)
