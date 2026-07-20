@@ -28,8 +28,7 @@ class PlejdMesh:
         return dict(self._state)
 
     def set_state(self, address: int, state: OutputState) -> None:
-        """Record an output's state directly, e.g. an optimistic update after sending
-        a command — BLE writes are never acked, so this is the only timely signal."""
+        """Locally record an output's state, e.g. an optimistic update after a local write."""
         self._state[address] = state
 
     def encrypt(self, plaintext: bytes) -> bytes:

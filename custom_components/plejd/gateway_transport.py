@@ -89,8 +89,7 @@ class PlejdGatewayConnection:
         return self._state.get(address)
 
     def set_state(self, address: int, state: OutputState) -> None:
-        """Record an output's state directly, e.g. an optimistic update after sending
-        a command — the ack isn't guaranteed to land before the write() call returns."""
+        """Locally record an output's state, e.g. an optimistic update after a local write."""
         self._state[address] = state
 
     async def connect(self) -> None:

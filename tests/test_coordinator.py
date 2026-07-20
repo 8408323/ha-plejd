@@ -17,6 +17,7 @@ from plejd.const import (
     CONF_GATEWAYS,
     CONF_INSTALLATION_ID,
     CONF_RESOURCE_SET_ID,
+    CONF_ROOMS,
     CONF_SITE_ID,
     CONF_TRANSPORT,
     PLEJD_CHAR_DATA_UUID,
@@ -72,7 +73,11 @@ def _info(address, rssi=-50):
 
 
 def _hass(infos=(), ble=None):
-    return types.SimpleNamespace(service_infos=list(infos), ble_devices=ble or {})
+    return types.SimpleNamespace(
+        service_infos=list(infos),
+        ble_devices=ble or {},
+        config_entries=types.SimpleNamespace(async_update_entry=lambda entry, data: setattr(entry, "data", data)),
+    )
 
 
 def _patch_connect(monkeypatch, client):
@@ -227,6 +232,124 @@ async def test_set_output_without_connection_raises():
         await c.async_set_output(5, True, 1)
 
 
+async def test_all_off_turns_off_every_light_output(monkeypatch):
+    from plejd.const import CMD_GROUP_STATE_AND_LEVEL
+    from plejd.protocol import decode_command
+
+    client = _FakeClient()
+    _patch_connect(monkeypatch, client)
+    ble = types.SimpleNamespace(address="01:02:03:04:05:a0")
+    hass = _hass([_info("01:02:03:04:05:a0")], {"01:02:03:04:05:a0": ble})
+    dev2 = {**_DEV, "device_id": "d2", "address": 6}
+    dev_switch = {**_DEV, "device_id": "d3", "address": 7, "category": "switch"}
+    dev_no_address = {**_DEV, "device_id": "d4", "address": None}
+    entry = _entry(discovered=None)
+    entry.data[CONF_DEVICES] = [_DEV, dev2, dev_switch, dev_no_address]
+    c = PlejdCoordinator(hass, entry)
+    await c.async_start()
+    client.writes.clear()  # drop connect-time reads; only the all_off writes matter here
+
+    await c.async_all_off()
+
+    commands = [decode_command(c._connection.mesh.decrypt(w[1])) for w in client.writes if w[0] == PLEJD_CHAR_DATA_UUID]
+    off_cmds = [cmd for cmd in commands if cmd.command == CMD_GROUP_STATE_AND_LEVEL]
+    assert sorted(cmd.address for cmd in off_cmds) == [5, 6]  # only the two light outputs
+    assert all(cmd.data[0] == 0 for cmd in off_cmds)  # off, not on
+
+
+async def test_all_off_one_output_failure_does_not_skip_the_rest(monkeypatch):
+    """A write failure for one light output must not abort turning off the rest."""
+    from homeassistant.exceptions import HomeAssistantError
+
+    dev2 = {**_DEV, "device_id": "d2", "address": 6}
+    entry = types.SimpleNamespace(
+        entry_id="e1",
+        data={CONF_CRYPTO_KEY: _KEY_HEX, CONF_DEVICES: [_DEV, dev2], CONF_DISCOVERED_ADDRESS: None},
+    )
+    c = PlejdCoordinator(_hass(), entry)
+    attempted: list[int] = []
+
+    async def _async_set_output(address, on, level):
+        attempted.append(address)
+        if address == 5:
+            raise HomeAssistantError("not connected")
+
+    monkeypatch.setattr(c, "async_set_output", _async_set_output)
+    await c.async_all_off()  # no exception propagates
+    assert sorted(attempted) == [5, 6]  # output 6 was still turned off despite output 5 failing
+
+
+async def test_all_off_raises_when_every_output_fails(monkeypatch):
+    """If no output was actually turned off, the caller must be told all_off failed."""
+    from homeassistant.exceptions import HomeAssistantError
+
+    dev2 = {**_DEV, "device_id": "d2", "address": 6}
+    entry = types.SimpleNamespace(
+        entry_id="e1",
+        data={CONF_CRYPTO_KEY: _KEY_HEX, CONF_DEVICES: [_DEV, dev2], CONF_DISCOVERED_ADDRESS: None},
+    )
+    c = PlejdCoordinator(_hass(), entry)
+    attempted: list[int] = []
+
+    async def _async_set_output(address, on, level):
+        attempted.append(address)
+        raise HomeAssistantError("not connected")
+
+    monkeypatch.setattr(c, "async_set_output", _async_set_output)
+    with pytest.raises(HomeAssistantError, match="failed to turn off any output"):
+        await c.async_all_off()
+    assert sorted(attempted) == [5, 6]  # both outputs were still attempted
+
+
+async def test_set_group_output_writes_group_command_and_reflects_member_state(monkeypatch):
+    from plejd.protocol import decode_command
+
+    client = _FakeClient()
+    _patch_connect(monkeypatch, client)
+    ble = types.SimpleNamespace(address="01:02:03:04:05:a0")
+    hass = _hass([_info("01:02:03:04:05:a0")], {"01:02:03:04:05:a0": ble})
+    c = PlejdCoordinator(hass, _entry(discovered=None))
+    await c.async_start()
+    seen = []
+    c.async_add_listener(lambda: seen.append(1))
+    await c.async_set_group_output(14, True, 120, [5, 6])
+    # the single command was written to the room's group address...
+    cmd = decode_command(c._connection.mesh.decrypt(client.writes[-1][1]))
+    assert cmd.address == 14
+    # ...and each member's own state is reflected immediately, without waiting on its
+    # own notification (a group command's echo is keyed by the group address, not them)
+    assert c.state_for(5).on is True and c.state_for(5).level == 120 and c.state_for(5).output == 5
+    assert c.state_for(6).on is True and c.state_for(6).level == 120 and c.state_for(6).output == 6
+    assert seen == [1]  # listeners notified of the optimistic update
+
+
+async def test_set_group_output_off_preserves_member_levels(monkeypatch):
+    # Turning a room off must not zero out each member's remembered brightness - the
+    # protocol's off payload (level=0) is not a "the light is now dim to 0" fact, and
+    # a later turn_on() restore relies on the prior level surviving the off command.
+    client = _FakeClient()
+    _patch_connect(monkeypatch, client)
+    ble = types.SimpleNamespace(address="01:02:03:04:05:a0")
+    hass = _hass([_info("01:02:03:04:05:a0")], {"01:02:03:04:05:a0": ble})
+    c = PlejdCoordinator(hass, _entry(discovered=None))
+    await c.async_start()
+    await c.async_set_group_output(14, True, 150, [5, 6])  # first turn on at 150...
+    await c.async_set_group_output(14, False, 0, [5, 6])  # ...then off
+    assert c.state_for(5).on is False and c.state_for(5).level == 150
+    assert c.state_for(6).on is False and c.state_for(6).level == 150
+
+
+async def test_set_group_output_off_falls_back_to_zero_for_unknown_member(monkeypatch):
+    client = _FakeClient()
+    _patch_connect(monkeypatch, client)
+    ble = types.SimpleNamespace(address="01:02:03:04:05:a0")
+    hass = _hass([_info("01:02:03:04:05:a0")], {"01:02:03:04:05:a0": ble})
+    c = PlejdCoordinator(hass, _entry(discovered=None))
+    await c.async_start()
+    await c.async_set_group_output(14, False, 0, [9])  # member 9 has no prior state at all
+    assert c.state_for(9).on is False and c.state_for(9).level == 0
+
+
 async def test_execute_scene_broadcasts(monkeypatch):
     client = _FakeClient()
     _patch_connect(monkeypatch, client)
@@ -282,6 +405,72 @@ def test_output_event_notifies_listeners():
     remove()
     c._on_event(state_cmd)
     assert seen == [1]
+
+
+def _entry_with_room(room=None):
+    entry = _entry(discovered=None)
+    entry.data[CONF_ROOMS] = [
+        room
+        or {
+            "room_id": "r1",
+            "name": "Kök",
+            "address": 14,
+            "member_addresses": [5, 6],
+            "dimmable": True,
+            "dimmable_addresses": [5, 6],
+        }
+    ]
+    return entry
+
+
+async def _connected_coordinator_with_room(monkeypatch):
+    client = _FakeClient()
+    _patch_connect(monkeypatch, client)
+    ble = types.SimpleNamespace(address="01:02:03:04:05:a0")
+    hass = _hass([_info("01:02:03:04:05:a0")], {"01:02:03:04:05:a0": ble})
+    c = PlejdCoordinator(hass, _entry_with_room())
+    await c.async_start()
+    return c
+
+
+async def test_group_state_event_fans_out_to_room_members(monkeypatch):
+    """A room-group broadcast from outside HA (e.g. the Plejd app) must update member state too."""
+    from plejd.const import CMD_GROUP_STATE_AND_LEVEL
+    from plejd.protocol import Command
+
+    c = await _connected_coordinator_with_room(monkeypatch)
+    state_cmd = Command(address=14, command_type=0x10, command=CMD_GROUP_STATE_AND_LEVEL, data=bytes([1, 0, 200]))
+    c._on_event(state_cmd)
+    assert c.state_for(5).on is True and c.state_for(5).level == 200
+    assert c.state_for(6).on is True and c.state_for(6).level == 200
+
+
+async def test_group_state_event_off_preserves_member_levels(monkeypatch):
+    from plejd.const import CMD_GROUP_STATE_AND_LEVEL
+    from plejd.protocol import Command
+
+    c = await _connected_coordinator_with_room(monkeypatch)
+    c._on_event(Command(address=14, command_type=0x10, command=CMD_GROUP_STATE_AND_LEVEL, data=bytes([1, 0, 200])))
+    c._on_event(Command(address=14, command_type=0x10, command=CMD_GROUP_STATE_AND_LEVEL, data=bytes([0, 0, 0])))
+    assert c.state_for(5).on is False and c.state_for(5).level == 200
+
+
+async def test_group_state_event_for_unknown_group_address_is_ignored(monkeypatch):
+    from plejd.const import CMD_GROUP_STATE_AND_LEVEL
+    from plejd.protocol import Command
+
+    c = await _connected_coordinator_with_room(monkeypatch)
+    c._on_event(Command(address=99, command_type=0x10, command=CMD_GROUP_STATE_AND_LEVEL, data=bytes([1, 0, 200])))
+    assert c.state_for(5) is None and c.state_for(6) is None
+
+
+async def test_group_state_event_with_short_payload_is_ignored(monkeypatch):
+    from plejd.const import CMD_GROUP_STATE_AND_LEVEL
+    from plejd.protocol import Command
+
+    c = await _connected_coordinator_with_room(monkeypatch)
+    c._on_event(Command(address=14, command_type=0x10, command=CMD_GROUP_STATE_AND_LEVEL, data=bytes([1])))
+    assert c.state_for(5) is None
 
 
 def test_button_event_dispatches_press_and_release():
@@ -596,6 +785,20 @@ async def test_gateway_off_preserves_prior_level_despite_ack_landing_before_writ
     await c.async_set_output(11, False, 0)
 
     assert c.state_for(11).on is False and c.state_for(11).level == 150
+
+
+async def test_gateway_set_group_output_reflects_member_state(monkeypatch):
+    from plejd.protocol import set_group_state_and_level
+
+    monkeypatch.setattr(coordinator_mod, "PlejdGatewayConnection", _FakeGateway)
+    hass = _hass()
+    hass.session = object()
+    c = PlejdCoordinator(hass, _gateway_entry())
+    await c.async_start()
+    await c.async_set_group_output(14, True, 90, [5, 6])
+    assert c._gateway.writes[-1] == set_group_state_and_level(14, True, 90)
+    assert c.state_for(5).on is True and c.state_for(5).level == 90 and c.state_for(5).output == 5
+    assert c.state_for(6).on is True and c.state_for(6).level == 90 and c.state_for(6).output == 6
 
 
 async def test_gateway_connect_starts_fault_polling(monkeypatch):
@@ -1592,6 +1795,20 @@ async def test_registry_update_ignores_missing_device_and_non_plejd(monkeypatch)
     )
 
 
+async def test_registry_update_ignores_room_pseudo_device(monkeypatch):
+    from plejd.const import DOMAIN, ROOM_DEVICE_ID_PREFIX
+
+    hass = _hass()
+    c = PlejdCoordinator(hass, _cloud_entry())
+    hass.device_registry = _FakeRegistry(_FakeDevice({(DOMAIN, f"{ROOM_DEVICE_ID_PREFIX}r1")}, "New Name"))
+
+    async def _fail(*a):
+        raise AssertionError("a room pseudo-device has no Parse cloud object to rename")
+
+    monkeypatch.setattr(c, "async_rename_device", _fail)
+    await c.async_handle_device_registry_update(_reg_event(changes={"name_by_user": "New Name"}))
+
+
 async def test_registry_update_swallows_rename_errors(monkeypatch):
     from plejd.const import DOMAIN
 
@@ -1706,7 +1923,7 @@ def test_device_address_for_resolves_cached_physical_addresses():
 async def test_poll_faults_resolves_addresses_from_cloud_when_not_cached(monkeypatch):
     """Entries added before CONF_DEVICE_ADDRESSES existed resolve it via one cloud fetch."""
     c = PlejdCoordinator(_hass(), _cloud_entry())  # has credentials, no cached device_addresses
-    site = types.SimpleNamespace(device_addresses={"d1": 5, "w1": 33})
+    site = types.SimpleNamespace(device_addresses={"d1": 5, "w1": 33}, rooms=[])
 
     async def _login(*a):
         return "tok"
@@ -1729,6 +1946,58 @@ async def test_poll_faults_resolves_addresses_from_cloud_when_not_cached(monkeyp
 
     await c._async_poll_faults(None)
     assert sorted(attempted) == [5, 5, 33, 33]  # polled again, but from the cache
+
+
+async def test_poll_faults_resolves_rooms_from_cloud_when_entry_predates_room_groups(monkeypatch):
+    """Entries added before CONF_ROOMS existed (missing key, not an empty list) backfill it via a cloud fetch."""
+    from dataclasses import asdict
+
+    from plejd.cloud import PlejdCloudRoom
+
+    entry = _cloud_entry()  # has credentials, CONF_ROOMS absent from entry.data
+    c = PlejdCoordinator(_hass(), entry)
+    assert c.rooms == [] and c._rooms_from_legacy_entry is True
+    room = PlejdCloudRoom(
+        room_id="r1", name="Kök", address=14, member_addresses=[11], dimmable=True, dimmable_addresses=[11]
+    )
+    site = types.SimpleNamespace(device_addresses={"d1": 1}, rooms=[room])
+    fetches = []
+
+    async def _login(*a):
+        return "tok"
+
+    async def _get_site(*a):
+        fetches.append(1)
+        return site
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _login)
+    monkeypatch.setattr(coordinator_mod, "async_get_site", _get_site)
+    monkeypatch.setattr(c, "_write_vector", lambda vector: asyncio.sleep(0))
+
+    await c._async_poll_faults(None)
+    assert c.rooms == [room]
+    assert c._rooms_from_legacy_entry is False
+    # Persisted to entry.data, not just the in-memory coordinator, so the room light
+    # entity survives a restart/reload even if the cloud is unreachable at that point.
+    assert entry.data[CONF_ROOMS] == [asdict(room)]
+
+    await c._async_poll_faults(None)
+    assert fetches == [1]  # cached — no repeat fetch once rooms are resolved
+
+
+async def test_poll_faults_does_not_refetch_for_a_genuinely_room_less_site(monkeypatch):
+    """CONF_ROOMS present but empty (a real site with no rooms) must not trigger a fetch every poll."""
+    entry = _cloud_entry()
+    entry.data[CONF_ROOMS] = []
+    c = PlejdCoordinator(_hass(), entry)
+    assert c._rooms_from_legacy_entry is False
+
+    async def _fail(*a):
+        raise AssertionError("must not fetch the cloud site for an already-resolved empty room list")
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _fail)
+    monkeypatch.setattr(c, "_write_vector", lambda vector: asyncio.sleep(0))
+    await c._async_poll_faults(None)
 
 
 async def test_poll_faults_swallows_cloud_fetch_failure(monkeypatch):

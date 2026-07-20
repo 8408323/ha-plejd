@@ -11,7 +11,7 @@ import aiohttp
 import pytest
 from plejd import gateway
 from plejd.gateway_transport import PlejdGatewayConnection
-from plejd.protocol import set_output_state_and_level
+from plejd.protocol import OutputState, set_output_state_and_level
 
 
 def _text(obj: dict):
@@ -265,6 +265,12 @@ def test_handle_push_updates_state():
     vector = set_output_state_and_level(address=11, output=0, on=True, level=200)
     conn._handle_frame(json.dumps(_push_frame(11, vector)))
     assert conn.state_for(11) is not None and conn.state_for(11).level == 200 and fired == [1]
+
+
+def test_set_state_records_locally():
+    conn = _conn(_FakeWS())
+    conn.set_state(9, OutputState(output=0, on=True, level=200))
+    assert conn.state_for(9) == OutputState(output=0, on=True, level=200)
 
 
 def test_handle_push_ignores_non_output_command():
