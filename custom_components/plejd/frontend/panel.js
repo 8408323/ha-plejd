@@ -1,8 +1,8 @@
 // Plejd dashboard — a custom Home Assistant sidebar panel (not a Lovelace view).
 // Home Assistant sets `hass`, `narrow`, `route`, and `panel` properties on this element.
-// It lists the site's Plejd lights and scenes, and hosts the remote → light dim-binding
-// editor: map a dimmer remote's hold/release device triggers to smooth dimming of a
-// light or area.
+// It lists the site's Plejd lights, thermostats, and scenes, and hosts the remote →
+// light dim-binding editor: map a dimmer remote's hold/release device triggers to
+// smooth dimming of a light or area.
 
 const CARD = `
   background: var(--card-background-color, #fff);
@@ -61,6 +61,12 @@ class PlejdPanel extends HTMLElement {
     this._busy = false;
     this._scenesError = "";
     this._lightsFrame = null;
+    // entity_id -> optimistic target temperature from a just-sent setpoint tap, until
+    // hass's own push catches up. Repeated taps arrive well within that round-trip, so
+    // reading hass.states directly on every tap would recompute from the same pre-tap
+    // snapshot each time instead of accumulating (two quick + taps both landing on the
+    // same +1 step instead of reaching +2).
+    this._climateOverrides = {};
     const useAnimationFrame = Boolean(
       globalThis.requestAnimationFrame && globalThis.cancelAnimationFrame,
     );
@@ -209,6 +215,23 @@ class PlejdPanel extends HTMLElement {
       .filter(
         (s) =>
           s.entity_id.startsWith("light.") &&
+          (hass.entities?.[s.entity_id]?.platform === "plejd" ||
+            s.attributes.attribution === "Plejd"),
+      )
+      .sort((a, b) =>
+        (a.attributes.friendly_name || a.entity_id).localeCompare(
+          b.attributes.friendly_name || b.entity_id,
+        ),
+      );
+  }
+
+  _climateEntities() {
+    const hass = this._hass;
+    if (!hass) return [];
+    return Object.values(hass.states)
+      .filter(
+        (s) =>
+          s.entity_id.startsWith("climate.") &&
           (hass.entities?.[s.entity_id]?.platform === "plejd" ||
             s.attributes.attribution === "Plejd"),
       )
@@ -393,6 +416,7 @@ class PlejdPanel extends HTMLElement {
       <div style="padding:16px 16px 48px;max-width:760px;margin:0 auto;color:var(--primary-text-color,#212121);font-family:var(--paper-font-body1_-_font-family,Roboto,sans-serif)">
         <h1 style="font-weight:400;margin:8px 4px 20px">Plejd</h1>
         <div id="plejd-lights" style="${CARD}"></div>
+        <div id="plejd-climate" style="${CARD};margin-top:16px"></div>
         <div id="plejd-motion" style="${CARD};margin-top:16px"></div>
         <div id="plejd-scenes" style="${CARD};margin-top:16px"></div>
         <div id="plejd-health" style="${CARD};margin-top:16px"></div>
@@ -439,6 +463,80 @@ class PlejdPanel extends HTMLElement {
         <span style="color:var(--secondary-text-color,#727272);font-size:.9rem">${lights.length}</span>
       </div>
       ${rows || '<p style="color:var(--secondary-text-color,#727272)">No Plejd lights found.</p>'}`;
+    // Climate rides the same coalesced hass-update frame as the lights list above.
+    this._updateClimate();
+  }
+
+  _updateClimate() {
+    const el = this.querySelector("#plejd-climate");
+    if (!el) return;
+    const climates = this._climateEntities();
+    const rows = climates
+      .map((s) => {
+        const name = s.attributes.friendly_name || s.entity_id;
+        const override = this._climateOverrides[s.entity_id];
+        const realTarget = s.attributes.temperature;
+        if (override !== undefined && override === realTarget) delete this._climateOverrides[s.entity_id];
+        const target = override !== undefined ? override : realTarget;
+        const disabled = target == null || s.state === "unavailable";
+        return `
+          <div style="display:flex;align-items:center;gap:12px;padding:10px 4px;border-bottom:1px solid var(--divider-color,#e0e0e0)">
+            <span style="flex:1">${esc(name)}</span>
+            <button data-climate-dec="${esc(s.entity_id)}" type="button" style="${BTN};padding:4px 12px" ${disabled ? "disabled" : ""} aria-label="Decrease target temperature">−</button>
+            <span style="min-width:56px;text-align:center">${target != null ? `${target}°C` : "—"}</span>
+            <button data-climate-inc="${esc(s.entity_id)}" type="button" style="${BTN};padding:4px 12px" ${disabled ? "disabled" : ""} aria-label="Increase target temperature">+</button>
+          </div>`;
+      })
+      .join("");
+    el.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px">
+        <h2 style="font-weight:500;font-size:1.05rem;margin:0">Climate</h2>
+        <span style="color:var(--secondary-text-color,#727272);font-size:.9rem">${climates.length}</span>
+      </div>
+      ${rows || '<p style="color:var(--secondary-text-color,#727272)">No Plejd thermostats found.</p>'}`;
+    this._wireClimate(el, climates);
+  }
+
+  _wireClimate(el, climates) {
+    const byId = Object.fromEntries(climates.map((s) => [s.entity_id, s]));
+    el.querySelectorAll("[data-climate-inc]").forEach((btn) =>
+      btn.addEventListener("click", () => {
+        this._stepClimate(byId[btn.getAttribute("data-climate-inc")], 1);
+        this._updateClimate();
+      }),
+    );
+    el.querySelectorAll("[data-climate-dec]").forEach((btn) =>
+      btn.addEventListener("click", () => {
+        this._stepClimate(byId[btn.getAttribute("data-climate-dec")], -1);
+        this._updateClimate();
+      }),
+    );
+  }
+
+  // A thermostat setpoint change is a low-frequency tap, unlike a dimmer drag — call the
+  // service straight away, no debounce/ramp pacing needed.
+  _stepClimate(state, direction) {
+    if (!state) return;
+    // Prefer our own optimistic override over hass.states: a repeated tap well within
+    // the round-trip to the backend must accumulate from the last tap's intent, not the
+    // pre-tap state hass hasn't caught up to yet.
+    const override = this._climateOverrides[state.entity_id];
+    const target = override !== undefined ? override : state.attributes.temperature;
+    if (target == null) return;
+    const step = state.attributes.target_temp_step || 0.5;
+    let next = Math.round((target + direction * step) * 100) / 100;
+    const { min_temp: min, max_temp: max } = state.attributes;
+    if (min != null) next = Math.max(min, next);
+    if (max != null) next = Math.min(max, next);
+    this._climateOverrides[state.entity_id] = next;
+    this._callService("climate", "set_temperature", {
+      entity_id: state.entity_id,
+      temperature: next,
+    }).catch((err) => {
+      console.warn("Plejd panel: failed to set climate temperature", err);
+      if (this._climateOverrides[state.entity_id] === next) delete this._climateOverrides[state.entity_id];
+      this._updateClimate();
+    });
   }
 
   _updateMotion() {
