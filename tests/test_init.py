@@ -34,6 +34,29 @@ class _FakeCoordinator:
         return None
 
 
+class _FakeHolidayMode:
+    instances: list = []
+    call_order: list = []
+    stop_result = True
+
+    def __init__(self, hass, entry):
+        self.started = False
+        self.stopped = False
+        self.is_running = False
+        _FakeHolidayMode.instances.append(self)
+
+    async def async_start(self):
+        self.started = True
+        self.is_running = True
+        _FakeHolidayMode.call_order.append("holiday_mode.async_start")
+
+    async def async_stop(self):
+        self.stopped = True
+        self.is_running = False
+        _FakeHolidayMode.call_order.append("holiday_mode.async_stop")
+        return _FakeHolidayMode.stop_result
+
+
 class _FakeConfigEntries:
     unload_result = True
 
@@ -41,6 +64,7 @@ class _FakeConfigEntries:
         self.forwarded = platforms
 
     async def async_unload_platforms(self, entry, platforms):
+        _FakeHolidayMode.call_order.append("async_unload_platforms")
         return self.unload_result
 
     async def async_reload(self, entry_id):
@@ -135,6 +159,32 @@ async def test_setup_shuts_down_when_forward_fails(monkeypatch):
     with pytest.raises(RuntimeError, match="platform setup failed"):
         await async_setup_entry(hass, entry)
     assert _FakeCoordinator.instances[-1].shutdown is True
+
+
+async def test_setup_stops_holiday_mode_when_forward_fails(monkeypatch):
+    from plejd.holiday_mode import DATA_HOLIDAY_MODE
+
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    monkeypatch.setattr(plejd, "PlejdHolidayMode", _FakeHolidayMode)
+    _FakeCoordinator.instances.clear()
+    _FakeHolidayMode.instances.clear()
+    _FakeHolidayMode.call_order.clear()
+    hass, entry = _hass(), _entry()
+
+    async def _boom(entry, platforms):
+        raise RuntimeError("platform setup failed")
+
+    hass.config_entries.async_forward_entry_setups = _boom
+    with pytest.raises(RuntimeError, match="platform setup failed"):
+        await async_setup_entry(hass, entry)
+    assert DATA_HOLIDAY_MODE not in hass.data  # no stale manager left for a later retry
+    # A platform forwarded before the failure could have already started it (e.g. a
+    # restored-on holiday switch) — its timer must not be left running (#89 review).
+    assert _FakeHolidayMode.instances[-1].stopped is True
+    # start() runs first so a manager no platform had reached yet still loads its
+    # persisted deadlines before stop() persists — otherwise stop would overwrite the
+    # store with an empty, never-loaded state (#89 review).
+    assert _FakeHolidayMode.call_order == ["holiday_mode.async_start", "holiday_mode.async_stop"]
 
 
 async def test_unload_shuts_down_coordinator(monkeypatch):
@@ -499,6 +549,96 @@ async def test_setup_survives_binding_load_failure(monkeypatch):
     monkeypatch.setattr(plejd, "PlejdDimBindings", _BadBindings)
     hass, entry = _hass(), _entry()
     assert await async_setup_entry(hass, entry) is True  # storage error must not abort setup
+
+
+# ── Holiday mode wiring ────────────────────────────────────────────────────────
+
+
+async def test_setup_registers_holiday_mode(monkeypatch):
+    from plejd.holiday_mode import DATA_HOLIDAY_MODE
+
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    monkeypatch.setattr(plejd, "PlejdHolidayMode", _FakeHolidayMode)
+    _FakeCoordinator.instances.clear()
+    _FakeHolidayMode.instances.clear()
+    hass, entry = _hass(), _entry()
+    await async_setup_entry(hass, entry)
+    assert hass.data[DATA_HOLIDAY_MODE] is _FakeHolidayMode.instances[-1]
+
+
+async def test_unload_stops_holiday_mode_before_unloading_platforms(monkeypatch):
+    from plejd.holiday_mode import DATA_HOLIDAY_MODE
+
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    monkeypatch.setattr(plejd, "PlejdHolidayMode", _FakeHolidayMode)
+    _FakeCoordinator.instances.clear()
+    _FakeHolidayMode.instances.clear()
+    _FakeHolidayMode.call_order.clear()
+    hass, entry = _hass(), _entry()
+    await async_setup_entry(hass, entry)
+    assert DATA_HOLIDAY_MODE in hass.data
+
+    assert await async_unload_entry(hass, entry) is True
+
+    assert DATA_HOLIDAY_MODE not in hass.data
+    assert _FakeHolidayMode.instances[-1].stopped is True
+    # Stopping (and turning off any lights it owns) must happen before the light platform
+    # and the mesh connection go away, or the cleanup would target entities that no
+    # longer exist (#89 review).
+    assert _FakeHolidayMode.call_order == ["holiday_mode.async_stop", "async_unload_platforms"]
+
+
+async def test_unload_without_holiday_mode_registered_is_a_noop(monkeypatch):
+    # Setup failed before holiday mode was constructed (or it was already popped) —
+    # unload must tolerate a missing DATA_HOLIDAY_MODE entry.
+    entry = _entry()
+    entry.runtime_data = _FakeCoordinator(None, entry)
+    hass = _hass()
+    assert await async_unload_entry(hass, entry) is True
+
+
+async def test_unload_failure_keeps_holiday_mode_registered_for_a_retry(monkeypatch):
+    from plejd.holiday_mode import DATA_HOLIDAY_MODE
+
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    monkeypatch.setattr(plejd, "PlejdHolidayMode", _FakeHolidayMode)
+    _FakeCoordinator.instances.clear()
+    _FakeHolidayMode.instances.clear()
+    hass, entry = _hass(), _entry()
+    await async_setup_entry(hass, entry)
+    await hass.data[DATA_HOLIDAY_MODE].async_start()  # the holiday switch was on before unload
+    hass.config_entries.unload_result = False  # some other platform refuses to unload
+
+    assert await async_unload_entry(hass, entry) is False
+
+    # Still stopped/cleaned up (it's this integration's own resource to own)...
+    assert _FakeHolidayMode.instances[-1].stopped is True
+    # ...but not removed from hass.data: the entry stays loaded, and a later unload
+    # retry must still be able to find it (#89 review).
+    assert DATA_HOLIDAY_MODE in hass.data
+    # ...and resumed, because it was actually running before the stop above (#89 review).
+    assert _FakeHolidayMode.instances[-1].started is True
+
+
+async def test_unload_failure_does_not_resume_holiday_mode_that_was_already_off(monkeypatch):
+    from plejd.holiday_mode import DATA_HOLIDAY_MODE
+
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    monkeypatch.setattr(plejd, "PlejdHolidayMode", _FakeHolidayMode)
+    _FakeCoordinator.instances.clear()
+    _FakeHolidayMode.instances.clear()
+    hass, entry = _hass(), _entry()
+    await async_setup_entry(hass, entry)  # holiday switch was off: async_start() never ran
+    hass.config_entries.unload_result = False  # some other platform refuses to unload
+
+    assert await async_unload_entry(hass, entry) is False
+
+    # Still stopped (a no-op, since it was never running) and left registered for a retry...
+    assert _FakeHolidayMode.instances[-1].stopped is True
+    assert DATA_HOLIDAY_MODE in hass.data
+    # ...but NOT resumed: it wasn't running before the veto, so resuming it would start a
+    # hidden timer behind a switch entity that still reads off (#89 review).
+    assert _FakeHolidayMode.instances[-1].started is False
 
 
 # ── Remote profiles wiring ──────────────────────────────────────────────────────

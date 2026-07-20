@@ -131,6 +131,13 @@ TIME_EVENT_REP_FOREVER = 0xFFFFFFFF
 WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 CONF_SCHEDULES = "schedules"  # entry.options: list of time-event schedule dicts
 CONF_SHOW_PANEL = "show_panel"  # entry.options: show the Plejd dashboard in the sidebar (default True)
+
+# Holiday mode (presence simulation, the Plejd app's "Semesterläge") — entry.options.
+CONF_HOLIDAY_LIGHTS = "holiday_lights"  # target light entity_ids; empty/absent = all Plejd lights
+CONF_HOLIDAY_WINDOW_START = "holiday_window_start"  # "HH:MM", start of the active window
+CONF_HOLIDAY_WINDOW_END = "holiday_window_end"  # "HH:MM", end of the window (may be < start = crosses midnight)
+HOLIDAY_WINDOW_START_DEFAULT = "18:00"
+HOLIDAY_WINDOW_END_DEFAULT = "23:00"
 CMD_INPUT_STATE_AND_LEVEL = 0x0195  # state notification: channel, state, level[2]
 CMD_SYSTEM_TIME = 0x001B
 CMD_DEVICE_TYPE = 0x0000
