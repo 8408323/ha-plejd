@@ -1984,6 +1984,25 @@ test("_saveSchedule adds a schedule and resets the form on success", async () =>
   assert.equal(panel._scheduleNotice, "Saved.");
 });
 
+test("_saveSchedule surfaces a reload_failed warning instead of a plain Saved notice", async () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._renderSchedules = () => {};
+  panel._scheduleForm = { name: "Evening", days: [0], time: "18:30", scene: "3", fade: 0 };
+  panel._callWS = () =>
+    Promise.resolve({
+      schedules: [{ id: 0, name: "Evening" }],
+      reload_failed: "Schedule saved, but Plejd failed to reload; try again",
+    });
+
+  await panel._saveSchedule({ name: "Evening", days: [0], time: "18:30", scene: 3, fade: 0 });
+
+  // The save DID succeed (the form still resets) - only the notice must warn that the
+  // integration didn't reload, instead of quietly saying "Saved." as if all were well.
+  assert.equal(panel._scheduleNotice, "Schedule saved, but Plejd failed to reload; try again");
+  assert.equal(panel._scheduleForm.name, "");
+});
+
 test("_saveSchedule surfaces a backend error without resetting the form", async () => {
   const PanelClass = loadPanelClass();
   const panel = new PanelClass();
@@ -2020,6 +2039,23 @@ test("deleting a schedule preserves an in-progress add form", async () => {
   assert.equal(sentMsg.schedule_id, 1);
   assert.deepEqual(panel._schedules, [{ id: 0, name: "Keep" }]);
   assert.equal(panel._scheduleForm.name, "New one"); // in-progress add survives the delete
+});
+
+test("_deleteSchedule surfaces a reload_failed warning", async () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._renderSchedules = () => {};
+  panel._callWS = () =>
+    Promise.resolve({
+      schedules: [],
+      reload_failed: "Schedule saved, but Plejd failed to reload; try again",
+    });
+
+  await panel._deleteSchedule(1);
+
+  // The delete DID persist - the removed schedule may still be programmed on the device,
+  // so silence here would leave the user thinking it's gone when it might not be.
+  assert.equal(panel._scheduleNotice, "Schedule saved, but Plejd failed to reload; try again");
 });
 
 test("a day checkbox toggles the day in the form via _wireSchedules", () => {

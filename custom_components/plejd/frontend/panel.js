@@ -1073,7 +1073,9 @@ class PlejdPanel extends HTMLElement {
     try {
       const res = await this._callWS({ type: "plejd/schedules/add", ...payload });
       this._schedules = res.schedules || [];
-      this._scheduleNotice = "Saved.";
+      // Saved but the integration didn't reload (see schedule_ws._async_persist) - the
+      // switch may not exist/be programmed yet, so this needs a warning, not "Saved.".
+      this._scheduleNotice = res.reload_failed || "Saved.";
       this._scheduleForm = { name: "", days: [], time: "07:00", scene: "", fade: 0 };
     } catch (err) {
       this._scheduleError = err.message || String(err);
@@ -1091,6 +1093,9 @@ class PlejdPanel extends HTMLElement {
     try {
       const res = await this._callWS({ type: "plejd/schedules/delete", schedule_id: Number(scheduleId) });
       this._schedules = res.schedules || [];
+      // Deleted but the integration didn't reload - the removed schedule may still be
+      // programmed on the device, so this needs a warning, not silence.
+      if (res.reload_failed) this._scheduleNotice = res.reload_failed;
     } catch (err) {
       this._scheduleError = err.message || String(err);
     } finally {

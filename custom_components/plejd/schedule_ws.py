@@ -34,9 +34,15 @@ DATA_ENTRY = f"{DOMAIN}_schedule_entry"
 # listener (_async_reload_entry in __init__.py) skips its reload instead of racing this one.
 DATA_MANUAL_RELOAD = f"{DOMAIN}_schedule_manual_reload"
 
-# Set by _async_reload_entry when it skips its reload because of DATA_MANUAL_RELOAD above, so
-# _async_persist knows to run a follow-up reload for that other options change once its own
-# reload is done, instead of silently dropping it.
+# Set by _async_reload_entry the first time it's skipped for this entry_id while
+# DATA_MANUAL_RELOAD is set - that first call is always our own async_update_entry() below
+# triggering its own listener, not a genuinely concurrent change, so it must not count as
+# one. A second (or later) skipped call while still guarded IS a real concurrent change.
+DATA_MANUAL_RELOAD_SEEN = f"{DOMAIN}_schedule_manual_reload_seen"
+
+# Set by _async_reload_entry when it skips a genuinely concurrent reload (see
+# DATA_MANUAL_RELOAD_SEEN above), so _async_persist knows to run a follow-up reload for that
+# other options change once its own reload is done, instead of silently dropping it.
 DATA_RELOAD_PENDING = f"{DOMAIN}_schedule_reload_pending"
 
 _NEXT_ID_KEY = "next_schedule_id"
@@ -175,13 +181,20 @@ async def _async_persist(hass: HomeAssistant, connection, msg, entry, options: d
     hass.data[DATA_MANUAL_RELOAD] = entry.entry_id
     try:
         hass.config_entries.async_update_entry(entry, options=options)
-        reloaded = await hass.config_entries.async_reload(entry.entry_id)
-    except Exception:  # noqa: BLE001 - log the detail server-side, return a stable generic message
+    except Exception:  # noqa: BLE001 - nothing was persisted; a genuine save failure
         _LOGGER.exception("Plejd: failed to save schedules")
+        hass.data.pop(DATA_MANUAL_RELOAD, None)
+        hass.data.pop(DATA_MANUAL_RELOAD_SEEN, None)
         connection.send_error(msg["id"], "save_failed", "Could not save schedules")
         return
+    try:
+        reloaded = await hass.config_entries.async_reload(entry.entry_id)
+    except Exception:  # noqa: BLE001 - options are already persisted; treat like a failed reload below
+        _LOGGER.exception("Plejd: failed to reload after saving schedules")
+        reloaded = False
     finally:
         hass.data.pop(DATA_MANUAL_RELOAD, None)
+        hass.data.pop(DATA_MANUAL_RELOAD_SEEN, None)
         if hass.data.get(DATA_RELOAD_PENDING) == entry.entry_id:
             # A concurrent options change's own reload was suppressed by the guard above while
             # ours was in flight; it may have landed after we already read entry state, so give

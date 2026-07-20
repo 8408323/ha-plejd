@@ -225,9 +225,34 @@ async def test_reload_listener_skips_when_schedule_ws_reloading_manually():
     hass.data[schedule_ws.DATA_MANUAL_RELOAD] = entry.entry_id
     await _async_reload_entry(hass, entry)
     assert getattr(hass.config_entries, "reloaded", None) is None
-    # The suppressed reload isn't just dropped: it's marked pending so the in-flight manual
-    # reload runs a follow-up for it once done (issue #94 thread 2), rather than this
-    # concurrent options change never taking effect.
+
+
+async def test_reload_listener_does_not_mark_pending_for_its_own_update(monkeypatch):
+    # The first skipped call while DATA_MANUAL_RELOAD is set is always _async_persist's own
+    # async_update_entry() triggering this same listener for the save it's already handling -
+    # not a genuinely concurrent change - so it must not schedule a redundant follow-up
+    # reload (issue #94 thread 3: every schedule edit was otherwise reloading twice).
+    from plejd import _async_reload_entry, schedule_ws
+
+    hass, entry = _hass(), _entry()
+    hass.data[schedule_ws.DATA_MANUAL_RELOAD] = entry.entry_id
+    await _async_reload_entry(hass, entry)
+    assert schedule_ws.DATA_RELOAD_PENDING not in hass.data
+    assert hass.data[schedule_ws.DATA_MANUAL_RELOAD_SEEN] == entry.entry_id
+
+
+async def test_reload_listener_marks_pending_on_a_second_concurrent_call():
+    # A SECOND skipped call while still guarded is a genuinely different options change
+    # (e.g. a concurrent options-flow edit), not our own update listener firing again -
+    # this one must be marked pending so the in-flight manual reload runs a follow-up for
+    # it once done (issue #94 thread 2), rather than the change never taking effect.
+    from plejd import _async_reload_entry, schedule_ws
+
+    hass, entry = _hass(), _entry()
+    hass.data[schedule_ws.DATA_MANUAL_RELOAD] = entry.entry_id
+    await _async_reload_entry(hass, entry)  # first call: our own update, just marks "seen"
+    await _async_reload_entry(hass, entry)  # second call: a real concurrent change
+    assert getattr(hass.config_entries, "reloaded", None) is None
     assert hass.data[schedule_ws.DATA_RELOAD_PENDING] == entry.entry_id
 
 

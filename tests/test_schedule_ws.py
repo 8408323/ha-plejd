@@ -27,8 +27,11 @@ class _ConfigEntries:
         self.reload_calls: list[str] = []
         self.reload_fails = False
         self.reload_ok = True
+        self.update_fails = False
 
     def async_update_entry(self, entry, *, options):
+        if self.update_fails:
+            raise RuntimeError("update failed")
         self.updated = options
         entry.options = options
 
@@ -204,14 +207,34 @@ async def test_add_errors_when_no_free_slots():
     assert conn.error == (1, "no_free_slots", "No free schedule slots")
 
 
-async def test_add_returns_error_when_reload_fails():
+async def test_add_returns_persisted_schedules_when_reload_raises():
+    # async_reload() can raise instead of just returning False. Options are already
+    # persisted at that point (issue #94 thread 2), so this must be treated the same as a
+    # reported reload failure - not a generic error with no data.
     entry = _entry(options={})
     hass = _hass(entry)
     hass.config_entries.reload_fails = True
     conn = _Conn()
     await schedule_ws.ws_add(hass, conn, {"id": 1, "name": "X", "days": [0], "time": "06:00", "scene": 3, "fade": 0})
+    assert conn.error is None
+    msg_id, payload = conn.result
+    assert msg_id == 1
+    assert payload["schedules"][0]["name"] == "X"
+    assert entry.options["schedules"] == payload["schedules"]
+    assert payload["reload_failed"] == "Schedule saved, but Plejd failed to reload; try again"
+
+
+async def test_add_returns_error_when_the_save_itself_fails():
+    # Unlike a reload failure, nothing was persisted here - async_update_entry() itself
+    # raised, before any reload was even attempted - so this must be a genuine error.
+    entry = _entry(options={})
+    hass = _hass(entry)
+    hass.config_entries.update_fails = True
+    conn = _Conn()
+    await schedule_ws.ws_add(hass, conn, {"id": 1, "name": "X", "days": [0], "time": "06:00", "scene": 3, "fade": 0})
     assert conn.error == (1, "save_failed", "Could not save schedules")
     assert conn.result is None
+    assert hass.data.get(DATA_MANUAL_RELOAD) is None
 
 
 async def test_add_returns_persisted_schedules_when_reload_reports_failure():
@@ -357,15 +380,18 @@ async def test_delete_errors_when_schedule_not_found():
     assert conn.result is None
 
 
-async def test_delete_returns_error_when_reload_fails():
+async def test_delete_returns_persisted_schedules_when_reload_raises():
     coordinator = _Coordinator()
     entry = _entry(options={"schedules": [_SCHEDULE]}, runtime_data=coordinator)
     hass = _hass(entry)
     hass.config_entries.reload_fails = True
     conn = _Conn()
     await schedule_ws.ws_delete(hass, conn, {"id": 2, "schedule_id": 0})
-    assert conn.error == (2, "save_failed", "Could not save schedules")
-    assert conn.result is None
+    assert conn.error is None
+    assert conn.result == (
+        2,
+        {"schedules": [], "reload_failed": "Schedule saved, but Plejd failed to reload; try again"},
+    )
 
 
 async def test_delete_returns_persisted_schedules_when_reload_reports_failure():
