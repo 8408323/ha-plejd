@@ -88,6 +88,10 @@ class PlejdGatewayConnection:
     def state_for(self, address: int) -> OutputState | None:
         return self._state.get(address)
 
+    def set_state(self, address: int, state: OutputState) -> None:
+        """Locally record an output's state, e.g. an optimistic update after a local write."""
+        self._state[address] = state
+
     async def connect(self) -> None:
         """Open the WebSocket, authenticate, subscribe, and request initial state."""
         # A reconnect reuses this instance; cancel any leftover loops first so a stale

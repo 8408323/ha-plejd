@@ -18,6 +18,12 @@ All notable changes to this project are documented here. The format follows
   pickers), with conditional fields per action type and client-side validation
   before saving. The bindings list also now shows a "N press action(s)"
   summary alongside each binding's up/down/stop.
+- **Whole-room lights (responsive, one command).** Each Plejd room is now exposed
+  as a group light that switches/dims the entire room in a **single** `0x0098`
+  mesh command to the room's group address — the way the Plejd app controls a
+  room — instead of Home Assistant fanning an area out to one command per output
+  (which lagged, especially over the gateway). Built from the cloud site's
+  `roomAddress` + `outputGroups`; room state is aggregated from its member outputs.
 
 ## [0.10.0] - 2026-07-19
 
