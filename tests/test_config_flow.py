@@ -22,6 +22,9 @@ from plejd.const import (
     CONF_DEVICE_ADDRESSES,
     CONF_DEVICES,
     CONF_GATEWAYS,
+    CONF_HOLIDAY_LIGHTS,
+    CONF_HOLIDAY_WINDOW_END,
+    CONF_HOLIDAY_WINDOW_START,
     CONF_INSTALLATION_ID,
     CONF_RESOURCE_SET_ID,
     CONF_SITE_ID,
@@ -421,7 +424,7 @@ async def test_options_no_free_slots_errors():
 async def test_options_init_shows_menu():
     res = await _opt_flow().async_step_init()
     assert res["type"] == "menu" and res["step_id"] == "init"
-    assert res["menu_options"] == ["schedules", "dashboard", "add_device"]
+    assert res["menu_options"] == ["schedules", "dashboard", "holiday_mode", "add_device"]
 
 
 # ── Options flow: add a device ─────────────────────────────────────────────────
@@ -553,3 +556,41 @@ async def test_options_schedules_preserves_show_panel():
     )
     assert res["type"] == "create_entry"
     assert res["data"]["show_panel"] is False  # kept through an unrelated (schedules) save
+
+
+# ── Options: holiday mode (presence simulation) ────────────────────────────────
+
+
+async def test_options_init_menu_includes_holiday_mode():
+    res = await _opt_flow().async_step_init()
+    assert "holiday_mode" in res["menu_options"]
+
+
+async def test_options_holiday_mode_shows_form_with_defaults():
+    res = await _opt_flow().async_step_holiday_mode()
+    assert res["type"] == "form" and res["step_id"] == "holiday_mode"
+    assert set(_schema_keys(res)) == {"lights", "window_start", "window_end"}
+
+
+async def test_options_holiday_mode_saves_lights_and_window():
+    res = await _opt_flow().async_step_holiday_mode(
+        {"lights": ["light.kitchen"], "window_start": "19:00", "window_end": "23:30"}
+    )
+    assert res["type"] == "create_entry"
+    assert res["data"][CONF_HOLIDAY_LIGHTS] == ["light.kitchen"]
+    assert res["data"][CONF_HOLIDAY_WINDOW_START] == "19:00"
+    assert res["data"][CONF_HOLIDAY_WINDOW_END] == "23:30"
+
+
+async def test_options_holiday_mode_defaults_lights_to_empty_meaning_all():
+    res = await _opt_flow().async_step_holiday_mode({"window_start": "18:00", "window_end": "23:00"})
+    assert res["data"][CONF_HOLIDAY_LIGHTS] == []
+
+
+async def test_options_holiday_mode_preserves_other_options():
+    res = await _opt_flow(options={"show_panel": False, "schedules": [{"slot": 0}]}).async_step_holiday_mode(
+        {"window_start": "18:00", "window_end": "23:00"}
+    )
+    assert res["type"] == "create_entry"
+    assert res["data"]["show_panel"] is False
+    assert res["data"]["schedules"] == [{"slot": 0}]
