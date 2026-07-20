@@ -37,14 +37,21 @@ class _FakeCoordinator:
 class _FakeHolidayMode:
     instances: list = []
     call_order: list = []
+    stop_result = True
 
     def __init__(self, hass, entry):
+        self.started = False
         self.stopped = False
         _FakeHolidayMode.instances.append(self)
+
+    async def async_start(self):
+        self.started = True
+        _FakeHolidayMode.call_order.append("holiday_mode.async_start")
 
     async def async_stop(self):
         self.stopped = True
         _FakeHolidayMode.call_order.append("holiday_mode.async_stop")
+        return _FakeHolidayMode.stop_result
 
 
 class _FakeConfigEntries:
@@ -158,6 +165,7 @@ async def test_setup_stops_holiday_mode_when_forward_fails(monkeypatch):
     monkeypatch.setattr(plejd, "PlejdHolidayMode", _FakeHolidayMode)
     _FakeCoordinator.instances.clear()
     _FakeHolidayMode.instances.clear()
+    _FakeHolidayMode.call_order.clear()
     hass, entry = _hass(), _entry()
 
     async def _boom(entry, platforms):
@@ -170,6 +178,10 @@ async def test_setup_stops_holiday_mode_when_forward_fails(monkeypatch):
     # A platform forwarded before the failure could have already started it (e.g. a
     # restored-on holiday switch) — its timer must not be left running (#89 review).
     assert _FakeHolidayMode.instances[-1].stopped is True
+    # start() runs first so a manager no platform had reached yet still loads its
+    # persisted deadlines before stop() persists — otherwise stop would overwrite the
+    # store with an empty, never-loaded state (#89 review).
+    assert _FakeHolidayMode.call_order == ["holiday_mode.async_start", "holiday_mode.async_stop"]
 
 
 async def test_unload_shuts_down_coordinator(monkeypatch):
@@ -600,3 +612,6 @@ async def test_unload_failure_keeps_holiday_mode_registered_for_a_retry(monkeypa
     # ...but not removed from hass.data: the entry stays loaded, and a later unload
     # retry must still be able to find it (#89 review).
     assert DATA_HOLIDAY_MODE in hass.data
+    # ...and resumed: the entry (and its still-"on" holiday switch) stays loaded when
+    # unload is vetoed, so presence simulation must not silently stop (#89 review).
+    assert _FakeHolidayMode.instances[-1].started is True

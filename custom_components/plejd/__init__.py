@@ -84,6 +84,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # holiday switch) may have already started it.
         holiday_mode = hass.data.pop(DATA_HOLIDAY_MODE, None)
         if holiday_mode is not None:
+            # A platform earlier than switch may not have run yet, so this manager's
+            # persisted deadlines were never loaded; start() loads them (idempotent if
+            # a restored switch already did) so stop()'s persist can't wipe the store
+            # with an empty, never-loaded in-memory state.
+            await holiday_mode.async_start()
             await holiday_mode.async_stop()
         await coordinator.async_shutdown()
         raise
@@ -152,8 +157,10 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # this runs unconditionally (not gated on unload_ok): its own timer/state is this
     # integration's alone to own, independent of whether some other platform's unload fails.
     # Only *remove* it from hass.data once the unload actually succeeds, though — if a
-    # platform refuses to unload, the entry stays loaded and a later retry must still be
-    # able to find it (async_stop() is idempotent, so re-running it then is a no-op).
+    # platform refuses to unload, the entry (and its holiday switch, still reporting on)
+    # stays loaded, so resume it instead of leaving presence simulation silently stopped;
+    # a later retry must still be able to find it (async_stop() is idempotent, so
+    # re-running it then is a no-op).
     holiday_mode = hass.data.get(DATA_HOLIDAY_MODE)
     if holiday_mode is not None:
         await holiday_mode.async_stop()
@@ -161,4 +168,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if unload_ok:
         hass.data.pop(DATA_HOLIDAY_MODE, None)
         await entry.runtime_data.async_shutdown()
+    elif holiday_mode is not None:
+        await holiday_mode.async_start()
     return unload_ok
