@@ -34,6 +34,15 @@ const triggerLabel = (t) => {
   return t.subtype ? `${type} · ${t.subtype}` : type;
 };
 
+// A cover's current_position comes off hass state, which can be missing, out of range, or
+// (for any entity claiming Plejd attribution) outright hostile — clamp/validate to a safe
+// 0-100 integer before it ever reaches an HTML attribute; anything else is "unknown".
+const clampPosition = (value) => {
+  if (value == null) return null;
+  const n = Math.round(Number(value));
+  return Number.isFinite(n) ? Math.min(100, Math.max(0, n)) : null;
+};
+
 // CoverEntityFeature.SET_POSITION bit (homeassistant.components.cover) — mirrors cover.py's
 // supported_features so the panel can tell a position-capable cover apart without importing HA.
 const COVER_FEATURE_SET_POSITION = 4;
@@ -64,6 +73,13 @@ class PlejdPanel extends HTMLElement {
     this._busy = false;
     this._lightsFrame = null;
     this._coversFrame = null;
+    // entity_id -> last position we commanded via the slider. PlejdCover is assumed_state
+    // (cover.py has no position read-back), so hass never reports current_position; without
+    // this the slider would forget the user's last input and fall back to "unknown" again.
+    this._coverPositionOverrides = {};
+    // entity_id of a position slider mid-drag, else null — guards _updateCovers so a hass
+    // state push mid-drag can't replace the <input> before its release "change" handler runs.
+    this._draggingCoverEntity = null;
     const useAnimationFrame = Boolean(
       globalThis.requestAnimationFrame && globalThis.cancelAnimationFrame,
     );
@@ -378,15 +394,24 @@ class PlejdPanel extends HTMLElement {
   _updateCovers() {
     const el = this.querySelector("#plejd-covers");
     if (!el) return;
+    // A slider mid-drag owns its own DOM node (native pointer capture); replacing the whole
+    // list via innerHTML would kill the drag before its release "change" handler can run.
+    // Skip this refresh and pick it back up once the drag ends.
+    if (this._draggingCoverEntity) return;
     const covers = this._covers();
     const rows = covers
       .map((s) => {
         const name = s.attributes.friendly_name || s.entity_id;
         const canSetPosition = Boolean((s.attributes.supported_features || 0) & COVER_FEATURE_SET_POSITION);
-        const position = s.attributes.current_position;
+        const position = clampPosition(s.attributes.current_position);
         const positionLabel = position != null ? `${position}%` : s.state;
+        // Prefer our own optimistic override over hass.states: cover.py never reports a
+        // real current_position, so falling back to a fixed number (e.g. 0) would render
+        // every unknown-position cover as if it were closed. Omitting the value attribute
+        // when nothing is known yet leaves the slider at its native, non-committal midpoint.
+        const knownPosition = position != null ? position : this._coverPositionOverrides[s.entity_id];
         const slider = canSetPosition
-          ? `<input type="range" min="0" max="100" value="${position != null ? position : 0}" data-cover-position="${esc(s.entity_id)}" style="flex:1">`
+          ? `<input type="range" min="0" max="100"${knownPosition != null ? ` value="${knownPosition}"` : ""} data-cover-position="${esc(s.entity_id)}" style="flex:1">`
           : "";
         return `
           <div style="padding:10px 4px;border-bottom:1px solid var(--divider-color,#e0e0e0)">
@@ -423,16 +448,24 @@ class PlejdPanel extends HTMLElement {
       btn.addEventListener("click", () => this._onCoverAction(btn.getAttribute("data-cover-stop"), "stop_cover")),
     );
     // The "change" event (not "input") only fires once the user releases the slider, so a
-    // drag sends a single command instead of flooding the mesh with one per tick.
-    el.querySelectorAll("[data-cover-position]").forEach((input) =>
+    // drag sends a single command instead of flooding the mesh with one per tick. "input"
+    // fires on every drag tick purely to mark the slider active, so a hass push mid-drag
+    // (_updateCovers) can't rebuild the list and kill the in-progress drag.
+    el.querySelectorAll("[data-cover-position]").forEach((input) => {
+      const entityId = input.getAttribute("data-cover-position");
+      input.addEventListener("input", () => {
+        this._draggingCoverEntity = entityId;
+      });
       input.addEventListener("change", (e) => {
-        const entityId = e.target.getAttribute("data-cover-position");
+        this._draggingCoverEntity = null;
+        const position = Number(e.target.value);
+        this._coverPositionOverrides[entityId] = position;
         this._callService("cover", "set_cover_position", {
           entity_id: entityId,
-          position: Number(e.target.value),
+          position,
         }).catch((err) => console.warn(`Plejd panel: set_cover_position failed for ${entityId}`, err));
-      }),
-    );
+      });
+    });
   }
 
   _onCoverAction(entityId, service) {

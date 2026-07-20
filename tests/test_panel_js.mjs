@@ -315,6 +315,85 @@ test("_updateCovers only adds a position slider for covers that support SET_POSI
   assert.match(covers.innerHTML, /data-cover-stop="cover\.b"/);
 });
 
+test("_updateCovers clamps an out-of-range position and drops a hostile one instead of interpolating it raw", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const covers = { innerHTML: "", querySelectorAll: () => [] };
+
+  panel.querySelector = () => covers;
+  panel._hass = {
+    states: {
+      "cover.a": {
+        entity_id: "cover.a",
+        state: "open",
+        attributes: { friendly_name: "Cover A", current_position: 142, supported_features: 15 },
+      },
+      "cover.b": {
+        entity_id: "cover.b",
+        state: "open",
+        attributes: {
+          friendly_name: "Cover B",
+          current_position: '0" autofocus onfocus="window.pwned=1',
+          supported_features: 15,
+        },
+      },
+    },
+    entities: {
+      "cover.a": { platform: "plejd" },
+      "cover.b": { platform: "plejd" },
+    },
+  };
+
+  panel._updateCovers();
+
+  assert.match(covers.innerHTML, /value="100" data-cover-position="cover\.a"/);
+  assert.doesNotMatch(covers.innerHTML, /onfocus/);
+  assert.match(covers.innerHTML, /data-cover-position="cover\.b"/);
+});
+
+test("_updateCovers leaves the slider without a value (native midpoint) when the position is unknown", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const covers = { innerHTML: "", querySelectorAll: () => [] };
+
+  panel.querySelector = () => covers;
+  panel._hass = {
+    states: {
+      "cover.hall_blind": {
+        entity_id: "cover.hall_blind",
+        state: "open",
+        attributes: { friendly_name: "Hall Blind", supported_features: 15 },
+      },
+    },
+    entities: { "cover.hall_blind": { platform: "plejd" } },
+  };
+
+  panel._updateCovers();
+
+  assert.doesNotMatch(covers.innerHTML, /value="0"/);
+  assert.match(covers.innerHTML, /<input type="range" min="0" max="100" data-cover-position="cover\.hall_blind"/);
+  assert.match(covers.innerHTML, />open<\/span>/); // label falls back to state, not a fake 0%
+
+  panel._coverPositionOverrides["cover.hall_blind"] = 65;
+  panel._updateCovers();
+
+  assert.match(covers.innerHTML, /value="65" data-cover-position="cover\.hall_blind"/);
+});
+
+test("_updateCovers skips rebuilding the list while a slider is mid-drag", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const covers = { innerHTML: "unchanged", querySelectorAll: () => [] };
+
+  panel.querySelector = () => covers;
+  panel._hass = { states: {}, entities: {} };
+  panel._draggingCoverEntity = "cover.kitchen_blind";
+
+  panel._updateCovers();
+
+  assert.equal(covers.innerHTML, "unchanged");
+});
+
 test("_updateCovers shows a fallback message and does not crash with no covers or no hass", () => {
   const PanelClass = loadPanelClass();
   const panel = new PanelClass();
@@ -346,8 +425,7 @@ function makeCoverRowEl(entityId, position) {
     getAttribute: () => entityId,
     value: String(position),
     addEventListener: (ev, fn) => {
-      listeners.sliderEvent = ev;
-      listeners.slider = fn;
+      listeners[ev] = fn;
     },
   };
   const el = {
@@ -397,14 +475,44 @@ test("releasing the position slider sends set_cover_position once, wired on chan
   const { el, listeners, slider } = makeCoverRowEl("cover.kitchen_blind", 42);
   panel._wireCovers(el);
 
-  assert.equal(listeners.sliderEvent, "change"); // fires on release, not per drag tick like "input" would
+  assert.equal(typeof listeners.change, "function"); // fires on release, not per drag tick like "input" would
 
   slider.value = "77";
-  listeners.slider({ target: slider });
+  listeners.change({ target: slider });
 
   assert.deepEqual(plain(calls), [
     { domain: "cover", service: "set_cover_position", data: { entity_id: "cover.kitchen_blind", position: 77 } },
   ]);
+});
+
+test("dragging a cover position slider marks it active until release", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._callService = () => Promise.resolve();
+
+  const { el, listeners, slider } = makeCoverRowEl("cover.kitchen_blind", 42);
+  panel._wireCovers(el);
+
+  listeners.input({ target: slider });
+  assert.equal(panel._draggingCoverEntity, "cover.kitchen_blind");
+
+  slider.value = "60";
+  listeners.change({ target: slider });
+  assert.equal(panel._draggingCoverEntity, null);
+});
+
+test("releasing a cover position slider remembers the sent value as an optimistic override", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._callService = () => Promise.resolve();
+
+  const { el, listeners, slider } = makeCoverRowEl("cover.kitchen_blind", 42);
+  panel._wireCovers(el);
+
+  slider.value = "65";
+  listeners.change({ target: slider });
+
+  assert.equal(panel._coverPositionOverrides["cover.kitchen_blind"], 65);
 });
 
 test("a failed cover service call is caught and logged, not thrown", async () => {
