@@ -64,6 +64,12 @@ class PlejdPanel extends HTMLElement {
     this._busy = false;
     this._lightsFrame = null;
     this._draggingEntity = null; // entity_id of a brightness slider mid-drag, else null
+    // entity_id -> optimistic on/off from a just-sent toggle, until hass's own push catches
+    // up. Repeated clicks arrive well within the round-trip to the backend (mesh/gateway
+    // ack plus the websocket push back to this tab), so reading hass.states directly on
+    // every click reads the same pre-toggle value each time and sends the same command
+    // repeatedly instead of alternating - this is what a click actually just did.
+    this._toggleOverrides = {};
     const useAnimationFrame = Boolean(
       globalThis.requestAnimationFrame && globalThis.cancelAnimationFrame,
     );
@@ -202,6 +208,10 @@ class PlejdPanel extends HTMLElement {
       await this._hass.callService("light", turnOn ? "turn_on" : "turn_off", { entity_id: entityId });
     } catch (err) {
       console.warn("Plejd panel: failed to toggle light", entityId, err);
+      // The command never went out - don't keep claiming it did. Drop the optimistic
+      // override so the row falls back to showing the real (unchanged) state.
+      if (this._toggleOverrides[entityId] === turnOn) delete this._toggleOverrides[entityId];
+      this._updateLights();
     }
   }
 
@@ -338,7 +348,10 @@ class PlejdPanel extends HTMLElement {
     const rows = lights
       .map((s) => {
         const name = s.attributes.friendly_name || s.entity_id;
-        const on = s.state === "on";
+        const override = this._toggleOverrides[s.entity_id];
+        const realOn = s.state === "on";
+        if (override !== undefined && override === realOn) delete this._toggleOverrides[s.entity_id];
+        const on = override !== undefined ? override : realOn;
         const bri = s.attributes.brightness;
         const pct = bri != null ? Math.round((bri / 255) * 100) : 100;
         const level = on && bri != null ? `${pct}%` : on ? "on" : "off";
@@ -380,8 +393,15 @@ class PlejdPanel extends HTMLElement {
     el.querySelectorAll("[data-toggle]").forEach((span) => {
       const entityId = span.getAttribute("data-toggle");
       span.addEventListener("click", () => {
-        const isOn = this._hass.states[entityId]?.state === "on";
-        this._toggleLight(entityId, !isOn);
+        // Prefer our own optimistic override over hass.states: a repeated click well
+        // within the round-trip to the backend must alternate off the last click's
+        // intent, not the pre-click state hass hasn't caught up to yet.
+        const isOn =
+          entityId in this._toggleOverrides ? this._toggleOverrides[entityId] : this._hass.states[entityId]?.state === "on";
+        const nextOn = !isOn;
+        this._toggleOverrides[entityId] = nextOn;
+        this._toggleLight(entityId, nextOn);
+        this._updateLights();
       });
     });
     el.querySelectorAll("[data-brightness]").forEach((slider) => {

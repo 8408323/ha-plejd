@@ -211,6 +211,45 @@ test("_updateLights renders an explicit on/off switch reflecting each light's st
   assert.match(lights.innerHTML, /data-toggle="light\.kitchen"[^>]*role="switch"/);
 });
 
+test("a pending toggle override renders immediately, overriding the not-yet-updated hass state", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const lights = { innerHTML: "", querySelector: () => null, querySelectorAll: () => [] };
+
+  panel.querySelector = (selector) => (selector === "#plejd-lights" ? lights : null);
+  panel._hass = {
+    states: {
+      "light.kitchen": { entity_id: "light.kitchen", state: "off", attributes: { friendly_name: "Kitchen" } },
+    },
+    entities: { "light.kitchen": { platform: "plejd" } },
+  };
+  panel._toggleOverrides = { "light.kitchen": true }; // we just clicked to turn it on
+
+  panel._updateLights();
+
+  assert.match(lights.innerHTML, /data-toggle="light\.kitchen"[^>]*role="switch" aria-checked="true"/);
+  assert.deepEqual(panel._toggleOverrides, { "light.kitchen": true }); // not confirmed yet - still held
+});
+
+test("a toggle override is dropped once hass's own pushed state catches up to it", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const lights = { innerHTML: "", querySelector: () => null, querySelectorAll: () => [] };
+
+  panel.querySelector = (selector) => (selector === "#plejd-lights" ? lights : null);
+  panel._hass = {
+    states: {
+      "light.kitchen": { entity_id: "light.kitchen", state: "on", attributes: { friendly_name: "Kitchen" } },
+    },
+    entities: { "light.kitchen": { platform: "plejd" } },
+  };
+  panel._toggleOverrides = { "light.kitchen": true }; // matches the real state now
+
+  panel._updateLights();
+
+  assert.deepEqual(panel._toggleOverrides, {});
+});
+
 test("_updateLights renders a brightness slider only for dimmable lights", () => {
   const PanelClass = loadPanelClass();
   const panel = new PanelClass();
@@ -276,6 +315,7 @@ test("clicking a light row's name calls light.turn_off when the light is on", ()
     },
   };
   const el = { querySelectorAll: (sel) => (sel === "[data-toggle]" ? [nameSpan] : []) };
+  panel.querySelector = () => null; // no #plejd-lights mounted - the post-click re-render is a no-op
 
   panel._wireLights(el);
   listeners.click();
@@ -304,12 +344,49 @@ test("clicking a light row's name calls light.turn_on when the light is off", ()
     },
   };
   const el = { querySelectorAll: (sel) => (sel === "[data-toggle]" ? [nameSpan] : []) };
+  panel.querySelector = () => null; // no #plejd-lights mounted - the post-click re-render is a no-op
 
   panel._wireLights(el);
   listeners.click();
 
   assert.equal(calls.length, 1);
   assert.deepEqual(plain(calls[0]), { domain: "light", service: "turn_on", data: { entity_id: "light.kitchen" } });
+});
+
+test("rapid repeated clicks alternate on/off instead of repeating the same command", () => {
+  // hass.states only reflects the pre-click value until the real round-trip (mesh/gateway
+  // echo, then the websocket push back to this tab) lands - clicking again before that
+  // must not re-read the same stale state and send the same command twice.
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const calls = [];
+  panel._hass = {
+    states: { "light.kitchen": { state: "off" } }, // never changes during this test
+    callService: (domain, service, data) => {
+      calls.push({ domain, service, data });
+      return Promise.resolve();
+    },
+  };
+  panel.querySelector = () => null;
+
+  const listeners = {};
+  const nameSpan = {
+    getAttribute: (name) => (name === "data-toggle" ? "light.kitchen" : null),
+    addEventListener: (ev, fn) => {
+      listeners[ev] = fn;
+    },
+  };
+  const el = { querySelectorAll: (sel) => (sel === "[data-toggle]" ? [nameSpan] : []) };
+  panel._wireLights(el);
+
+  listeners.click();
+  listeners.click();
+  listeners.click();
+
+  assert.deepEqual(
+    calls.map((c) => c.service),
+    ["turn_on", "turn_off", "turn_on"],
+  );
 });
 
 test("dragging a brightness slider sends a live update on the first tick and updates the label", () => {
@@ -485,10 +562,23 @@ test("a failed toggle service call is caught and logged, not thrown", async () =
   const PanelClass = loadPanelClass({ console: { ...console, warn: (...args) => warnings.push(args) } });
   const panel = new PanelClass();
   panel._hass = { states: { "light.kitchen": { state: "off" } }, callService: () => Promise.reject(new Error("boom")) };
+  panel.querySelector = () => null;
 
   await panel._toggleLight("light.kitchen", true);
 
   assert.equal(warnings.length, 1);
+});
+
+test("a failed toggle drops its optimistic override instead of leaving the row stuck", async () => {
+  const PanelClass = loadPanelClass({ console: { ...console, warn: () => {} } });
+  const panel = new PanelClass();
+  panel._hass = { states: { "light.kitchen": { state: "off" } }, callService: () => Promise.reject(new Error("boom")) };
+  panel.querySelector = () => null;
+  panel._toggleOverrides = { "light.kitchen": true };
+
+  await panel._toggleLight("light.kitchen", true);
+
+  assert.deepEqual(panel._toggleOverrides, {});
 });
 
 test("a failed brightness service call is caught and logged, not thrown", async () => {
