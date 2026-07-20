@@ -11,12 +11,13 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry
 
-from . import dim_binding_ws, panel
+from . import dim_binding_ws, panel, remote_profile_ws
 from .add_device import async_add_device
 from .bindings import PlejdDimBindings
 from .const import CONF_SHOW_PANEL, DOMAIN
 from .coordinator import PlejdCoordinator
 from .discovery import async_bluetooth_available, async_scan_unprovisioned
+from .remote_profiles import PlejdRemoteProfiles
 
 _WS_REGISTERED = f"{DOMAIN}_ws_registered"
 
@@ -123,8 +124,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data[dim_binding_ws.DATA_BINDINGS] = dim_bindings
     entry.async_on_unload(lambda: hass.data.pop(dim_binding_ws.DATA_BINDINGS, None))
     entry.async_on_unload(dim_bindings.shutdown)
+
+    # Custom remote button-profile overrides (see remote_profiles.py). Same optional,
+    # storage-backed pattern as the dim bindings above.
+    remote_profiles = PlejdRemoteProfiles(hass)
+    try:
+        await remote_profiles.async_load()
+    except Exception:  # noqa: BLE001 - optional; continue with an empty manager
+        _LOGGER.warning("Plejd: could not load remote profiles; continuing without them", exc_info=True)
+    hass.data[remote_profile_ws.DATA_REMOTE_PROFILES] = remote_profiles
+    entry.async_on_unload(lambda: hass.data.pop(remote_profile_ws.DATA_REMOTE_PROFILES, None))
+
     if not hass.data.get(_WS_REGISTERED):
         dim_binding_ws.async_register(hass)  # hass-global commands; register once
+        remote_profile_ws.async_register(hass)
         hass.data[_WS_REGISTERED] = True
     return True
 
