@@ -42,14 +42,17 @@ class _FakeHolidayMode:
     def __init__(self, hass, entry):
         self.started = False
         self.stopped = False
+        self.is_running = False
         _FakeHolidayMode.instances.append(self)
 
     async def async_start(self):
         self.started = True
+        self.is_running = True
         _FakeHolidayMode.call_order.append("holiday_mode.async_start")
 
     async def async_stop(self):
         self.stopped = True
+        self.is_running = False
         _FakeHolidayMode.call_order.append("holiday_mode.async_stop")
         return _FakeHolidayMode.stop_result
 
@@ -603,6 +606,7 @@ async def test_unload_failure_keeps_holiday_mode_registered_for_a_retry(monkeypa
     _FakeHolidayMode.instances.clear()
     hass, entry = _hass(), _entry()
     await async_setup_entry(hass, entry)
+    await hass.data[DATA_HOLIDAY_MODE].async_start()  # the holiday switch was on before unload
     hass.config_entries.unload_result = False  # some other platform refuses to unload
 
     assert await async_unload_entry(hass, entry) is False
@@ -612,6 +616,26 @@ async def test_unload_failure_keeps_holiday_mode_registered_for_a_retry(monkeypa
     # ...but not removed from hass.data: the entry stays loaded, and a later unload
     # retry must still be able to find it (#89 review).
     assert DATA_HOLIDAY_MODE in hass.data
-    # ...and resumed: the entry (and its still-"on" holiday switch) stays loaded when
-    # unload is vetoed, so presence simulation must not silently stop (#89 review).
+    # ...and resumed, because it was actually running before the stop above (#89 review).
     assert _FakeHolidayMode.instances[-1].started is True
+
+
+async def test_unload_failure_does_not_resume_holiday_mode_that_was_already_off(monkeypatch):
+    from plejd.holiday_mode import DATA_HOLIDAY_MODE
+
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    monkeypatch.setattr(plejd, "PlejdHolidayMode", _FakeHolidayMode)
+    _FakeCoordinator.instances.clear()
+    _FakeHolidayMode.instances.clear()
+    hass, entry = _hass(), _entry()
+    await async_setup_entry(hass, entry)  # holiday switch was off: async_start() never ran
+    hass.config_entries.unload_result = False  # some other platform refuses to unload
+
+    assert await async_unload_entry(hass, entry) is False
+
+    # Still stopped (a no-op, since it was never running) and left registered for a retry...
+    assert _FakeHolidayMode.instances[-1].stopped is True
+    assert DATA_HOLIDAY_MODE in hass.data
+    # ...but NOT resumed: it wasn't running before the veto, so resuming it would start a
+    # hidden timer behind a switch entity that still reads off (#89 review).
+    assert _FakeHolidayMode.instances[-1].started is False

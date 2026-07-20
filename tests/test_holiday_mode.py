@@ -279,6 +279,20 @@ async def test_start_drops_a_malformed_persisted_deadline_without_leaking_the_ti
     assert manager.is_running is True  # the timer is still correctly owned, not leaked
 
 
+async def test_start_drops_a_timezone_naive_persisted_deadline_without_leaking_the_timer(monkeypatch):
+    unsubbed = []
+    monkeypatch.setattr(hm, "async_track_time_interval", lambda hass, action, interval: lambda: unsubbed.append(True))
+    hass = _hass()
+    naive_deadline = datetime(2026, 7, 19, 21, 0)  # no tzinfo, e.g. from a hand-edited store
+    hass.data[("store", STORE_KEY)] = {"light.a": naive_deadline.isoformat(), "light.b": _local(21, 0).isoformat()}
+    manager = PlejdHolidayMode(hass, _entry())
+
+    await manager.async_start()  # must not raise, and must not abandon the timer it just registered
+
+    assert manager._on_until == {"light.b": _local(21, 0)}  # the naive entry is dropped, not fatal
+    assert manager.is_running is True  # the timer is still correctly owned, not leaked
+
+
 async def test_start_recovers_from_a_load_that_raises():
     hass = _hass()
     manager = PlejdHolidayMode(hass, _entry())

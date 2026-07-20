@@ -158,16 +158,19 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # integration's alone to own, independent of whether some other platform's unload fails.
     # Only *remove* it from hass.data once the unload actually succeeds, though — if a
     # platform refuses to unload, the entry (and its holiday switch, still reporting on)
-    # stays loaded, so resume it instead of leaving presence simulation silently stopped;
-    # a later retry must still be able to find it (async_stop() is idempotent, so
-    # re-running it then is a no-op).
+    # stays loaded, so resume it instead of leaving presence simulation silently stopped —
+    # but only if it was actually running before this stop, or a switch left off would
+    # come back with a hidden timer behind an entity that still reads off (#89 review).
+    # A later retry must still be able to find it either way (async_stop() is idempotent,
+    # so re-running it then is a no-op).
     holiday_mode = hass.data.get(DATA_HOLIDAY_MODE)
+    was_holiday_mode_running = holiday_mode is not None and holiday_mode.is_running
     if holiday_mode is not None:
         await holiday_mode.async_stop()
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
         hass.data.pop(DATA_HOLIDAY_MODE, None)
         await entry.runtime_data.async_shutdown()
-    elif holiday_mode is not None:
+    elif was_holiday_mode_running:
         await holiday_mode.async_start()
     return unload_ok

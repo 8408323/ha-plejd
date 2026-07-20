@@ -143,9 +143,17 @@ class PlejdHolidayMode:
         parsed: dict[str, datetime] = {}
         for entity_id, deadline in stored.items():
             try:
-                parsed[entity_id] = datetime.fromisoformat(deadline)
+                parsed_deadline = datetime.fromisoformat(deadline)
             except (TypeError, ValueError):
                 _LOGGER.warning("Plejd holiday mode: dropping a malformed persisted deadline for %s", entity_id)
+                continue
+            if parsed_deadline.tzinfo is None:
+                # _async_turn_off_expired() compares against dt_util.now() (aware); a naive
+                # deadline would TypeError on every tick, silently breaking that light's
+                # expiry forever (#89 review).
+                _LOGGER.warning("Plejd holiday mode: dropping a timezone-naive persisted deadline for %s", entity_id)
+                continue
+            parsed[entity_id] = parsed_deadline
         return parsed
 
     async def _async_turn_off_with_retry(self, entity_id: str, attempts: int = 2) -> bool:
