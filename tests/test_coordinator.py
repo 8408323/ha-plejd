@@ -787,6 +787,44 @@ async def test_gateway_off_preserves_prior_level_despite_ack_landing_before_writ
     assert c.state_for(11).on is False and c.state_for(11).level == 150
 
 
+async def test_gateway_set_output_does_not_overwrite_a_real_push_that_arrived_mid_write(monkeypatch):
+    # A physical switch (or another app instance) can change the same output while our own
+    # write is still in flight; that push already lands in state_for() (and already notified
+    # listeners via _on_event) before write() returns. Our own optimistic record must not
+    # then stomp that real, newer value with the one we merely intended to command.
+    from plejd.protocol import OutputState
+
+    monkeypatch.setattr(coordinator_mod, "PlejdGatewayConnection", _FakeGateway)
+    hass = _hass()
+    hass.session = object()
+    c = PlejdCoordinator(hass, _gateway_entry())
+    await c.async_start()
+    c._gateway.state = {11: OutputState(output=11, on=True, level=150)}
+
+    async def _write_with_concurrent_third_party_change(vector):
+        c._gateway.writes.append(vector)
+        # Someone else changed this output to a value we didn't command, while we were
+        # writing our own (on, 80) command.
+        c._gateway.state[11] = OutputState(output=11, on=True, level=30)
+
+    monkeypatch.setattr(c._gateway, "write", _write_with_concurrent_third_party_change)
+    await c.async_set_output(11, True, 80)
+
+    assert c.state_for(11).on is True and c.state_for(11).level == 30
+
+
+async def test_gateway_set_output_still_applies_its_own_state_when_nothing_else_changed(monkeypatch):
+    monkeypatch.setattr(coordinator_mod, "PlejdGatewayConnection", _FakeGateway)
+    hass = _hass()
+    hass.session = object()
+    c = PlejdCoordinator(hass, _gateway_entry())
+    await c.async_start()
+
+    await c.async_set_output(11, True, 80)
+
+    assert c.state_for(11).on is True and c.state_for(11).level == 80
+
+
 async def test_gateway_set_group_output_reflects_member_state(monkeypatch):
     from plejd.protocol import set_group_state_and_level
 

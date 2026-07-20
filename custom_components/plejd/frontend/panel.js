@@ -76,6 +76,16 @@ class PlejdPanel extends HTMLElement {
     // release fires well before the real state push arrives, and without this it would
     // redraw the slider back to the stale pre-drag value for a moment.
     this._brightnessOverrides = {};
+    // entity_id -> integer, bumped on every toggle/brightness command for that light. Lets
+    // an async command's own failure handler tell whether a newer command has since
+    // superseded it (by value alone, the same true/pct can recur - e.g. off/on/off/on -
+    // so a stale rejection could otherwise clear an unrelated, newer optimistic override).
+    this._commandTokens = {};
+    // entity_id -> { sending, queuedPct } - brightness-send serialization, kept on the
+    // panel instance rather than a per-render closure so a mid-drag re-render (a new
+    // DOM element, a fresh _wireLights closure) doesn't lose track of a send already in
+    // flight and let a new drag's send overlap it.
+    this._brightnessSendState = {};
     // entity_id -> optimistic target temperature from a just-sent setpoint tap, until
     // hass's own push catches up. Repeated taps arrive well within that round-trip, so
     // reading hass.states directly on every tap would recompute from the same pre-tap
@@ -228,34 +238,75 @@ class PlejdPanel extends HTMLElement {
     }
   }
 
+  // A fresh token for entityId, so this command's own failure handler can later tell
+  // whether a newer command has since superseded it (see _commandTokens above).
+  _nextCommandToken(entityId) {
+    const token = (this._commandTokens[entityId] || 0) + 1;
+    this._commandTokens[entityId] = token;
+    return token;
+  }
+
   async _toggleLight(entityId, turnOn) {
+    const token = this._nextCommandToken(entityId);
+    this._toggleOverrides[entityId] = turnOn;
     try {
       await this._hass.callService("light", turnOn ? "turn_on" : "turn_off", { entity_id: entityId });
     } catch (err) {
       console.warn("Plejd panel: failed to toggle light", entityId, err);
       // The command never went out - don't keep claiming it did. Drop the optimistic
-      // override so the row falls back to showing the real (unchanged) state.
-      if (this._toggleOverrides[entityId] === turnOn) delete this._toggleOverrides[entityId];
-      this._updateLights();
+      // override, but only if no newer command for this entity has superseded it.
+      if (this._commandTokens[entityId] === token) {
+        delete this._toggleOverrides[entityId];
+        this._updateLights();
+      }
     }
   }
 
-  async _setLightBrightness(entityId, pct) {
-    // brightness_pct always turns the light on, even if it was off before the drag.
-    this._toggleOverrides[entityId] = true;
+  // Records the optimistic on/pct intent immediately - even when the actual send below
+  // ends up queued behind an in-flight one - so a render in the meantime (e.g. the
+  // catch-up render on slider release) shows the truly-latest requested value instead of
+  // whatever was last actually sent.
+  _recordBrightnessIntent(entityId, pct) {
+    const token = this._nextCommandToken(entityId);
+    this._toggleOverrides[entityId] = true; // brightness_pct always turns the light on
     this._brightnessOverrides[entityId] = pct;
+    return token;
+  }
+
+  async _setLightBrightness(entityId, pct) {
+    const token = this._recordBrightnessIntent(entityId, pct);
+    let state = this._brightnessSendState[entityId];
+    if (!state) {
+      state = { sending: false, queuedPct: null };
+      this._brightnessSendState[entityId] = state;
+    }
+    // One send in flight at a time: a slow round-trip can otherwise overlap sends, and
+    // since they aren't guaranteed to land in the order they were sent, an older one
+    // could reach the transport after a newer one and leave the light at a stale
+    // brightness. While a send is in flight, remember only the latest requested pct
+    // (like PlejdDimRamp._run's own coalescing) and fire that once it completes.
+    if (state.sending) {
+      state.queuedPct = pct;
+      return;
+    }
+    state.sending = true;
     try {
       await this._hass.callService("light", "turn_on", { entity_id: entityId, brightness_pct: pct });
     } catch (err) {
       console.warn("Plejd panel: failed to set brightness", entityId, err);
-      // Only roll back if this is still the most recent brightness command for this
-      // entity - a newer one may have already superseded it (succeeded, or still in
-      // flight) by the time this older one's promise rejects, and rolling back the
-      // toggle override then would show a since-turned-on light as off again.
-      if (this._brightnessOverrides[entityId] === pct) {
+      // Only roll back if no newer command for this entity (toggle or brightness) has
+      // superseded this one - it may have already succeeded, or still be in flight.
+      if (this._commandTokens[entityId] === token) {
         delete this._brightnessOverrides[entityId];
-        if (this._toggleOverrides[entityId] === true) delete this._toggleOverrides[entityId];
+        delete this._toggleOverrides[entityId];
         this._updateLights();
+      }
+    } finally {
+      state.sending = false;
+      if (state.queuedPct !== null) {
+        const next = state.queuedPct;
+        state.queuedPct = null;
+        this._setLightBrightness(entityId, next);
       }
     }
   }
@@ -563,7 +614,6 @@ class PlejdPanel extends HTMLElement {
         const isOn =
           entityId in this._toggleOverrides ? this._toggleOverrides[entityId] : this._hass.states[entityId]?.state === "on";
         const nextOn = !isOn;
-        this._toggleOverrides[entityId] = nextOn;
         this._toggleLight(entityId, nextOn);
         this._updateLights();
       });
@@ -572,28 +622,12 @@ class PlejdPanel extends HTMLElement {
       const entityId = slider.getAttribute("data-brightness");
       let lastSent = 0;
       let pendingTimer = null;
-      // One send in flight at a time: a slow round-trip can otherwise overlap sends, and
-      // since they aren't guaranteed to land in the order they were sent, an older one
-      // could reach the transport after a newer one and leave the light at a stale
-      // brightness. While a send is in flight, remember only the latest requested pct
-      // (like PlejdDimRamp._run's own coalescing) and fire that once it completes.
-      let sending = false;
-      let queuedPct = null;
+      // _setLightBrightness serializes/coalesces the actual send itself (state kept on
+      // the panel instance, not here) - this closure only throttles how often it's asked
+      // to send during a drag.
       const sendNow = (pct) => {
         lastSent = Date.now();
-        if (sending) {
-          queuedPct = pct;
-          return;
-        }
-        sending = true;
-        this._setLightBrightness(entityId, pct).finally(() => {
-          sending = false;
-          if (queuedPct !== null) {
-            const next = queuedPct;
-            queuedPct = null;
-            sendNow(next);
-          }
-        });
+        this._setLightBrightness(entityId, pct);
       };
       // 'input' fires on every drag tick — send live so the light tracks the slider for
       // direct feedback, but throttled to DRAG_SEND_INTERVAL_MS (matches the hold-to-dim

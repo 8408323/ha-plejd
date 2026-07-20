@@ -576,6 +576,88 @@ test("a slow round trip does not let a later throttled tick overlap the still-in
   assert.equal(calls.length, 1);
 });
 
+test("a queued brightness value is optimistic immediately, not only once it actually sends", () => {
+  const timers = [];
+  let nextId = 1;
+  const PanelClass = loadPanelClass({
+    setTimeout(fn) {
+      const id = nextId++;
+      timers.push({ id, fn });
+      return id;
+    },
+    clearTimeout(id) {
+      const i = timers.findIndex((t) => t.id === id);
+      if (i !== -1) timers.splice(i, 1);
+    },
+  });
+  const panel = new PanelClass();
+  panel._hass = { states: {}, callService: () => new Promise(() => {}) }; // never resolves
+
+  const listeners = {};
+  const levelSpan = { textContent: "" };
+  const slider = {
+    value: "40",
+    getAttribute: (name) => (name === "data-brightness" ? "light.kitchen" : null),
+    addEventListener: (ev, fn) => {
+      listeners[ev] = fn;
+    },
+  };
+  const el = {
+    querySelectorAll: (sel) => (sel === "[data-brightness]" ? [slider] : []),
+    querySelector: (sel) => (sel === '[data-level="light.kitchen"]' ? levelSpan : null),
+  };
+  panel._wireLights(el);
+
+  slider.value = "50";
+  listeners.input(); // sends immediately, never resolves
+  slider.value = "80";
+  listeners.input(); // queued behind the throttle timer
+  timers[0].fn(); // throttle window elapses; the send itself queues behind the in-flight one
+
+  // The row must reflect the latest requested value right away, even though the actual
+  // network send is still queued behind the in-flight one - a render firing before that
+  // queued send goes out (e.g. an unrelated hass push) must not show the stale 50.
+  assert.equal(panel._brightnessOverrides["light.kitchen"], 80);
+});
+
+test("a re-wired slider (e.g. after a re-render) still respects a send already in flight", () => {
+  const panel_ = new (loadPanelClass())();
+  panel_.querySelector = () => null;
+  const calls = [];
+  panel_._hass = { states: {}, callService: (d, s, data) => (calls.push({ d, s, data }), new Promise(() => {})) };
+
+  const makeSlider = () => {
+    const listeners = {};
+    const slider = {
+      value: "40",
+      getAttribute: (name) => (name === "data-brightness" ? "light.kitchen" : null),
+      addEventListener: (ev, fn) => {
+        listeners[ev] = fn;
+      },
+    };
+    const el = {
+      querySelectorAll: (sel) => (sel === "[data-brightness]" ? [slider] : []),
+      querySelector: () => null,
+    };
+    panel_._wireLights(el);
+    return { slider, listeners };
+  };
+
+  const first = makeSlider();
+  first.slider.value = "50";
+  first.listeners.change(); // sends immediately, never resolves - simulates a slow round trip
+  assert.equal(calls.length, 1);
+
+  // A re-render rebuilds the DOM and rewires a brand-new slider/closure for the same
+  // entity while the first send is still in flight.
+  const second = makeSlider();
+  second.slider.value = "90";
+  second.listeners.change();
+
+  // The second must not overlap the still-in-flight first call - it's coalesced instead.
+  assert.equal(calls.length, 1);
+});
+
 test("releasing the slider sends the exact final value and cancels a pending throttled send", async () => {
   const timers = [];
   let nextId = 1;
@@ -694,6 +776,33 @@ test("a failed toggle drops its optimistic override instead of leaving the row s
   await panel._toggleLight("light.kitchen", true);
 
   assert.deepEqual(panel._toggleOverrides, {});
+});
+
+test("a stale toggle failure does not clear a newer toggle intent with the same boolean value", async () => {
+  // Rapid clicks can repeat the same intent (off -> on -> off -> on): if the FIRST "on"
+  // call rejects after the SECOND "on" call has already re-set the same override value,
+  // a plain value comparison would incorrectly treat them as the same request and clear
+  // the still-current one.
+  const PanelClass = loadPanelClass({ console: { ...console, warn: () => {} } });
+  const panel = new PanelClass();
+  panel.querySelector = () => null;
+  let reject;
+  let sent = 0;
+  panel._hass = {
+    states: {},
+    callService: () => {
+      sent += 1;
+      return sent === 1 ? new Promise((_resolve, r) => (reject = r)) : Promise.resolve();
+    },
+  };
+
+  const first = panel._toggleLight("light.kitchen", true);
+  const second = panel._toggleLight("light.kitchen", true); // same intent, supersedes the first
+  await second;
+  reject(new Error("boom")); // the older, superseded call now rejects
+  await first.catch(() => {});
+
+  assert.equal(panel._toggleOverrides["light.kitchen"], true);
 });
 
 test("a failed brightness service call is caught and logged, not thrown", async () => {

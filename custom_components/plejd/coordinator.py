@@ -760,8 +760,19 @@ class PlejdCoordinator:
         # published ack is decoded into state_for() before _write_vector()'s own await
         # returns, so reading "prior" afterward would already see this command's own
         # echo (off, level 0) instead of the real previous level.
-        prior = self.state_for(address) if not on else None
+        prior = self.state_for(address)
         await self._write_vector(protocol.set_group_state_and_level(address, on, level))
+        current = self.state_for(address)
+        # What our OWN command's echo literally looks like on the wire - level=0 for an
+        # off command regardless of the remembered brightness (the enriched value below
+        # is our own bookkeeping, not something the protocol's echo itself carries).
+        raw_echo = OutputState(output=address, on=on, level=level)
+        if current is not None and current != prior and current != raw_echo:
+            # Something else (a physical switch, the Plejd app, another output on this
+            # device) changed this output to a value we didn't command while our own
+            # write was in flight. Its own push already notified listeners with the
+            # real state (_on_event) - don't stomp that with our stale optimistic guess.
+            return
         # Reflect the change immediately rather than waiting for the mesh's own echo:
         # BLE writes are never acked, and even the gateway's ack isn't guaranteed to
         # land before this returns. Without this, a command sent right after another
