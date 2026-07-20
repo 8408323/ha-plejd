@@ -574,6 +574,30 @@ async def test_gateway_is_preferred_and_routes_commands(monkeypatch):
     assert c._gateway.writes[-1] == set_group_state_and_level(11, True, 80)
 
 
+async def test_gateway_off_preserves_prior_level_despite_ack_landing_before_write_returns(monkeypatch):
+    # Over the real gateway transport, a published ack is decoded into state_for() before
+    # write()'s own await returns - reading "prior level" only after the write would already
+    # see this command's own echo (off, level 0), losing the real remembered brightness.
+    from plejd.protocol import OutputState
+
+    monkeypatch.setattr(coordinator_mod, "PlejdGatewayConnection", _FakeGateway)
+    hass = _hass()
+    hass.session = object()
+    c = PlejdCoordinator(hass, _gateway_entry())
+    await c.async_start()
+    c._gateway.state = {11: OutputState(output=11, on=True, level=150)}
+
+    async def _write_with_early_ack(vector):
+        c._gateway.writes.append(vector)
+        # Simulate the ack's own state push landing before write() returns.
+        c._gateway.state[11] = OutputState(output=11, on=False, level=0)
+
+    monkeypatch.setattr(c._gateway, "write", _write_with_early_ack)
+    await c.async_set_output(11, False, 0)
+
+    assert c.state_for(11).on is False and c.state_for(11).level == 150
+
+
 async def test_gateway_connect_starts_fault_polling(monkeypatch):
     from plejd.const import CMD_NOTIFY_EVENTS
     from plejd.protocol import decode_command

@@ -726,6 +726,11 @@ class PlejdCoordinator:
         per-output address broke every output past the first on a multi-output
         device (#71).
         """
+        # Captured before the write, not after: over the gateway transport, a normal
+        # published ack is decoded into state_for() before _write_vector()'s own await
+        # returns, so reading "prior" afterward would already see this command's own
+        # echo (off, level 0) instead of the real previous level.
+        prior = self.state_for(address) if not on else None
         await self._write_vector(protocol.set_group_state_and_level(address, on, level))
         # Reflect the change immediately rather than waiting for the mesh's own echo:
         # BLE writes are never acked, and even the gateway's ack isn't guaranteed to
@@ -734,11 +739,7 @@ class PlejdCoordinator:
         # Turning off doesn't erase the remembered brightness - a real device keeps
         # reporting its last dim position while off, so the off case preserves the
         # prior level instead of the protocol's own off payload (always 0).
-        if on:
-            record_level = level
-        else:
-            prior = self.state_for(address)
-            record_level = prior.level if prior is not None else level
+        record_level = level if on else (prior.level if prior is not None else level)
         self._record_output_state(address, OutputState(output=address, on=on, level=record_level))
         self._notify_outputs()
 

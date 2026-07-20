@@ -557,6 +557,37 @@ test("releasing the slider sends the exact final value and cancels a pending thr
   assert.equal(panel._draggingEntity, null);
 });
 
+test("releasing the slider schedules a catch-up render for any hass push skipped mid-drag", () => {
+  const frames = [];
+  const PanelClass = loadPanelClass({
+    requestAnimationFrame(callback) {
+      frames.push(callback);
+      return frames.length;
+    },
+    cancelAnimationFrame() {},
+  });
+  const panel = new PanelClass();
+  panel._hass = { states: {}, callService: () => Promise.resolve() };
+
+  const listeners = {};
+  const slider = {
+    value: "50",
+    getAttribute: (name) => (name === "data-brightness" ? "light.kitchen" : null),
+    addEventListener: (ev, fn) => {
+      listeners[ev] = fn;
+    },
+  };
+  const el = {
+    querySelectorAll: (sel) => (sel === "[data-brightness]" ? [slider] : []),
+    querySelector: () => null,
+  };
+
+  panel._wireLights(el);
+  listeners.change();
+
+  assert.equal(frames.length, 1); // a render was scheduled, not left for some later unrelated push
+});
+
 test("a failed toggle service call is caught and logged, not thrown", async () => {
   const warnings = [];
   const PanelClass = loadPanelClass({ console: { ...console, warn: (...args) => warnings.push(args) } });

@@ -443,6 +443,11 @@ class PlejdPanel extends HTMLElement {
           pendingTimer = null;
         }
         this._setLightBrightness(entityId, Number(slider.value));
+        // A hass push that arrived mid-drag was skipped (_updateLights() no-ops while
+        // _draggingEntity is set) and _lightsFrame is already clear by then, so nothing
+        // would otherwise re-render until some later, unrelated push happens to arrive -
+        // catch up now instead of leaving the rest of the list stale.
+        this._scheduleLightsUpdate();
       });
     });
   }
