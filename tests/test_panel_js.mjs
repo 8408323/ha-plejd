@@ -501,7 +501,7 @@ test("dragging a cover position slider marks it active until release", () => {
   assert.equal(panel._draggingCoverEntity, null);
 });
 
-test("releasing a cover position slider remembers the sent value as an optimistic override", () => {
+test("releasing a cover position slider remembers the sent value as an optimistic override", async () => {
   const PanelClass = loadPanelClass();
   const panel = new PanelClass();
   panel._callService = () => Promise.resolve();
@@ -511,6 +511,7 @@ test("releasing a cover position slider remembers the sent value as an optimisti
 
   slider.value = "65";
   listeners.change({ target: slider });
+  await new Promise((resolve) => setTimeout(resolve, 0));
 
   assert.equal(panel._coverPositionOverrides["cover.kitchen_blind"], 65);
 });
@@ -531,6 +532,118 @@ test("a failed cover service call is caught and logged, not thrown", async () =>
 
   assert.equal(warnings.length, 1);
   assert.match(warnings[0][0], /open_cover failed for cover\.kitchen_blind/);
+});
+
+test("a rejected set_cover_position does not record an optimistic override", async () => {
+  const warnings = [];
+  const PanelClass = loadPanelClass({
+    console: { ...console, warn: (...args) => warnings.push(args) },
+  });
+  const panel = new PanelClass();
+  panel._callService = () => Promise.reject(new Error("boom"));
+
+  const { el, listeners, slider } = makeCoverRowEl("cover.kitchen_blind", 42);
+  panel._wireCovers(el);
+
+  slider.value = "77";
+  listeners.change({ target: slider });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(panel._coverPositionOverrides["cover.kitchen_blind"], undefined);
+});
+
+test("clicking Open/Close records the just-commanded position as the slider override", async () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._callService = () => Promise.resolve();
+
+  const { el, listeners } = makeCoverRowEl("cover.kitchen_blind", 42);
+  panel._wireCovers(el);
+
+  listeners.open();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(panel._coverPositionOverrides["cover.kitchen_blind"], 100);
+
+  listeners.close();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(panel._coverPositionOverrides["cover.kitchen_blind"], 0);
+});
+
+test("clicking Stop does not touch the slider override", async () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._callService = () => Promise.resolve();
+  panel._coverPositionOverrides["cover.kitchen_blind"] = 65;
+
+  const { el, listeners } = makeCoverRowEl("cover.kitchen_blind", 42);
+  panel._wireCovers(el);
+
+  listeners.stop();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(panel._coverPositionOverrides["cover.kitchen_blind"], 65);
+});
+
+test("a rejected Open/Close call does not record an optimistic override", async () => {
+  const PanelClass = loadPanelClass({ console: { ...console, warn: () => {} } });
+  const panel = new PanelClass();
+  panel._callService = () => Promise.reject(new Error("boom"));
+
+  const { el, listeners } = makeCoverRowEl("cover.kitchen_blind", 42);
+  panel._wireCovers(el);
+
+  listeners.open();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(panel._coverPositionOverrides["cover.kitchen_blind"], undefined);
+});
+
+test("a pointer-cancelled slider drag clears the drag guard so renders resume", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._callService = () => Promise.resolve();
+
+  const { el, listeners, slider } = makeCoverRowEl("cover.kitchen_blind", 42);
+  panel._wireCovers(el);
+
+  listeners.input({ target: slider });
+  assert.equal(panel._draggingCoverEntity, "cover.kitchen_blind");
+
+  listeners.pointercancel();
+  assert.equal(panel._draggingCoverEntity, null);
+});
+
+test("disconnectedCallback clears a stuck drag guard so a reconnect's render isn't skipped forever", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._draggingCoverEntity = "cover.kitchen_blind";
+
+  panel.disconnectedCallback();
+
+  assert.equal(panel._draggingCoverEntity, null);
+});
+
+test("_updateCovers treats a blank current_position as unknown, not closed", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const covers = { innerHTML: "", querySelectorAll: () => [] };
+
+  panel.querySelector = () => covers;
+  panel._hass = {
+    states: {
+      "cover.a": {
+        entity_id: "cover.a",
+        state: "open",
+        attributes: { friendly_name: "Cover A", current_position: "   ", supported_features: 15 },
+      },
+    },
+    entities: { "cover.a": { platform: "plejd" } },
+  };
+
+  panel._updateCovers();
+
+  assert.doesNotMatch(covers.innerHTML, /value="0"/);
+  assert.match(covers.innerHTML, />open<\/span>/); // label falls back to state, not a fake 0%
 });
 
 test("deleting a binding preserves an in-progress add form", async () => {

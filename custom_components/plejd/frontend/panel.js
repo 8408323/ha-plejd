@@ -39,6 +39,9 @@ const triggerLabel = (t) => {
 // 0-100 integer before it ever reaches an HTML attribute; anything else is "unknown".
 const clampPosition = (value) => {
   if (value == null) return null;
+  // Number("") and Number("   ") coerce to 0 — without this check a blank/malformed
+  // current_position would render as "0%" (closed) instead of "unknown".
+  if (typeof value === "string" && value.trim() === "") return null;
   const n = Math.round(Number(value));
   return Number.isFinite(n) ? Math.min(100, Math.max(0, n)) : null;
 };
@@ -127,6 +130,10 @@ class PlejdPanel extends HTMLElement {
       this._cancelLightsFrame(this._coversFrame);
       this._coversFrame = null;
     }
+    // A drag in progress when the panel is torn down (e.g. navigating away) will never
+    // fire its release "change" event on this detached node; clear the guard so a future
+    // reconnect's render isn't skipped forever.
+    this._draggingCoverEntity = null;
   }
 
   // ── data ──────────────────────────────────────────────────────────────────
@@ -459,19 +466,37 @@ class PlejdPanel extends HTMLElement {
       input.addEventListener("change", (e) => {
         this._draggingCoverEntity = null;
         const position = Number(e.target.value);
-        this._coverPositionOverrides[entityId] = position;
+        // Only remember the override once HA actually accepts the command — recording it
+        // unconditionally would keep showing the requested position even after a rejected
+        // call (e.g. mesh/gateway unavailable), since PlejdCover never reports a real one.
         this._callService("cover", "set_cover_position", {
           entity_id: entityId,
           position,
-        }).catch((err) => console.warn(`Plejd panel: set_cover_position failed for ${entityId}`, err));
+        })
+          .then(() => {
+            this._coverPositionOverrides[entityId] = position;
+          })
+          .catch((err) => console.warn(`Plejd panel: set_cover_position failed for ${entityId}`, err));
+      });
+      // "change" only fires when a drag ends normally; a touch drag interrupted by the OS
+      // (e.g. a system gesture) fires "pointercancel" instead, with no "change" to follow.
+      // Without this, the guard would stay set forever and freeze the Covers card.
+      input.addEventListener("pointercancel", () => {
+        if (this._draggingCoverEntity === entityId) this._draggingCoverEntity = null;
       });
     });
   }
 
   _onCoverAction(entityId, service) {
-    this._callService("cover", service, { entity_id: entityId }).catch((err) =>
-      console.warn(`Plejd panel: ${service} failed for ${entityId}`, err),
-    );
+    // Open/Close are themselves position commands (0/100) for position-capable covers, so
+    // the slider override must track them too — otherwise a stale slider value (e.g. from
+    // an earlier drag) would keep rendering after Close/Open supersedes it.
+    const commandedPosition = service === "open_cover" ? 100 : service === "close_cover" ? 0 : null;
+    this._callService("cover", service, { entity_id: entityId })
+      .then(() => {
+        if (commandedPosition != null) this._coverPositionOverrides[entityId] = commandedPosition;
+      })
+      .catch((err) => console.warn(`Plejd panel: ${service} failed for ${entityId}`, err));
   }
 
   _triggerOptions(deviceId, selected) {
