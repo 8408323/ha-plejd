@@ -165,8 +165,29 @@ except ImportError:
         def __call__(self, value):
             return value
 
+    class _EntitySelectorConfig:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    class _EntitySelector:
+        def __init__(self, config=None):
+            self.config = config
+
+        def __call__(self, value):
+            return value
+
+    class _TimeSelector:
+        def __init__(self, config=None):
+            self.config = config
+
+        def __call__(self, value):
+            return value
+
     _selector.SelectSelector = _SelectSelector  # type: ignore[attr-defined]
     _selector.SelectSelectorConfig = _SelectSelectorConfig  # type: ignore[attr-defined]
+    _selector.EntitySelector = _EntitySelector  # type: ignore[attr-defined]
+    _selector.EntitySelectorConfig = _EntitySelectorConfig  # type: ignore[attr-defined]
+    _selector.TimeSelector = _TimeSelector  # type: ignore[attr-defined]
     sys.modules.setdefault("homeassistant.helpers.selector", _selector)
 
     _components = types.ModuleType("homeassistant.components")
@@ -479,7 +500,12 @@ except ImportError:
     def _er_async_get(hass):
         return getattr(hass, "entity_registry", None) or _EntityRegistry()
 
+    def _er_async_entries_for_config_entry(registry, config_entry_id):
+        entities = getattr(registry, "_entities", {})
+        return [e for e in entities.values() if getattr(e, "config_entry_id", None) == config_entry_id]
+
     _er.async_get = _er_async_get  # type: ignore[attr-defined]
+    _er.async_entries_for_config_entry = _er_async_entries_for_config_entry  # type: ignore[attr-defined]
     _er.EntityRegistry = _EntityRegistry  # type: ignore[attr-defined]
     sys.modules.setdefault("homeassistant.helpers.entity_registry", _er)
 
