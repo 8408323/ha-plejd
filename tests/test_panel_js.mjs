@@ -152,6 +152,7 @@ test("disconnect clears a stuck brightness-drag guard so a reconnect's render is
   const panel = new PanelClass();
   panel._renderShell = () => {};
   panel._loadBindings = () => {};
+  panel._loadSchedules = () => {};
   panel._updateLights = () => {};
   panel._updateMotion = () => {};
   panel._updateHealth = () => {};
