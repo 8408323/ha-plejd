@@ -58,7 +58,7 @@ test("_save clears a stale notice before the in-flight render", async () => {
   assert.equal(panel._notice, "Saved.");
 });
 
-test("hass updates coalesce lights renders to one animation frame", () => {
+test("hass updates coalesce lights and scenes renders to one animation frame", () => {
   const frames = [];
   const PanelClass = loadPanelClass({
     requestAnimationFrame(callback) {
@@ -71,6 +71,7 @@ test("hass updates coalesce lights renders to one animation frame", () => {
   let shells = 0;
   let loads = 0;
   let lights = 0;
+  let scenes = 0;
 
   panel._renderShell = () => {
     shells += 1;
@@ -81,6 +82,9 @@ test("hass updates coalesce lights renders to one animation frame", () => {
   panel._updateLights = () => {
     lights += 1;
   };
+  panel._updateScenes = () => {
+    scenes += 1;
+  };
 
   panel.hass = { states: {} };
   panel.hass = { states: {} };
@@ -90,9 +94,11 @@ test("hass updates coalesce lights renders to one animation frame", () => {
   assert.equal(loads, 1);
   assert.equal(frames.length, 1);
   assert.equal(lights, 0);
+  assert.equal(scenes, 0);
 
   frames.shift()();
   assert.equal(lights, 1);
+  assert.equal(scenes, 1);
 
   panel.hass = { states: {} };
   assert.equal(frames.length, 1);

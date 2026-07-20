@@ -80,8 +80,8 @@ class PlejdPanel extends HTMLElement {
       this._loadBindings();
       this._loadRegistries();
     }
-    // Only the live lights list tracks state; leave the editor DOM (and any in-progress
-    // form entry) untouched on the frequent hass state updates.
+    // Only the live lights and scenes lists track state; leave the editor DOM (and any
+    // in-progress form entry) untouched on the frequent hass state updates.
     this._scheduleLightsUpdate();
   }
 
@@ -91,7 +91,7 @@ class PlejdPanel extends HTMLElement {
 
   connectedCallback() {
     // On (re)connect, rebuild only if the shell is gone; otherwise refresh the live lights
-    // list and leave the editor DOM — and any in-progress form entry — untouched.
+    // and scenes lists and leave the editor DOM — and any in-progress form entry — untouched.
     if (!this._hass) return;
     if (!this.querySelector("#plejd-lights")) this._renderShell();
     this._scheduleLightsUpdate();
@@ -341,6 +341,7 @@ class PlejdPanel extends HTMLElement {
     this._lightsFrame = this._scheduleLightsFrame(() => {
       this._lightsFrame = null;
       this._updateLights();
+      this._updateScenes();
     });
   }
 
