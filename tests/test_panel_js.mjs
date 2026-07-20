@@ -140,6 +140,27 @@ test("disconnect cancels a queued lights render", () => {
   assert.equal(panel._lightsFrame, null);
 });
 
+test("disconnect clears a stuck brightness-drag guard so a reconnect's render isn't skipped forever", () => {
+  const PanelClass = loadPanelClass({
+    requestAnimationFrame() {
+      return 42;
+    },
+    cancelAnimationFrame() {},
+  });
+  const panel = new PanelClass();
+  panel._renderShell = () => {};
+  panel._loadBindings = () => {};
+  panel._updateLights = () => {};
+  panel._updateMotion = () => {};
+  panel._updateHealth = () => {};
+  panel.hass = { states: {} };
+  panel._draggingEntity = "light.kitchen"; // a drag was in progress when the panel was torn down
+
+  panel.disconnectedCallback();
+
+  assert.equal(panel._draggingEntity, null);
+});
+
 test("disconnect cancels a queued setTimeout fallback when requestAnimationFrame is unavailable", () => {
   const cancelled = [];
   const PanelClass = loadPanelClass({
@@ -433,7 +454,7 @@ test("dragging a brightness slider sends a live update on the first tick and upd
   });
 });
 
-test("further ticks within the throttle window are queued, not sent immediately, and the trailing tick reflects the latest value", () => {
+test("further ticks within the throttle window are queued, not sent immediately, and the trailing tick reflects the latest value", async () => {
   const timers = [];
   let nextId = 1;
   const PanelClass = loadPanelClass({
@@ -488,6 +509,10 @@ test("further ticks within the throttle window are queued, not sent immediately,
   assert.equal(timers.length, 1);
 
   timers[0].fn(); // the throttle window elapses
+  // The first tick's send is still in flight (one send at a time, see _wireLights), so
+  // this one is queued behind it rather than firing immediately - let that first send's
+  // promise settle so the queued one fires.
+  await new Promise((resolve) => setImmediate(resolve));
 
   assert.equal(calls.length, 2);
   assert.deepEqual(plain(calls[1]), {
@@ -497,7 +522,61 @@ test("further ticks within the throttle window are queued, not sent immediately,
   });
 });
 
-test("releasing the slider sends the exact final value and cancels a pending throttled send", () => {
+test("a slow round trip does not let a later throttled tick overlap the still-in-flight send", () => {
+  const timers = [];
+  let nextId = 1;
+  const PanelClass = loadPanelClass({
+    setTimeout(fn) {
+      const id = nextId++;
+      timers.push({ id, fn });
+      return id;
+    },
+    clearTimeout(id) {
+      const i = timers.findIndex((t) => t.id === id);
+      if (i !== -1) timers.splice(i, 1);
+    },
+  });
+  const panel = new PanelClass();
+  const calls = [];
+  panel._hass = {
+    states: {},
+    // Never resolves during this test - simulates a round trip slower than the throttle
+    // window, the scenario a fast drag would otherwise flood with overlapping sends.
+    callService: (domain, service, data) => {
+      calls.push({ domain, service, data });
+      return new Promise(() => {});
+    },
+  };
+
+  const listeners = {};
+  const levelSpan = { textContent: "40%" };
+  const slider = {
+    value: "40",
+    getAttribute: (name) => (name === "data-brightness" ? "light.kitchen" : null),
+    addEventListener: (ev, fn) => {
+      listeners[ev] = fn;
+    },
+  };
+  const el = {
+    querySelectorAll: (sel) => (sel === "[data-brightness]" ? [slider] : []),
+    querySelector: (sel) => (sel === '[data-level="light.kitchen"]' ? levelSpan : null),
+  };
+
+  panel._wireLights(el);
+
+  slider.value = "50";
+  listeners.input(); // sends immediately, never resolves
+  assert.equal(calls.length, 1);
+
+  slider.value = "60";
+  listeners.input(); // queued behind the throttle timer
+  timers[0].fn(); // throttle window elapses, but the first send is still in flight
+
+  // Still only the one in-flight call - the newer pct is coalesced, not fired alongside it.
+  assert.equal(calls.length, 1);
+});
+
+test("releasing the slider sends the exact final value and cancels a pending throttled send", async () => {
   const timers = [];
   let nextId = 1;
   const cleared = [];
@@ -548,6 +627,9 @@ test("releasing the slider sends the exact final value and cancels a pending thr
   const queuedTimerId = timers[0].id;
 
   listeners.change();
+  // The first tick's send is still in flight, so this one is queued behind it - let that
+  // first send's promise settle so the queued one fires.
+  await new Promise((resolve) => setImmediate(resolve));
 
   assert.deepEqual(cleared, [queuedTimerId]); // the queued send is canceled, not left to fire later
   assert.equal(calls.length, 2);
@@ -638,6 +720,31 @@ test("a failed brightness service call rolls back both optimistic overrides", as
   assert.equal(panel._brightnessOverrides["light.kitchen"], undefined);
 });
 
+test("a stale brightness failure does not clear a newer optimistic toggle override", async () => {
+  const PanelClass = loadPanelClass({ console: { ...console, warn: () => {} } });
+  const panel = new PanelClass();
+  panel.querySelector = () => null;
+  let reject;
+  let sent = 0;
+  panel._hass = {
+    states: {},
+    callService: () => {
+      sent += 1;
+      // The first (older) send never resolves during this test - only the second does.
+      return sent === 1 ? new Promise((_resolve, r) => (reject = r)) : Promise.resolve();
+    },
+  };
+
+  const first = panel._setLightBrightness("light.kitchen", 50);
+  const second = panel._setLightBrightness("light.kitchen", 80); // supersedes the first
+  await second;
+  reject(new Error("boom")); // the older, superseded send now rejects
+  await first.catch(() => {});
+
+  // The newer send's own optimistic state must survive the older, now-irrelevant failure.
+  assert.equal(panel._toggleOverrides["light.kitchen"], true);
+  assert.equal(panel._brightnessOverrides["light.kitchen"], 80);
+});
 
 // ── climate ──────────────────────────────────────────────────────────────────
 

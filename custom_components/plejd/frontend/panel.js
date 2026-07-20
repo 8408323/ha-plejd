@@ -119,9 +119,14 @@ class PlejdPanel extends HTMLElement {
   }
 
   disconnectedCallback() {
-    if (this._lightsFrame === null) return;
-    this._cancelLightsFrame(this._lightsFrame);
-    this._lightsFrame = null;
+    if (this._lightsFrame !== null) {
+      this._cancelLightsFrame(this._lightsFrame);
+      this._lightsFrame = null;
+    }
+    // A drag in progress when the panel is torn down (e.g. navigating away) will never
+    // fire its release "change" event on this detached node; clear the guard so a future
+    // reconnect's render isn't skipped forever.
+    this._draggingEntity = null;
   }
 
   // ── data ──────────────────────────────────────────────────────────────────
@@ -243,9 +248,15 @@ class PlejdPanel extends HTMLElement {
       await this._hass.callService("light", "turn_on", { entity_id: entityId, brightness_pct: pct });
     } catch (err) {
       console.warn("Plejd panel: failed to set brightness", entityId, err);
-      if (this._brightnessOverrides[entityId] === pct) delete this._brightnessOverrides[entityId];
-      if (this._toggleOverrides[entityId] === true) delete this._toggleOverrides[entityId];
-      this._updateLights();
+      // Only roll back if this is still the most recent brightness command for this
+      // entity - a newer one may have already superseded it (succeeded, or still in
+      // flight) by the time this older one's promise rejects, and rolling back the
+      // toggle override then would show a since-turned-on light as off again.
+      if (this._brightnessOverrides[entityId] === pct) {
+        delete this._brightnessOverrides[entityId];
+        if (this._toggleOverrides[entityId] === true) delete this._toggleOverrides[entityId];
+        this._updateLights();
+      }
     }
   }
 
@@ -561,9 +572,28 @@ class PlejdPanel extends HTMLElement {
       const entityId = slider.getAttribute("data-brightness");
       let lastSent = 0;
       let pendingTimer = null;
-      const sendNow = () => {
+      // One send in flight at a time: a slow round-trip can otherwise overlap sends, and
+      // since they aren't guaranteed to land in the order they were sent, an older one
+      // could reach the transport after a newer one and leave the light at a stale
+      // brightness. While a send is in flight, remember only the latest requested pct
+      // (like PlejdDimRamp._run's own coalescing) and fire that once it completes.
+      let sending = false;
+      let queuedPct = null;
+      const sendNow = (pct) => {
         lastSent = Date.now();
-        this._setLightBrightness(entityId, Number(slider.value));
+        if (sending) {
+          queuedPct = pct;
+          return;
+        }
+        sending = true;
+        this._setLightBrightness(entityId, pct).finally(() => {
+          sending = false;
+          if (queuedPct !== null) {
+            const next = queuedPct;
+            queuedPct = null;
+            sendNow(next);
+          }
+        });
       };
       // 'input' fires on every drag tick — send live so the light tracks the slider for
       // direct feedback, but throttled to DRAG_SEND_INTERVAL_MS (matches the hold-to-dim
@@ -579,11 +609,11 @@ class PlejdPanel extends HTMLElement {
         }
         const elapsed = Date.now() - lastSent;
         if (elapsed >= DRAG_SEND_INTERVAL_MS) {
-          sendNow();
+          sendNow(Number(slider.value));
         } else {
           pendingTimer = setTimeout(() => {
             pendingTimer = null;
-            sendNow();
+            sendNow(Number(slider.value));
           }, DRAG_SEND_INTERVAL_MS - elapsed);
         }
       });
@@ -595,7 +625,7 @@ class PlejdPanel extends HTMLElement {
           clearTimeout(pendingTimer);
           pendingTimer = null;
         }
-        this._setLightBrightness(entityId, Number(slider.value));
+        sendNow(Number(slider.value));
         // A hass push that arrived mid-drag was skipped (_updateLights() no-ops while
         // _draggingEntity is set) and _lightsFrame is already clear by then, so nothing
         // would otherwise re-render until some later, unrelated push happens to arrive -
