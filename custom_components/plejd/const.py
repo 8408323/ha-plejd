@@ -9,6 +9,12 @@ from __future__ import annotations
 
 DOMAIN = "plejd"
 
+# Prefix for a room's pseudo-device identifier/unique_id (PlejdRoomLight). Rooms live in the
+# same (DOMAIN, id) identifier namespace as real Plejd devices but have no Parse cloud object
+# of their own — anything that mirrors HA device state back to the Plejd cloud by device_id
+# must recognize and skip this prefix.
+ROOM_DEVICE_ID_PREFIX = "room_"
+
 # BLE address of the mesh device discovered during the config flow.
 CONF_DISCOVERED_ADDRESS = "discovered_address"
 
@@ -18,6 +24,7 @@ CONF_CRYPTO_KEY = "crypto_key"  # hex string of the 16-byte site key
 CONF_DEVICES = "devices"  # cached device list (so HA works offline after setup)
 CONF_DEVICE_ADDRESSES = "device_addresses"  # device_id -> physical mesh address, for fault polling
 CONF_SCENES = "scenes"  # cached scene list
+CONF_ROOMS = "rooms"  # cached room list (name + group mesh address + member output addresses)
 CONF_INPUTS = "inputs"  # cached button-input list
 CONF_MOTION = "motion"  # cached motion-sensor list
 HARDWARE_WMS_01 = 70  # motion sensor
@@ -124,6 +131,13 @@ TIME_EVENT_REP_FOREVER = 0xFFFFFFFF
 WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 CONF_SCHEDULES = "schedules"  # entry.options: list of time-event schedule dicts
 CONF_SHOW_PANEL = "show_panel"  # entry.options: show the Plejd dashboard in the sidebar (default True)
+
+# Holiday mode (presence simulation, the Plejd app's "Semesterläge") — entry.options.
+CONF_HOLIDAY_LIGHTS = "holiday_lights"  # target light entity_ids; empty/absent = all Plejd lights
+CONF_HOLIDAY_WINDOW_START = "holiday_window_start"  # "HH:MM", start of the active window
+CONF_HOLIDAY_WINDOW_END = "holiday_window_end"  # "HH:MM", end of the window (may be < start = crosses midnight)
+HOLIDAY_WINDOW_START_DEFAULT = "18:00"
+HOLIDAY_WINDOW_END_DEFAULT = "23:00"
 CMD_INPUT_STATE_AND_LEVEL = 0x0195  # state notification: channel, state, level[2]
 CMD_SYSTEM_TIME = 0x001B
 CMD_DEVICE_TYPE = 0x0000

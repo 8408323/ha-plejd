@@ -567,3 +567,210 @@ async def test_set_input_setting_posts_toggle():
     assert captured["input"] == 0
     assert captured["buttonType"] == "Toggle"
     assert captured["doubleSidedDirectionButton"] is False
+
+
+def test_parse_site_parses_rooms_with_group_addresses():
+    site = {
+        **_SITE,
+        "rooms": [
+            {"roomId": "r1", "title": "Kitchen"},
+            {"roomId": "r3", "title": "Empty room"},
+        ],
+        # r2 is absent from rooms[] -> name falls back to "Room"; r4's address is non-int -> skipped
+        "roomAddress": {"r1": 14, "r2": 16, "r3": 99, "r4": "bad"},
+        # d1 (a LIGHT) belongs to both groups; both groups have only light members.
+        "outputGroups": {"d1": {"0": [14, 16]}},
+    }
+    rooms = parse_site(site).rooms
+    by_addr = {r.address: r for r in rooms}
+    assert set(by_addr) == {14, 16}  # r3 (no members) and r4 (bad address) are dropped
+    assert by_addr[14].name == "Kitchen"
+    assert by_addr[14].member_addresses == [11]
+    assert by_addr[14].dimmable is True
+    assert by_addr[16].name == "Room"  # fallback when the room has no title entry
+    assert by_addr[16].member_addresses == [11]  # d1.out0 also belongs to group 16
+
+
+def test_parse_site_excludes_room_with_non_light_member():
+    site = {
+        **_SITE,
+        "roomAddress": {"r1": 14},
+        # d1 (a LIGHT) and d2 (a RELAY) both belong to group 14 - a 0x0098 group command
+        # would also toggle the relay, so the whole room is excluded rather than silently
+        # dropping the non-light member from an otherwise-created room.
+        "outputGroups": {"d1": {"0": [14]}, "d2": {"0": [14]}},
+    }
+    assert parse_site(site).rooms == []
+
+
+def test_parse_site_rejects_out_of_range_group_address():
+    site = {
+        **_SITE,
+        # mesh addresses are single-byte (encode_command masks with & 0xFF); 0, negative,
+        # and >255 group addresses must not silently wrap onto a real device's address.
+        "roomAddress": {"r1": 0, "r2": -1, "r3": 256, "r4": 14},
+        "outputGroups": {"d1": {"0": [0, -1, 256, 14]}},
+    }
+    rooms = parse_site(site).rooms
+    assert [r.room_id for r in rooms] == ["r4"]
+
+
+def test_parse_site_skips_malformed_output_group_entries():
+    site = {
+        **_SITE,
+        "roomAddress": {"r1": 14},
+        # d1's own group list has one malformed (non-int) group id alongside the valid one;
+        # d5 (not in devices[], so its own outputAddress cast can't crash devices-parsing)
+        # has a malformed (non-int) output address for an otherwise-valid group. Neither
+        # entry may abort the whole site parse - both are skipped like a bad roomAddress.
+        "outputGroups": {"d1": {"0": [14, "bad-group"]}, "d5": {"0": [14]}},
+        "outputAddress": {**_SITE["outputAddress"], "d5": {"0": "bad-address"}},
+    }
+    rooms = parse_site(site).rooms
+    assert len(rooms) == 1
+    assert rooms[0].member_addresses == [11]  # only d1.out0 survives
+
+
+def test_parse_site_skips_non_list_output_group_value():
+    site = {
+        **_SITE,
+        "roomAddress": {"r1": 14},
+        # d1's own group membership is a scalar, not a list of group addresses -> must be
+        # skipped instead of raising (an int isn't iterable; a dict would silently iterate
+        # its keys instead of the intended group addresses).
+        "outputGroups": {"d1": {"0": 14}},
+    }
+    rooms = parse_site(site).rooms
+    assert rooms == []  # the malformed membership yields no members -> room dropped
+
+
+def test_parse_site_tolerates_non_dict_room_and_group_fields():
+    site = {**_SITE, "roomAddress": ["not", "a", "dict"], "outputGroups": ["also", "not", "a", "dict"]}
+    assert parse_site(site).rooms == []  # both malformed top-level fields are treated as absent
+
+
+def test_parse_site_skips_non_dict_room_entry():
+    site = {
+        **_SITE,
+        # a stray non-dict entry alongside a valid one must not abort parsing
+        "rooms": [{"roomId": "r1", "title": "Kitchen"}, "not-a-dict", None],
+        "roomAddress": {"r1": 14},
+        "outputGroups": {"d1": {"0": [14]}},
+    }
+    rooms = parse_site(site).rooms
+    assert len(rooms) == 1 and rooms[0].name == "Kitchen"
+
+
+def test_parse_site_tolerates_non_list_rooms_field():
+    site = {
+        **_SITE,
+        # rooms is a scalar (untrusted cloud data), not a list -> treated as absent
+        # instead of raising when building room_titles.
+        "rooms": "not-a-list",
+        "roomAddress": {"r1": 14},
+        "outputGroups": {"d1": {"0": [14]}},
+    }
+    rooms = parse_site(site).rooms
+    assert len(rooms) == 1 and rooms[0].name == "Room"  # falls back like a missing title does
+
+
+def test_parse_site_skips_non_dict_output_group_membership_map():
+    site = {
+        **_SITE,
+        "roomAddress": {"r1": 14},
+        # d1's whole membership map is a scalar, not {outputIdx: [groups]} -> skipped
+        # entirely instead of raising on a bad .items() call.
+        "outputGroups": {"d1": "not-a-dict"},
+    }
+    assert parse_site(site).rooms == []
+
+
+def test_parse_site_ignores_non_string_room_title():
+    site = {
+        **_SITE,
+        # a non-string title must not crash the .strip() call -> falls back like a
+        # missing title does ("Room")
+        "rooms": [{"roomId": "r1", "title": 123}],
+        "roomAddress": {"r1": 14},
+        "outputGroups": {"d1": {"0": [14]}},
+    }
+    rooms = parse_site(site).rooms
+    assert len(rooms) == 1 and rooms[0].name == "Room"
+
+
+def test_parse_site_tolerates_non_dict_output_address_fields():
+    site = {
+        **_SITE,
+        "roomAddress": {"r1": 14},
+        "outputGroups": {"d1": {"0": [14]}},
+        # the whole outputAddress map is malformed (untrusted cloud data) -> treated as
+        # empty rather than raising when the room-membership loop calls .get() on it;
+        # d1 is still resolved via the deviceAddress fallback (mirrors the device
+        # parser's own fallback for a single-output light)
+        "outputAddress": ["not", "a", "dict"],
+    }
+    rooms = parse_site(site).rooms
+    assert len(rooms) == 1
+    assert rooms[0].member_addresses == [1]  # d1's deviceAddress (1), not its missing outputAddress
+
+
+def test_parse_site_skips_non_dict_per_device_output_address():
+    site = {
+        **_SITE,
+        "roomAddress": {"r1": 14},
+        # d5 doesn't appear in devices[] (so its malformed entry can't crash the
+        # unrelated device-parsing loop); its own outputAddress value is a scalar, not
+        # {outputIdx: address} -> its membership must be skipped, not raise.
+        "outputGroups": {"d5": {"0": [14]}},
+        "outputAddress": {**_SITE["outputAddress"], "d5": "not-a-dict"},
+    }
+    assert parse_site(site).rooms == []
+
+
+def test_parse_site_room_membership_falls_back_to_device_address():
+    site = {
+        **_SITE,
+        "roomAddress": {"r1": 14},
+        "outputGroups": {"d1": {"0": [14]}},
+        # d1 has no entry in outputAddress at all (a valid dict, just missing this key)
+        # -> falls back to deviceAddress, mirroring the device parser's own fallback
+        # for a single-output light whose outputAddress the cloud omits.
+        "outputAddress": {"d2": _SITE["outputAddress"]["d2"]},
+    }
+    rooms = parse_site(site).rooms
+    assert len(rooms) == 1
+    assert rooms[0].member_addresses == [1]  # d1's deviceAddress
+
+
+def test_parse_site_room_not_dimmable_when_no_member_is_dimmable():
+    site = {
+        **_SITE,
+        "roomAddress": {"r1": 14},
+        "outputGroups": {"d1": {"0": [14]}},
+        # d1 is a LIGHT but explicitly lacks the Dimmable trait -> on/off only.
+        "devices": [
+            {"deviceId": "d1", "title": "Kitchen", "roomId": "r1", "outputType": "LIGHT", "traits": 0},
+        ],
+    }
+    rooms = parse_site(site).rooms
+    assert len(rooms) == 1
+    assert rooms[0].dimmable is False
+
+
+def test_parse_site_room_dimmable_addresses_excludes_on_off_only_members():
+    site = {
+        **_SITE,
+        "roomAddress": {"r1": 14},
+        "outputGroups": {"d1": {"0": [14]}, "d6": {"0": [14]}},
+        "outputAddress": {**_SITE["outputAddress"], "d6": {"0": 61}},
+        "plejdDevices": [*_SITE["plejdDevices"], {"deviceId": "d6", "hardwareId": "1"}],
+        "devices": [
+            *_SITE["devices"],
+            {"deviceId": "d6", "title": "Lamp", "roomId": "r1", "outputType": "LIGHT", "traits": 0},
+        ],
+    }
+    rooms = parse_site(site).rooms
+    assert len(rooms) == 1
+    room = rooms[0]
+    assert set(room.member_addresses) == {11, 61}
+    assert room.dimmable_addresses == [11]  # d1 is dimmable; d6 (traits=0) is on/off only
