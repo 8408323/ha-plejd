@@ -58,7 +58,7 @@ test("_save clears a stale notice before the in-flight render", async () => {
   assert.equal(panel._notice, "Saved.");
 });
 
-test("hass updates coalesce lights renders to one animation frame", () => {
+test("hass updates coalesce lights and scenes renders to one animation frame", () => {
   const frames = [];
   const PanelClass = loadPanelClass({
     requestAnimationFrame(callback) {
@@ -71,6 +71,9 @@ test("hass updates coalesce lights renders to one animation frame", () => {
   let shells = 0;
   let loads = 0;
   let lights = 0;
+  let motion = 0;
+  let scenes = 0;
+  let health = 0;
 
   panel._renderShell = () => {
     shells += 1;
@@ -81,6 +84,15 @@ test("hass updates coalesce lights renders to one animation frame", () => {
   panel._updateLights = () => {
     lights += 1;
   };
+  panel._updateMotion = () => {
+    motion += 1;
+  };
+  panel._updateScenes = () => {
+    scenes += 1;
+  };
+  panel._updateHealth = () => {
+    health += 1;
+  };
 
   panel.hass = { states: {} };
   panel.hass = { states: {} };
@@ -90,9 +102,15 @@ test("hass updates coalesce lights renders to one animation frame", () => {
   assert.equal(loads, 1);
   assert.equal(frames.length, 1);
   assert.equal(lights, 0);
+  assert.equal(motion, 0);
+  assert.equal(scenes, 0);
+  assert.equal(health, 0);
 
   frames.shift()();
   assert.equal(lights, 1);
+  assert.equal(motion, 1);
+  assert.equal(scenes, 1);
+  assert.equal(health, 1);
 
   panel.hass = { states: {} };
   assert.equal(frames.length, 1);
@@ -113,6 +131,8 @@ test("disconnect cancels a queued lights render", () => {
   panel._renderShell = () => {};
   panel._loadBindings = () => {};
   panel._updateLights = () => {};
+  panel._updateMotion = () => {};
+  panel._updateHealth = () => {};
   panel.hass = { states: {} };
   panel.disconnectedCallback();
 
@@ -135,6 +155,8 @@ test("disconnect cancels a queued setTimeout fallback when requestAnimationFrame
   panel._renderShell = () => {};
   panel._loadBindings = () => {};
   panel._updateLights = () => {};
+  panel._updateMotion = () => {};
+  panel._updateHealth = () => {};
   panel.hass = { states: {} };
   panel.disconnectedCallback();
 
@@ -428,6 +450,403 @@ test("_stepClimate is a no-op when the thermostat has no target temperature yet"
   assert.equal(called, false);
 });
 
+// ── motion & illuminance ─────────────────────────────────────────────────────
+
+test("_updateMotion lists each motion sensor with its device name, state, and illuminance", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const motion = { innerHTML: "" };
+
+  panel.querySelector = (selector) => (selector === "#plejd-motion" ? motion : null);
+  panel._hass = {
+    states: {
+      "binary_sensor.hallway_motion": {
+        entity_id: "binary_sensor.hallway_motion",
+        state: "on",
+        attributes: { friendly_name: "Hallway Motion", device_class: "motion" },
+      },
+      "sensor.hallway_illuminance": {
+        entity_id: "sensor.hallway_illuminance",
+        state: "42",
+        attributes: { friendly_name: "Hallway Illuminance", device_class: "illuminance" },
+      },
+      "binary_sensor.garage_motion": {
+        entity_id: "binary_sensor.garage_motion",
+        state: "off",
+        attributes: { friendly_name: "Garage Motion", device_class: "motion" },
+      },
+      "binary_sensor.other_vendor_motion": {
+        entity_id: "binary_sensor.other_vendor_motion",
+        state: "on",
+        attributes: { friendly_name: "Other vendor motion", device_class: "motion" },
+      },
+    },
+    entities: {
+      "binary_sensor.hallway_motion": { platform: "plejd", device_id: "dev.hallway" },
+      "sensor.hallway_illuminance": { platform: "plejd", device_id: "dev.hallway" },
+      "binary_sensor.garage_motion": { platform: "plejd", device_id: "dev.garage" },
+      "binary_sensor.other_vendor_motion": { platform: "other" },
+    },
+    devices: { "dev.hallway": { name: "Hallway" }, "dev.garage": { name: "Garage" } },
+  };
+
+  panel._updateMotion();
+
+  assert.match(motion.innerHTML, />2<\/span>/);
+  assert.match(motion.innerHTML, /Hallway/);
+  assert.match(motion.innerHTML, /Detected/);
+  assert.match(motion.innerHTML, /42 lx/);
+  assert.match(motion.innerHTML, /Garage/);
+  assert.match(motion.innerHTML, /Clear/);
+  assert.doesNotMatch(motion.innerHTML, /Other vendor motion/);
+});
+
+test("_updateMotion omits the illuminance reading when the paired sensor is unavailable", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const motion = { innerHTML: "" };
+
+  panel.querySelector = (selector) => (selector === "#plejd-motion" ? motion : null);
+  panel._hass = {
+    states: {
+      "binary_sensor.hallway_motion": {
+        entity_id: "binary_sensor.hallway_motion",
+        state: "on",
+        attributes: { friendly_name: "Hallway Motion", device_class: "motion" },
+      },
+      "sensor.hallway_illuminance": {
+        entity_id: "sensor.hallway_illuminance",
+        state: "unavailable",
+        attributes: { friendly_name: "Hallway Illuminance", device_class: "illuminance" },
+      },
+    },
+    entities: {
+      "binary_sensor.hallway_motion": { platform: "plejd", device_id: "dev.hallway" },
+      "sensor.hallway_illuminance": { platform: "plejd", device_id: "dev.hallway" },
+    },
+    devices: { "dev.hallway": { name: "Hallway" } },
+  };
+
+  panel._updateMotion();
+
+  assert.match(motion.innerHTML, /Detected/);
+  assert.doesNotMatch(motion.innerHTML, /lx/);
+});
+
+test("_updateMotion falls back to the entity's friendly name when no device_id is registered", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const motion = { innerHTML: "" };
+
+  panel.querySelector = (selector) => (selector === "#plejd-motion" ? motion : null);
+  panel._hass = {
+    states: {
+      "binary_sensor.attic_motion": {
+        entity_id: "binary_sensor.attic_motion",
+        state: "off",
+        attributes: { friendly_name: "Attic Motion", device_class: "motion", attribution: "Plejd" },
+      },
+    },
+    entities: {},
+  };
+
+  panel._updateMotion();
+
+  assert.match(motion.innerHTML, /Attic Motion/);
+  assert.match(motion.innerHTML, /Clear/);
+});
+
+test("_updateMotion reports unavailable and unknown motion sensors distinctly from clear", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const motion = { innerHTML: "" };
+
+  panel.querySelector = (selector) => (selector === "#plejd-motion" ? motion : null);
+  panel._hass = {
+    states: {
+      "binary_sensor.hallway_motion": {
+        entity_id: "binary_sensor.hallway_motion",
+        state: "unavailable",
+        attributes: { friendly_name: "Hallway Motion", device_class: "motion" },
+      },
+      "binary_sensor.garage_motion": {
+        entity_id: "binary_sensor.garage_motion",
+        state: "unknown",
+        attributes: { friendly_name: "Garage Motion", device_class: "motion" },
+      },
+    },
+    entities: {
+      "binary_sensor.hallway_motion": { platform: "plejd", device_id: "dev.hallway" },
+      "binary_sensor.garage_motion": { platform: "plejd", device_id: "dev.garage" },
+    },
+    devices: { "dev.hallway": { name: "Hallway" }, "dev.garage": { name: "Garage" } },
+  };
+
+  panel._updateMotion();
+
+  assert.equal((motion.innerHTML.match(/Unavailable/g) || []).length, 2);
+  assert.doesNotMatch(motion.innerHTML, /Clear/);
+  assert.doesNotMatch(motion.innerHTML, /Detected/);
+});
+
+test("_updateMotion does not crash on a site with no motion sensors", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const motion = { innerHTML: "" };
+
+  panel.querySelector = (selector) => (selector === "#plejd-motion" ? motion : null);
+  panel._hass = { states: {} };
+
+  panel._updateMotion();
+
+  assert.match(motion.innerHTML, /No motion sensors found/);
+});
+
+test("_updateMotion is a no-op when the panel DOM isn't mounted yet", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+
+  panel.querySelector = () => null;
+  panel._hass = { states: {} };
+
+  assert.doesNotThrow(() => panel._updateMotion());
+});
+
+// ── scenes ───────────────────────────────────────────────────────────────────
+
+test("_updateScenes renders the site's Plejd scenes with an Activate button each", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const scenes = { innerHTML: "", querySelectorAll: () => [] };
+
+  panel.querySelector = (selector) => (selector === "#plejd-scenes" ? scenes : null);
+  panel._hass = {
+    states: {
+      "scene.movie_night": {
+        entity_id: "scene.movie_night",
+        state: "scening",
+        attributes: { friendly_name: "Movie Night" },
+      },
+      "scene.good_morning": {
+        entity_id: "scene.good_morning",
+        state: "scening",
+        attributes: { friendly_name: "Good Morning" },
+      },
+      "scene.other_vendor": {
+        entity_id: "scene.other_vendor",
+        state: "scening",
+        attributes: { friendly_name: "Other vendor scene" },
+      },
+    },
+    entities: {
+      "scene.movie_night": { platform: "plejd" },
+      "scene.good_morning": { platform: "plejd" },
+      "scene.other_vendor": { platform: "other" },
+    },
+  };
+
+  panel._updateScenes();
+
+  assert.match(scenes.innerHTML, />2<\/span>/);
+  assert.match(scenes.innerHTML, /Good Morning/);
+  assert.match(scenes.innerHTML, /Movie Night/);
+  assert.doesNotMatch(scenes.innerHTML, /Other vendor scene/);
+  assert.match(scenes.innerHTML, /data-activate-scene="scene\.good_morning"/);
+  assert.match(scenes.innerHTML, />Activate</);
+});
+
+test("_updateScenes renders an empty state for a site with no Plejd scenes", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const scenes = { innerHTML: "", querySelectorAll: () => [] };
+
+  panel.querySelector = (selector) => (selector === "#plejd-scenes" ? scenes : null);
+  panel._hass = { states: {}, entities: {} };
+
+  panel._updateScenes();
+
+  assert.match(scenes.innerHTML, />0<\/span>/);
+  assert.match(scenes.innerHTML, /No Plejd scenes found\./);
+  assert.doesNotMatch(scenes.innerHTML, /data-activate-scene/);
+});
+
+test("clicking Activate on a scene row calls scene.turn_on with that scene's entity_id", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const listeners = {};
+  const activateBtn = {
+    getAttribute: () => "scene.movie_night",
+    addEventListener: (ev, fn) => {
+      listeners[ev] = fn;
+    },
+  };
+  const scenes = { innerHTML: "", querySelectorAll: () => [activateBtn] };
+
+  panel.querySelector = (selector) => (selector === "#plejd-scenes" ? scenes : null);
+  panel._hass = {
+    states: {
+      "scene.movie_night": {
+        entity_id: "scene.movie_night",
+        state: "scening",
+        attributes: { friendly_name: "Movie Night" },
+      },
+    },
+    entities: { "scene.movie_night": { platform: "plejd" } },
+  };
+  let called;
+  panel._callService = (domain, service, data) => {
+    called = { domain, service, data };
+    return Promise.resolve();
+  };
+
+  panel._updateScenes();
+  const activated = listeners.click();
+
+  return activated.then(() => {
+    assert.deepEqual(plain(called), {
+      domain: "scene",
+      service: "turn_on",
+      data: { entity_id: "scene.movie_night" },
+    });
+  });
+});
+
+test("a failed scene activation surfaces an error without throwing", async () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._hass = { states: {}, entities: {} };
+  panel._updateScenes = () => {};
+  panel._callService = () => Promise.reject(new Error("service unavailable"));
+
+  await panel._activateScene("scene.movie_night");
+
+  assert.match(panel._scenesError, /service unavailable/);
+});
+
+// ── device health ────────────────────────────────────────────────────────────
+
+test("_updateHealth shows an all-healthy state when no fault sensor is active", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const health = { innerHTML: "" };
+
+  panel.querySelector = (selector) => (selector === "#plejd-health" ? health : null);
+  panel._hass = {
+    states: {
+      "binary_sensor.kitchen_dimmer_fault": {
+        entity_id: "binary_sensor.kitchen_dimmer_fault",
+        state: "off",
+        attributes: { friendly_name: "Kitchen dimmer Fault", device_class: "problem", active_faults: [] },
+      },
+    },
+    entities: {
+      "binary_sensor.kitchen_dimmer_fault": { platform: "plejd", device_id: "dev.kitchen" },
+    },
+    devices: { "dev.kitchen": { name: "Kitchen dimmer" } },
+  };
+
+  panel._updateHealth();
+
+  assert.match(health.innerHTML, /All devices healthy/);
+  assert.match(health.innerHTML, />0<\/span>/);
+  assert.doesNotMatch(health.innerHTML, /Kitchen dimmer/);
+});
+
+test("_updateHealth lists each faulted device with its name and active fault flags", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const health = { innerHTML: "" };
+
+  panel.querySelector = (selector) => (selector === "#plejd-health" ? health : null);
+  panel._hass = {
+    states: {
+      "binary_sensor.kitchen_dimmer_fault": {
+        entity_id: "binary_sensor.kitchen_dimmer_fault",
+        state: "on",
+        attributes: {
+          friendly_name: "Kitchen dimmer Fault",
+          device_class: "problem",
+          active_faults: ["overtemperature", "soft_overcurrent"],
+        },
+      },
+      "binary_sensor.hall_switch_fault": {
+        entity_id: "binary_sensor.hall_switch_fault",
+        state: "off",
+        attributes: { friendly_name: "Hall switch Fault", device_class: "problem", active_faults: [] },
+      },
+      "binary_sensor.other_vendor_problem": {
+        entity_id: "binary_sensor.other_vendor_problem",
+        state: "on",
+        attributes: { friendly_name: "Other vendor problem", device_class: "problem" },
+      },
+    },
+    entities: {
+      "binary_sensor.kitchen_dimmer_fault": { platform: "plejd", device_id: "dev.kitchen" },
+      "binary_sensor.hall_switch_fault": { platform: "plejd", device_id: "dev.hall" },
+      "binary_sensor.other_vendor_problem": { platform: "other" },
+    },
+    devices: { "dev.kitchen": { name: "Kitchen dimmer" }, "dev.hall": { name: "Hall switch" } },
+  };
+
+  panel._updateHealth();
+
+  assert.match(health.innerHTML, />1<\/span>/);
+  assert.match(health.innerHTML, /Kitchen dimmer/);
+  assert.match(health.innerHTML, /overtemperature/);
+  assert.match(health.innerHTML, /soft overcurrent/);
+  assert.doesNotMatch(health.innerHTML, /Hall switch/); // not faulted, so not listed
+  assert.doesNotMatch(health.innerHTML, /Other vendor problem/); // not our platform
+  assert.doesNotMatch(health.innerHTML, /All devices healthy/);
+});
+
+test("_updateHealth falls back to the entity's friendly name when no device_id is registered", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const health = { innerHTML: "" };
+
+  panel.querySelector = (selector) => (selector === "#plejd-health" ? health : null);
+  panel._hass = {
+    states: {
+      "binary_sensor.gateway_fault": {
+        entity_id: "binary_sensor.gateway_fault",
+        state: "on",
+        attributes: { friendly_name: "Gateway Fault", device_class: "problem", active_faults: ["hard_fault"] },
+      },
+    },
+    entities: {
+      "binary_sensor.gateway_fault": { platform: "plejd" },
+    },
+    devices: {},
+  };
+
+  panel._updateHealth();
+
+  assert.match(health.innerHTML, /Gateway Fault/);
+});
+
+test("_updateHealth does not crash on a site with no fault sensors", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const health = { innerHTML: "" };
+
+  panel.querySelector = (selector) => (selector === "#plejd-health" ? health : null);
+  panel._hass = { states: {} };
+
+  panel._updateHealth();
+
+  assert.match(health.innerHTML, /All devices healthy/);
+});
+
+test("_updateHealth is a no-op when the panel DOM isn't mounted yet", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+
+  panel.querySelector = () => null;
+  panel._hass = { states: {} };
+
+  assert.doesNotThrow(() => panel._updateHealth());
+});
+
 test("deleting a binding preserves an in-progress add form", async () => {
   const PanelClass = loadPanelClass();
   const panel = new PanelClass();
@@ -473,6 +892,8 @@ test("first hass assignment loads area and device registries over websocket", as
   panel._loadBindings = () => {};
   panel._scheduleLightsUpdate = () => {};
   panel._renderEditor = () => {};
+  panel._updateMotion = () => {};
+  panel._updateHealth = () => {};
 
   panel.hass = {
     states: {},
@@ -499,6 +920,93 @@ test("first hass assignment loads area and device registries over websocket", as
   assert.equal(panel._devices()[0].name, "Remote Hall");
   assert.equal(panel._areaName("area.kitchen"), "Kitchen");
   assert.equal(panel._deviceName("dev.remote"), "Remote Hall");
+});
+
+test("registry load refreshes the motion card so a device id placeholder becomes the friendly name", async () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const motion = { innerHTML: "" };
+
+  panel._renderShell = () => {};
+  panel._loadBindings = () => {};
+  panel._scheduleLightsUpdate = () => {};
+  panel._renderEditor = () => {};
+  panel.querySelector = (selector) => (selector === "#plejd-motion" ? motion : null);
+
+  panel.hass = {
+    states: {
+      "binary_sensor.hallway_motion": {
+        entity_id: "binary_sensor.hallway_motion",
+        state: "off",
+        attributes: { friendly_name: "Hallway Motion", device_class: "motion" },
+      },
+    },
+    entities: {
+      "binary_sensor.hallway_motion": { platform: "plejd", device_id: "dev.hallway" },
+    },
+    // No hass.devices entry yet (registries not pushed to the frontend store): before the
+    // registry websocket call resolves, _deviceName falls back to the raw device id.
+    devices: {},
+    callWS(msg) {
+      if (msg.type === "config/area_registry/list") return Promise.resolve([]);
+      if (msg.type === "config/device_registry/list") {
+        return Promise.resolve([{ id: "dev.hallway", name: "Hallway" }]);
+      }
+      throw new Error(`unexpected ws call: ${msg.type}`);
+    },
+  };
+
+  // Simulate the initial motion render (scheduled separately via _scheduleLightsUpdate,
+  // stubbed above) happening before the registries resolve.
+  panel._updateMotion();
+  assert.match(motion.innerHTML, /dev\.hallway/);
+
+  await panel._registriesPromise;
+
+  assert.match(motion.innerHTML, /Hallway/);
+  assert.doesNotMatch(motion.innerHTML, /dev\.hallway/);
+});
+
+test("registries resolving after the health card's first render refreshes it with device names instead of leaving raw ids", async () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const health = { innerHTML: "" };
+
+  panel._renderShell = () => {};
+  panel._loadBindings = () => {};
+  panel._scheduleLightsUpdate = () => {};
+  panel.querySelector = (selector) => (selector === "#plejd-health" ? health : null);
+
+  panel.hass = {
+    states: {
+      "binary_sensor.kitchen_dimmer_fault": {
+        entity_id: "binary_sensor.kitchen_dimmer_fault",
+        state: "on",
+        attributes: { friendly_name: "Kitchen dimmer Fault", device_class: "problem", active_faults: ["overtemperature"] },
+      },
+    },
+    entities: {
+      "binary_sensor.kitchen_dimmer_fault": { platform: "plejd", device_id: "dev.kitchen" },
+    },
+    // No hass.devices exposed yet, mirroring a quiet site where the first health render
+    // happens before config/device_registry/list resolves.
+    callWS(msg) {
+      if (msg.type === "config/area_registry/list") return Promise.resolve([]);
+      if (msg.type === "config/device_registry/list") {
+        return Promise.resolve([{ id: "dev.kitchen", name: "Kitchen dimmer" }]);
+      }
+      throw new Error(`unexpected ws call: ${msg.type}`);
+    },
+  };
+
+  // Simulate the scheduled health render firing before the registries promise settles.
+  panel._updateHealth();
+  assert.match(health.innerHTML, /dev\.kitchen/); // raw device id, not yet a name
+
+  await panel._registriesPromise;
+
+  assert.doesNotMatch(health.innerHTML, /dev\.kitchen/);
+  assert.match(health.innerHTML, /Kitchen dimmer/);
 });
 
 test("trigger change listeners keep _form in sync so re-renders preserve selections", () => {
@@ -556,6 +1064,8 @@ test("registry loading failure keeps registries empty and logs a warning", async
   panel._loadBindings = () => {};
   panel._scheduleLightsUpdate = () => {};
   panel._renderEditor = () => {};
+  panel._updateMotion = () => {};
+  panel._updateHealth = () => {};
 
   panel.hass = {
     states: {},

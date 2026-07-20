@@ -1,8 +1,8 @@
 // Plejd dashboard — a custom Home Assistant sidebar panel (not a Lovelace view).
 // Home Assistant sets `hass`, `narrow`, `route`, and `panel` properties on this element.
-// It lists the site's Plejd lights and thermostats, and hosts the remote → light
-// dim-binding editor: map a dimmer remote's hold/release device triggers to smooth
-// dimming of a light or area.
+// It lists the site's Plejd lights, thermostats, and scenes, and hosts the remote →
+// light dim-binding editor: map a dimmer remote's hold/release device triggers to
+// smooth dimming of a light or area.
 
 const CARD = `
   background: var(--card-background-color, #fff);
@@ -59,6 +59,7 @@ class PlejdPanel extends HTMLElement {
     this._error = "";
     this._notice = "";
     this._busy = false;
+    this._scenesError = "";
     this._lightsFrame = null;
     // entity_id -> optimistic target temperature from a just-sent setpoint tap, until
     // hass's own push catches up. Repeated taps arrive well within that round-trip, so
@@ -85,8 +86,8 @@ class PlejdPanel extends HTMLElement {
       this._loadBindings();
       this._loadRegistries();
     }
-    // Only the live lights list tracks state; leave the editor DOM (and any in-progress
-    // form entry) untouched on the frequent hass state updates.
+    // Only the live lights and scenes lists track state; leave the editor DOM (and any
+    // in-progress form entry) untouched on the frequent hass state updates.
     this._scheduleLightsUpdate();
   }
 
@@ -96,7 +97,7 @@ class PlejdPanel extends HTMLElement {
 
   connectedCallback() {
     // On (re)connect, rebuild only if the shell is gone; otherwise refresh the live lights
-    // list and leave the editor DOM — and any in-progress form entry — untouched.
+    // and scenes lists and leave the editor DOM — and any in-progress form entry — untouched.
     if (!this._hass) return;
     if (!this.querySelector("#plejd-lights")) this._renderShell();
     this._scheduleLightsUpdate();
@@ -176,6 +177,10 @@ class PlejdPanel extends HTMLElement {
       } finally {
         this._registriesPromise = null;
         this._renderEditor();
+        // The motion/health cards may have rendered device ids as a placeholder before
+        // this resolved (see _deviceName); refresh them now that names are available.
+        this._updateMotion();
+        this._updateHealth();
       }
     })();
     return this._registriesPromise;
@@ -237,6 +242,40 @@ class PlejdPanel extends HTMLElement {
       );
   }
 
+  // Per-device WMS-01 motion binary_sensors, the same domain-and-platform filtering
+  // approach as _lights() but for binary_sensor.* motion entities instead of light.*.
+  _motionSensors() {
+    const hass = this._hass;
+    if (!hass) return [];
+    return Object.values(hass.states)
+      .filter(
+        (s) =>
+          s.entity_id.startsWith("binary_sensor.") &&
+          s.attributes.device_class === "motion" &&
+          (hass.entities?.[s.entity_id]?.platform === "plejd" ||
+            s.attributes.attribution === "Plejd"),
+      )
+      .sort((a, b) =>
+        (a.attributes.friendly_name || a.entity_id).localeCompare(
+          b.attributes.friendly_name || b.entity_id,
+        ),
+      );
+  }
+
+  // Per-device Fault (problem) binary_sensors, the same domain-and-platform filtering
+  // approach as _lights() but for binary_sensor.* health entities instead of light.*.
+  _faults() {
+    const hass = this._hass;
+    if (!hass) return [];
+    return Object.values(hass.states).filter(
+      (s) =>
+        s.entity_id.startsWith("binary_sensor.") &&
+        s.attributes.device_class === "problem" &&
+        (hass.entities?.[s.entity_id]?.platform === "plejd" ||
+          s.attributes.attribution === "Plejd"),
+    );
+  }
+
   _allLights() {
     const hass = this._hass;
     return Object.values(hass.states)
@@ -280,6 +319,36 @@ class PlejdPanel extends HTMLElement {
       .sort((a, b) => a.name.localeCompare(b.name));
   }
 
+  // This site's own Plejd scenes for the Scenes list, filtered the same way _lights()
+  // restricts to Plejd lights — unlike _scenes() above, which lists every HA scene for
+  // the press-action picker (a binding can activate any scene, not just a Plejd one).
+  _plejdScenes() {
+    const hass = this._hass;
+    if (!hass) return [];
+    return Object.values(hass.states)
+      .filter(
+        (s) =>
+          s.entity_id.startsWith("scene.") &&
+          (hass.entities?.[s.entity_id]?.platform === "plejd" ||
+            s.attributes.attribution === "Plejd"),
+      )
+      .sort((a, b) =>
+        (a.attributes.friendly_name || a.entity_id).localeCompare(
+          b.attributes.friendly_name || b.entity_id,
+        ),
+      );
+  }
+
+  async _activateScene(entityId) {
+    this._scenesError = "";
+    try {
+      await this._callService("scene", "turn_on", { entity_id: entityId });
+    } catch (err) {
+      this._scenesError = `Could not activate scene: ${err.message || err}`;
+    }
+    this._updateScenes();
+  }
+
   _entityName(entityId) {
     return this._hass.states[entityId]?.attributes.friendly_name || entityId;
   }
@@ -292,6 +361,32 @@ class PlejdPanel extends HTMLElement {
     if (this._devicesById[deviceId]) return this._devicesById[deviceId];
     const d = this._hass.devices?.[deviceId];
     return d?.name_by_user || d?.name || deviceId;
+  }
+
+  // A motion sensor's physical device, resolved the same way binding targets are (registry
+  // name over entity name) so the row shows "Hallway", not "Hallway Motion".
+  _motionDeviceName(state) {
+    const deviceId = this._hass.entities?.[state.entity_id]?.device_id;
+    return deviceId ? this._deviceName(deviceId) : state.attributes.friendly_name || state.entity_id;
+  }
+
+  // A fault sensor's physical device, resolved the same way binding targets are (registry
+  // name over entity name) so the widget shows "Kitchen dimmer", not "Kitchen dimmer Fault".
+  _faultDeviceName(state) {
+    const deviceId = this._hass.entities?.[state.entity_id]?.device_id;
+    return deviceId ? this._deviceName(deviceId) : state.attributes.friendly_name || state.entity_id;
+  }
+
+  // The illuminance sensor sharing a motion sensor's device, if the platform exposes one.
+  _illuminanceFor(deviceId) {
+    const hass = this._hass;
+    if (!deviceId) return null;
+    return Object.values(hass.states).find(
+      (s) =>
+        s.entity_id.startsWith("sensor.") &&
+        s.attributes.device_class === "illuminance" &&
+        hass.entities?.[s.entity_id]?.device_id === deviceId,
+    );
   }
 
   // A stored binding's target(s) -> a human string. Lists every target (a binding can
@@ -322,8 +417,13 @@ class PlejdPanel extends HTMLElement {
         <h1 style="font-weight:400;margin:8px 4px 20px">Plejd</h1>
         <div id="plejd-lights" style="${CARD}"></div>
         <div id="plejd-climate" style="${CARD};margin-top:16px"></div>
+        <div id="plejd-motion" style="${CARD};margin-top:16px"></div>
+        <div id="plejd-scenes" style="${CARD};margin-top:16px"></div>
+        <div id="plejd-health" style="${CARD};margin-top:16px"></div>
         <div id="plejd-bindings" style="${CARD};margin-top:16px"></div>
       </div>`;
+    this._updateScenes();
+    this._updateHealth();
     this._renderEditor();
   }
 
@@ -332,6 +432,9 @@ class PlejdPanel extends HTMLElement {
     this._lightsFrame = this._scheduleLightsFrame(() => {
       this._lightsFrame = null;
       this._updateLights();
+      this._updateMotion();
+      this._updateScenes();
+      this._updateHealth();
     });
   }
 
@@ -434,6 +537,96 @@ class PlejdPanel extends HTMLElement {
       if (this._climateOverrides[state.entity_id] === next) delete this._climateOverrides[state.entity_id];
       this._updateClimate();
     });
+  }
+
+  _updateMotion() {
+    const el = this.querySelector("#plejd-motion");
+    if (!el) return;
+    const sensors = this._motionSensors();
+    const rows = sensors
+      .map((s) => {
+        const name = this._motionDeviceName(s);
+        const unavailable = ["unavailable", "unknown"].includes(s.state);
+        const detected = s.state === "on";
+        const deviceId = this._hass.entities?.[s.entity_id]?.device_id;
+        const illuminance = this._illuminanceFor(deviceId);
+        const lux =
+          illuminance && !["unavailable", "unknown"].includes(illuminance.state)
+            ? `${illuminance.state} lx`
+            : null;
+        const status = unavailable ? "Unavailable" : detected ? "Detected" : "Clear";
+        const dot = detected ? "var(--state-light-active-color, #fdd835)" : "var(--disabled-text-color, #9e9e9e)";
+        return `
+          <div style="display:flex;align-items:center;gap:12px;padding:10px 4px;border-bottom:1px solid var(--divider-color,#e0e0e0)">
+            <span style="width:10px;height:10px;border-radius:50%;background:${dot};flex:none"></span>
+            <span style="flex:1">${esc(name)}</span>
+            <span style="color:var(--secondary-text-color,#727272)">${status}${lux ? ` · ${esc(lux)}` : ""}</span>
+          </div>`;
+      })
+      .join("");
+    el.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px">
+        <h2 style="font-weight:500;font-size:1.05rem;margin:0">Motion & illuminance</h2>
+        <span style="color:var(--secondary-text-color,#727272);font-size:.9rem">${sensors.length}</span>
+      </div>
+      ${rows || '<p style="color:var(--secondary-text-color,#727272)">No motion sensors found.</p>'}`;
+  }
+
+  _updateScenes() {
+    const el = this.querySelector("#plejd-scenes");
+    if (!el) return;
+    const scenes = this._plejdScenes();
+    const rows = scenes
+      .map((s) => {
+        const name = s.attributes.friendly_name || s.entity_id;
+        return `
+          <div style="display:flex;align-items:center;gap:12px;padding:10px 4px;border-bottom:1px solid var(--divider-color,#e0e0e0)">
+            <span style="flex:1">${esc(name)}</span>
+            <button data-activate-scene="${esc(s.entity_id)}" style="${BTN}">Activate</button>
+          </div>`;
+      })
+      .join("");
+    const error = this._scenesError
+      ? `<p style="color:var(--error-color,#db4437);margin:8px 0 0">${esc(this._scenesError)}</p>`
+      : "";
+    el.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px">
+        <h2 style="font-weight:500;font-size:1.05rem;margin:0">Scenes</h2>
+        <span style="color:var(--secondary-text-color,#727272);font-size:.9rem">${scenes.length}</span>
+      </div>
+      ${rows || '<p style="color:var(--secondary-text-color,#727272)">No Plejd scenes found.</p>'}
+      ${error}`;
+    el.querySelectorAll("[data-activate-scene]").forEach((btn) =>
+      btn.addEventListener("click", () => this._activateScene(btn.getAttribute("data-activate-scene"))),
+    );
+  }
+
+  _updateHealth() {
+    const el = this.querySelector("#plejd-health");
+    if (!el) return;
+    const faulted = this._faults()
+      .filter((s) => s.state === "on")
+      .map((s) => ({
+        name: this._faultDeviceName(s),
+        flags: (s.attributes.active_faults || []).map((f) => f.replace(/_/g, " ")).join(", "),
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    const rows = faulted
+      .map(
+        (f) => `
+          <div style="display:flex;align-items:center;gap:12px;padding:10px 4px;border-bottom:1px solid var(--divider-color,#e0e0e0)">
+            <span style="width:10px;height:10px;border-radius:50%;background:var(--error-color,#db4437);flex:none"></span>
+            <span style="flex:1">${esc(f.name)}</span>
+            <span style="color:var(--secondary-text-color,#727272)">${esc(f.flags)}</span>
+          </div>`,
+      )
+      .join("");
+    el.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px">
+        <h2 style="font-weight:500;font-size:1.05rem;margin:0">Device health</h2>
+        <span style="color:var(--secondary-text-color,#727272);font-size:.9rem">${faulted.length}</span>
+      </div>
+      ${rows || '<p style="color:var(--secondary-text-color,#727272)">All devices healthy.</p>'}`;
   }
 
   _triggerOptions(deviceId, selected) {
