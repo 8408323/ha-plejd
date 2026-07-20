@@ -1,8 +1,8 @@
 // Plejd dashboard — a custom Home Assistant sidebar panel (not a Lovelace view).
 // Home Assistant sets `hass`, `narrow`, `route`, and `panel` properties on this element.
-// It lists the site's Plejd lights, thermostats, and scenes, and hosts the remote →
-// light dim-binding editor: map a dimmer remote's hold/release device triggers to
-// smooth dimming of a light or area.
+// It lists the site's Plejd lights (tap to toggle, drag to dim), thermostats, and
+// scenes, and hosts the remote → light dim-binding editor: map a dimmer remote's
+// hold/release device triggers to smooth dimming of a light or area.
 
 const CARD = `
   background: var(--card-background-color, #fff);
@@ -21,6 +21,9 @@ const BTN = `
   background: var(--primary-color, #03a9f4); color: var(--text-primary-color, #fff);
 `;
 const LABEL = "display:block;font-size:.8rem;color:var(--secondary-text-color,#727272);margin:0 0 4px";
+// Minimum gap between live brightness commands while dragging a slider — matches
+// DIM_INTERVAL in dim_ramp.py, the same pacing the hold-to-dim ramp uses per tick.
+const DRAG_SEND_INTERVAL_MS = 100;
 
 // Entity/area/device names are user-controlled; escape before interpolating into innerHTML.
 const esc = (s) =>
@@ -71,6 +74,28 @@ class PlejdPanel extends HTMLElement {
     this._scheduleBusy = false;
     this._scenesError = "";
     this._lightsFrame = null;
+    this._draggingEntity = null; // entity_id of a brightness slider mid-drag, else null
+    // entity_id -> optimistic on/off from a just-sent toggle, until hass's own push catches
+    // up. Repeated clicks arrive well within the round-trip to the backend (mesh/gateway
+    // ack plus the websocket push back to this tab), so reading hass.states directly on
+    // every click reads the same pre-toggle value each time and sends the same command
+    // repeatedly instead of alternating - this is what a click actually just did.
+    this._toggleOverrides = {};
+    // entity_id -> optimistic brightness pct from a just-sent slider command, until hass's
+    // own push catches up. Mirrors _toggleOverrides: the catch-up render scheduled on slider
+    // release fires well before the real state push arrives, and without this it would
+    // redraw the slider back to the stale pre-drag value for a moment.
+    this._brightnessOverrides = {};
+    // entity_id -> integer, bumped on every toggle/brightness command for that light. Lets
+    // an async command's own failure handler tell whether a newer command has since
+    // superseded it (by value alone, the same true/pct can recur - e.g. off/on/off/on -
+    // so a stale rejection could otherwise clear an unrelated, newer optimistic override).
+    this._commandTokens = {};
+    // entity_id -> { sending, queuedPct } - brightness-send serialization, kept on the
+    // panel instance rather than a per-render closure so a mid-drag re-render (a new
+    // DOM element, a fresh _wireLights closure) doesn't lose track of a send already in
+    // flight and let a new drag's send overlap it.
+    this._brightnessSendState = {};
     // entity_id -> optimistic target temperature from a just-sent setpoint tap, until
     // hass's own push catches up. Repeated taps arrive well within that round-trip, so
     // reading hass.states directly on every tap would recompute from the same pre-tap
@@ -115,9 +140,14 @@ class PlejdPanel extends HTMLElement {
   }
 
   disconnectedCallback() {
-    if (this._lightsFrame === null) return;
-    this._cancelLightsFrame(this._lightsFrame);
-    this._lightsFrame = null;
+    if (this._lightsFrame !== null) {
+      this._cancelLightsFrame(this._lightsFrame);
+      this._lightsFrame = null;
+    }
+    // A drag in progress when the panel is torn down (e.g. navigating away) will never
+    // fire its release "change" event on this detached node; clear the guard so a future
+    // reconnect's render isn't skipped forever.
+    this._draggingEntity = null;
   }
 
   // ── data ──────────────────────────────────────────────────────────────────
@@ -216,6 +246,79 @@ class PlejdPanel extends HTMLElement {
     } finally {
       this._busy = false;
       this._renderEditor();
+    }
+  }
+
+  // A fresh token for entityId, so this command's own failure handler can later tell
+  // whether a newer command has since superseded it (see _commandTokens above).
+  _nextCommandToken(entityId) {
+    const token = (this._commandTokens[entityId] || 0) + 1;
+    this._commandTokens[entityId] = token;
+    return token;
+  }
+
+  async _toggleLight(entityId, turnOn) {
+    const token = this._nextCommandToken(entityId);
+    this._toggleOverrides[entityId] = turnOn;
+    try {
+      await this._hass.callService("light", turnOn ? "turn_on" : "turn_off", { entity_id: entityId });
+    } catch (err) {
+      console.warn("Plejd panel: failed to toggle light", entityId, err);
+      // The command never went out - don't keep claiming it did. Drop the optimistic
+      // override, but only if no newer command for this entity has superseded it.
+      if (this._commandTokens[entityId] === token) {
+        delete this._toggleOverrides[entityId];
+        this._updateLights();
+      }
+    }
+  }
+
+  // Records the optimistic on/pct intent immediately - even when the actual send below
+  // ends up queued behind an in-flight one - so a render in the meantime (e.g. the
+  // catch-up render on slider release) shows the truly-latest requested value instead of
+  // whatever was last actually sent.
+  _recordBrightnessIntent(entityId, pct) {
+    const token = this._nextCommandToken(entityId);
+    this._toggleOverrides[entityId] = true; // brightness_pct always turns the light on
+    this._brightnessOverrides[entityId] = pct;
+    return token;
+  }
+
+  async _setLightBrightness(entityId, pct) {
+    const token = this._recordBrightnessIntent(entityId, pct);
+    let state = this._brightnessSendState[entityId];
+    if (!state) {
+      state = { sending: false, queuedPct: null };
+      this._brightnessSendState[entityId] = state;
+    }
+    // One send in flight at a time: a slow round-trip can otherwise overlap sends, and
+    // since they aren't guaranteed to land in the order they were sent, an older one
+    // could reach the transport after a newer one and leave the light at a stale
+    // brightness. While a send is in flight, remember only the latest requested pct
+    // (like PlejdDimRamp._run's own coalescing) and fire that once it completes.
+    if (state.sending) {
+      state.queuedPct = pct;
+      return;
+    }
+    state.sending = true;
+    try {
+      await this._hass.callService("light", "turn_on", { entity_id: entityId, brightness_pct: pct });
+    } catch (err) {
+      console.warn("Plejd panel: failed to set brightness", entityId, err);
+      // Only roll back if no newer command for this entity (toggle or brightness) has
+      // superseded this one - it may have already succeeded, or still be in flight.
+      if (this._commandTokens[entityId] === token) {
+        delete this._brightnessOverrides[entityId];
+        delete this._toggleOverrides[entityId];
+        this._updateLights();
+      }
+    } finally {
+      state.sending = false;
+      if (state.queuedPct !== null) {
+        const next = state.queuedPct;
+        state.queuedPct = null;
+        this._setLightBrightness(entityId, next);
+      }
     }
   }
 
@@ -454,19 +557,48 @@ class PlejdPanel extends HTMLElement {
   _updateLights() {
     const el = this.querySelector("#plejd-lights");
     if (!el) return;
+    // A slider mid-drag owns its own DOM node (native pointer capture); replacing the
+    // whole list via innerHTML would kill the drag. Skip this refresh and pick it back
+    // up once the drag ends and the next hass update schedules one.
+    if (this._draggingEntity) return;
     const lights = this._lights();
     const rows = lights
       .map((s) => {
         const name = s.attributes.friendly_name || s.entity_id;
-        const on = s.state === "on";
+        const unavailable = s.state === "unavailable";
+        const override = this._toggleOverrides[s.entity_id];
+        const realOn = s.state === "on";
+        if (override !== undefined && override === realOn) delete this._toggleOverrides[s.entity_id];
+        const on = override !== undefined ? override : realOn;
         const bri = s.attributes.brightness;
-        const level = on && bri != null ? `${Math.round((bri / 255) * 100)}%` : on ? "on" : "off";
-        const dot = on ? "var(--state-light-active-color, #fdd835)" : "var(--disabled-text-color, #9e9e9e)";
+        const realPct = bri != null ? Math.round((bri / 255) * 100) : 100;
+        const briOverride = this._brightnessOverrides[s.entity_id];
+        if (briOverride !== undefined && briOverride === realPct) delete this._brightnessOverrides[s.entity_id];
+        const pct = briOverride !== undefined ? briOverride : realPct;
+        const level = unavailable ? "unavailable" : on && bri != null ? `${pct}%` : on ? "on" : "off";
+        const dimmable = Array.isArray(s.attributes.supported_color_modes)
+          ? s.attributes.supported_color_modes.includes("brightness")
+          : bri != null;
+        const slider = dimmable
+          ? `<input type="range" min="1" max="100" value="${pct}" data-brightness="${esc(s.entity_id)}" ${unavailable ? "disabled" : ""} style="width:100%;margin-top:6px;accent-color:var(--primary-color,#03a9f4)">`
+          : "";
+        // An explicit switch (not just a plain dot) so on/off is an obvious, discoverable
+        // control rather than "click the name and hope" - the name stays clickable too
+        // as a larger, redundant hit target. Disabled (not just dimmed) when unavailable:
+        // clicking can't succeed, so don't invite an optimistic render nothing will confirm.
+        const toggle = `
+          <button type="button" data-toggle="${esc(s.entity_id)}" role="switch" aria-checked="${on}" aria-label="${on ? "Turn off" : "Turn on"} ${esc(name)}" ${unavailable ? "disabled" : ""}
+            style="width:34px;height:20px;flex:none;padding:0;border:none;border-radius:10px;cursor:${unavailable ? "not-allowed" : "pointer"};position:relative;opacity:${unavailable ? ".5" : "1"};background:${on ? "var(--primary-color, #03a9f4)" : "var(--disabled-text-color, #9e9e9e)"}">
+            <span style="position:absolute;top:2px;left:${on ? "16px" : "2px"};width:16px;height:16px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.3)"></span>
+          </button>`;
         return `
-          <div style="display:flex;align-items:center;gap:12px;padding:10px 4px;border-bottom:1px solid var(--divider-color,#e0e0e0)">
-            <span style="width:10px;height:10px;border-radius:50%;background:${dot};flex:none"></span>
-            <span style="flex:1">${esc(name)}</span>
-            <span style="color:var(--secondary-text-color,#727272)">${level}</span>
+          <div style="padding:10px 4px;border-bottom:1px solid var(--divider-color,#e0e0e0)">
+            <div style="display:flex;align-items:center;gap:12px">
+              ${toggle}
+              <span data-toggle="${esc(s.entity_id)}" style="flex:1;${unavailable ? "cursor:not-allowed;opacity:.5" : "cursor:pointer"}">${esc(name)}</span>
+              <span data-level="${esc(s.entity_id)}" style="color:var(--secondary-text-color,#727272)">${level}</span>
+            </div>
+            ${slider}
           </div>`;
       })
       .join("");
@@ -476,8 +608,78 @@ class PlejdPanel extends HTMLElement {
         <span style="color:var(--secondary-text-color,#727272);font-size:.9rem">${lights.length}</span>
       </div>
       ${rows || '<p style="color:var(--secondary-text-color,#727272)">No Plejd lights found.</p>'}`;
+    this._wireLights(el);
     // Climate rides the same coalesced hass-update frame as the lights list above.
     this._updateClimate();
+  }
+
+  _wireLights(el) {
+    el.querySelectorAll("[data-toggle]").forEach((span) => {
+      const entityId = span.getAttribute("data-toggle");
+      span.addEventListener("click", () => {
+        // The toggle <button> respects `disabled`, but the name <span> is a plain element -
+        // guard it here too so an unavailable light can't get an optimistic render for a
+        // service call that can't succeed.
+        if (this._hass.states[entityId]?.state === "unavailable") return;
+        // Prefer our own optimistic override over hass.states: a repeated click well
+        // within the round-trip to the backend must alternate off the last click's
+        // intent, not the pre-click state hass hasn't caught up to yet.
+        const isOn =
+          entityId in this._toggleOverrides ? this._toggleOverrides[entityId] : this._hass.states[entityId]?.state === "on";
+        const nextOn = !isOn;
+        this._toggleLight(entityId, nextOn);
+        this._updateLights();
+      });
+    });
+    el.querySelectorAll("[data-brightness]").forEach((slider) => {
+      const entityId = slider.getAttribute("data-brightness");
+      let lastSent = 0;
+      let pendingTimer = null;
+      // _setLightBrightness serializes/coalesces the actual send itself (state kept on
+      // the panel instance, not here) - this closure only throttles how often it's asked
+      // to send during a drag.
+      const sendNow = (pct) => {
+        lastSent = Date.now();
+        this._setLightBrightness(entityId, pct);
+      };
+      // 'input' fires on every drag tick — send live so the light tracks the slider for
+      // direct feedback, but throttled to DRAG_SEND_INTERVAL_MS (matches the hold-to-dim
+      // ramp's own tick pacing, DIM_INTERVAL in dim_ramp.py) so a fast drag doesn't flood
+      // the mesh; a trailing timer guarantees the final position mid-pause still ships.
+      slider.addEventListener("input", () => {
+        this._draggingEntity = entityId;
+        const levelEl = el.querySelector(`[data-level="${entityId}"]`);
+        if (levelEl) levelEl.textContent = `${slider.value}%`;
+        if (pendingTimer !== null) {
+          clearTimeout(pendingTimer);
+          pendingTimer = null;
+        }
+        const elapsed = Date.now() - lastSent;
+        if (elapsed >= DRAG_SEND_INTERVAL_MS) {
+          sendNow(Number(slider.value));
+        } else {
+          pendingTimer = setTimeout(() => {
+            pendingTimer = null;
+            sendNow(Number(slider.value));
+          }, DRAG_SEND_INTERVAL_MS - elapsed);
+        }
+      });
+      // 'change' fires once on release/keystroke — always send the exact final value,
+      // canceling any still-pending throttled send so it can't overwrite it afterward.
+      slider.addEventListener("change", () => {
+        this._draggingEntity = null;
+        if (pendingTimer !== null) {
+          clearTimeout(pendingTimer);
+          pendingTimer = null;
+        }
+        sendNow(Number(slider.value));
+        // A hass push that arrived mid-drag was skipped (_updateLights() no-ops while
+        // _draggingEntity is set) and _lightsFrame is already clear by then, so nothing
+        // would otherwise re-render until some later, unrelated push happens to arrive -
+        // catch up now instead of leaving the rest of the list stale.
+        this._scheduleLightsUpdate();
+      });
+    });
   }
 
   _updateClimate() {
