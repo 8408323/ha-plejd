@@ -6,7 +6,37 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-07-20
+
 ### Added
+- **Interactive light control on the Plejd dashboard.** The panel's Lights list
+  gained the two controls the real Plejd app has: tap a light's name to toggle
+  it, or drag a brightness slider (shown only for dimmable lights) to set its
+  level — the command ships once, on release, not on every drag tick, so
+  dragging can't flood the mesh. Rapid repeated taps/drags are handled
+  correctly even faster than the round-trip to the backend.
+- **Device-health summary widget on the Plejd dashboard.** A new panel section
+  surfaces any faulted device (overtemperature, overcurrent, …) at a glance —
+  "All devices healthy", or one row per faulted device naming it and its
+  active fault flag(s) — without leaving the panel to dig through Settings.
+- **Site-wide all-off (`plejd.all_off`).** A new service — and a matching
+  `button.plejd_all_off` ("All lights off") entity usable straight from HA's
+  UI — turns off every Plejd light output in the site in one call, mirroring
+  the Plejd app's prominent all-off master control.
+- **Scenes on the Plejd dashboard.** A new panel section lists every Plejd
+  scene with an **Activate** button, calling the standard `scene.turn_on`
+  service.
+- **Schedule editor on the Plejd dashboard.** The existing on-device weekly
+  time→scene schedules (previously only reachable via the integration's
+  config-flow "Configure → Schedules" dialog) can now be listed, added, and
+  deleted directly from the panel.
+- **Motion & illuminance status on the Plejd dashboard.** A read-only panel
+  section lists every WMS-01 motion sensor with its current state ("Detected" /
+  "Clear") and paired illuminance reading in lux, grouped per physical device.
+- **Climate (TRM thermostats) on the Plejd dashboard.** A new panel section
+  lists every Plejd thermostat with its current temperature and `+`/`−` step
+  buttons for the target temperature, calling `climate.set_temperature`
+  directly — step size and min/max come from the entity's own attributes.
 - **Covers on the Plejd dashboard.** The panel now lists every Plejd cover
   (JAL/MTR blind) alongside the lights, with **Open / Close / Stop** buttons
   calling the standard `cover.open_cover` / `cover.close_cover` /
