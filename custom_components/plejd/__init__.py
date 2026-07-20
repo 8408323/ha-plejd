@@ -11,12 +11,14 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry
 
-from . import dim_binding_ws, panel
+from . import dim_binding_ws, panel, remote_profile_ws
 from .add_device import async_add_device
 from .bindings import PlejdDimBindings
 from .const import CONF_SHOW_PANEL, DOMAIN
 from .coordinator import PlejdCoordinator
 from .discovery import async_bluetooth_available, async_scan_unprovisioned
+from .holiday_mode import DATA_HOLIDAY_MODE, PlejdHolidayMode
+from .remote_profiles import PlejdRemoteProfiles
 
 _WS_REGISTERED = f"{DOMAIN}_ws_registered"
 
@@ -39,6 +41,7 @@ PLATFORMS: list[Platform] = [
 
 SERVICE_ADD_DEVICE = "add_device"
 SERVICE_SCAN_DEVICES = "scan_new_devices"
+SERVICE_ALL_OFF = "all_off"
 
 _INPUT_SETTING_SCHEMA = vol.Schema({vol.Required("input"): int, vol.Required("button_type"): str})
 
@@ -70,10 +73,25 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             _LOGGER.warning("Plejd dashboard panel could not be registered; continuing without it", exc_info=True)
     entry.async_on_unload(lambda: panel.async_unregister_panel(hass))
     await coordinator.async_start()
+
+    # Holiday mode (presence simulation) — constructed before platform forwarding so the
+    # switch platform can look it up; the switch entity itself controls start/stop.
+    hass.data[DATA_HOLIDAY_MODE] = PlejdHolidayMode(hass, entry)
+
     try:
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     except Exception:
-        # Don't leak the BLE connection if platform setup fails.
+        # Don't leak the BLE connection, or a running holiday-mode timer, if platform setup
+        # fails partway — a platform forwarded before the failure (e.g. a restored-on
+        # holiday switch) may have already started it.
+        holiday_mode = hass.data.pop(DATA_HOLIDAY_MODE, None)
+        if holiday_mode is not None:
+            # A platform earlier than switch may not have run yet, so this manager's
+            # persisted deadlines were never loaded; start() loads them (idempotent if
+            # a restored switch already did) so stop()'s persist can't wipe the store
+            # with an empty, never-loaded in-memory state.
+            await holiday_mode.async_start()
+            await holiday_mode.async_stop()
         await coordinator.async_shutdown()
         raise
     entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
@@ -108,10 +126,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         _LOGGER.debug("Plejd scan found unprovisioned device(s): %s", [d["address"] for d in new_devices])
         hass.bus.async_fire(f"{DOMAIN}_new_devices_found", {"devices": new_devices})
 
+    async def _async_handle_all_off(call) -> None:
+        await coordinator.async_all_off()
+
     hass.services.async_register(DOMAIN, SERVICE_ADD_DEVICE, _async_handle_add_device, schema=_ADD_DEVICE_SCHEMA)
     entry.async_on_unload(lambda: hass.services.async_remove(DOMAIN, SERVICE_ADD_DEVICE))
     hass.services.async_register(DOMAIN, SERVICE_SCAN_DEVICES, _async_handle_scan_devices)
     entry.async_on_unload(lambda: hass.services.async_remove(DOMAIN, SERVICE_SCAN_DEVICES))
+    hass.services.async_register(DOMAIN, SERVICE_ALL_OFF, _async_handle_all_off)
+    entry.async_on_unload(lambda: hass.services.async_remove(DOMAIN, SERVICE_ALL_OFF))
 
     # Remote → light dim bindings (managed from the dashboard via the WebSocket API).
     # Optional, like the panel: a storage error must not stop the mesh/lights loading.
@@ -123,8 +146,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data[dim_binding_ws.DATA_BINDINGS] = dim_bindings
     entry.async_on_unload(lambda: hass.data.pop(dim_binding_ws.DATA_BINDINGS, None))
     entry.async_on_unload(dim_bindings.shutdown)
+
+    # Custom remote button-profile overrides (see remote_profiles.py). Same optional,
+    # storage-backed pattern as the dim bindings above.
+    remote_profiles = PlejdRemoteProfiles(hass)
+    try:
+        await remote_profiles.async_load()
+    except Exception:  # noqa: BLE001 - optional; continue with an empty manager
+        _LOGGER.warning("Plejd: could not load remote profiles; continuing without them", exc_info=True)
+    hass.data[remote_profile_ws.DATA_REMOTE_PROFILES] = remote_profiles
+    entry.async_on_unload(lambda: hass.data.pop(remote_profile_ws.DATA_REMOTE_PROFILES, None))
+
     if not hass.data.get(_WS_REGISTERED):
         dim_binding_ws.async_register(hass)  # hass-global commands; register once
+        remote_profile_ws.async_register(hass)
         hass.data[_WS_REGISTERED] = True
     return True
 
@@ -135,7 +170,26 @@ async def _async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    # Stop holiday mode (and turn off any lights it owns) before the light platform and
+    # the mesh connection go away, or the cleanup calls would target entities that no
+    # longer exist / a mesh that can no longer reach them. Unlike the coordinator below,
+    # this runs unconditionally (not gated on unload_ok): its own timer/state is this
+    # integration's alone to own, independent of whether some other platform's unload fails.
+    # Only *remove* it from hass.data once the unload actually succeeds, though — if a
+    # platform refuses to unload, the entry (and its holiday switch, still reporting on)
+    # stays loaded, so resume it instead of leaving presence simulation silently stopped —
+    # but only if it was actually running before this stop, or a switch left off would
+    # come back with a hidden timer behind an entity that still reads off (#89 review).
+    # A later retry must still be able to find it either way (async_stop() is idempotent,
+    # so re-running it then is a no-op).
+    holiday_mode = hass.data.get(DATA_HOLIDAY_MODE)
+    was_holiday_mode_running = holiday_mode is not None and holiday_mode.is_running
+    if holiday_mode is not None:
+        await holiday_mode.async_stop()
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
+        hass.data.pop(DATA_HOLIDAY_MODE, None)
         await entry.runtime_data.async_shutdown()
+    elif was_holiday_mode_running:
+        await holiday_mode.async_start()
     return unload_ok
