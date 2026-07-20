@@ -70,6 +70,11 @@ class PlejdPanel extends HTMLElement {
     // every click reads the same pre-toggle value each time and sends the same command
     // repeatedly instead of alternating - this is what a click actually just did.
     this._toggleOverrides = {};
+    // entity_id -> optimistic brightness pct from a just-sent slider command, until hass's
+    // own push catches up. Mirrors _toggleOverrides: the catch-up render scheduled on slider
+    // release fires well before the real state push arrives, and without this it would
+    // redraw the slider back to the stale pre-drag value for a moment.
+    this._brightnessOverrides = {};
     const useAnimationFrame = Boolean(
       globalThis.requestAnimationFrame && globalThis.cancelAnimationFrame,
     );
@@ -216,10 +221,16 @@ class PlejdPanel extends HTMLElement {
   }
 
   async _setLightBrightness(entityId, pct) {
+    // brightness_pct always turns the light on, even if it was off before the drag.
+    this._toggleOverrides[entityId] = true;
+    this._brightnessOverrides[entityId] = pct;
     try {
       await this._hass.callService("light", "turn_on", { entity_id: entityId, brightness_pct: pct });
     } catch (err) {
       console.warn("Plejd panel: failed to set brightness", entityId, err);
+      if (this._brightnessOverrides[entityId] === pct) delete this._brightnessOverrides[entityId];
+      if (this._toggleOverrides[entityId] === true) delete this._toggleOverrides[entityId];
+      this._updateLights();
     }
   }
 
@@ -348,32 +359,37 @@ class PlejdPanel extends HTMLElement {
     const rows = lights
       .map((s) => {
         const name = s.attributes.friendly_name || s.entity_id;
+        const unavailable = s.state === "unavailable";
         const override = this._toggleOverrides[s.entity_id];
         const realOn = s.state === "on";
         if (override !== undefined && override === realOn) delete this._toggleOverrides[s.entity_id];
         const on = override !== undefined ? override : realOn;
         const bri = s.attributes.brightness;
-        const pct = bri != null ? Math.round((bri / 255) * 100) : 100;
-        const level = on && bri != null ? `${pct}%` : on ? "on" : "off";
+        const realPct = bri != null ? Math.round((bri / 255) * 100) : 100;
+        const briOverride = this._brightnessOverrides[s.entity_id];
+        if (briOverride !== undefined && briOverride === realPct) delete this._brightnessOverrides[s.entity_id];
+        const pct = briOverride !== undefined ? briOverride : realPct;
+        const level = unavailable ? "unavailable" : on && bri != null ? `${pct}%` : on ? "on" : "off";
         const dimmable = Array.isArray(s.attributes.supported_color_modes)
           ? s.attributes.supported_color_modes.includes("brightness")
           : bri != null;
         const slider = dimmable
-          ? `<input type="range" min="1" max="100" value="${pct}" data-brightness="${esc(s.entity_id)}" style="width:100%;margin-top:6px;accent-color:var(--primary-color,#03a9f4)">`
+          ? `<input type="range" min="1" max="100" value="${pct}" data-brightness="${esc(s.entity_id)}" ${unavailable ? "disabled" : ""} style="width:100%;margin-top:6px;accent-color:var(--primary-color,#03a9f4)">`
           : "";
         // An explicit switch (not just a plain dot) so on/off is an obvious, discoverable
         // control rather than "click the name and hope" - the name stays clickable too
-        // as a larger, redundant hit target.
+        // as a larger, redundant hit target. Disabled (not just dimmed) when unavailable:
+        // clicking can't succeed, so don't invite an optimistic render nothing will confirm.
         const toggle = `
-          <button type="button" data-toggle="${esc(s.entity_id)}" role="switch" aria-checked="${on}" aria-label="${on ? "Turn off" : "Turn on"} ${esc(name)}"
-            style="width:34px;height:20px;flex:none;padding:0;border:none;border-radius:10px;cursor:pointer;position:relative;background:${on ? "var(--primary-color, #03a9f4)" : "var(--disabled-text-color, #9e9e9e)"}">
+          <button type="button" data-toggle="${esc(s.entity_id)}" role="switch" aria-checked="${on}" aria-label="${on ? "Turn off" : "Turn on"} ${esc(name)}" ${unavailable ? "disabled" : ""}
+            style="width:34px;height:20px;flex:none;padding:0;border:none;border-radius:10px;cursor:${unavailable ? "not-allowed" : "pointer"};position:relative;opacity:${unavailable ? ".5" : "1"};background:${on ? "var(--primary-color, #03a9f4)" : "var(--disabled-text-color, #9e9e9e)"}">
             <span style="position:absolute;top:2px;left:${on ? "16px" : "2px"};width:16px;height:16px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.3)"></span>
           </button>`;
         return `
           <div style="padding:10px 4px;border-bottom:1px solid var(--divider-color,#e0e0e0)">
             <div style="display:flex;align-items:center;gap:12px">
               ${toggle}
-              <span data-toggle="${esc(s.entity_id)}" style="flex:1;cursor:pointer">${esc(name)}</span>
+              <span data-toggle="${esc(s.entity_id)}" style="flex:1;${unavailable ? "cursor:not-allowed;opacity:.5" : "cursor:pointer"}">${esc(name)}</span>
               <span data-level="${esc(s.entity_id)}" style="color:var(--secondary-text-color,#727272)">${level}</span>
             </div>
             ${slider}
@@ -393,6 +409,10 @@ class PlejdPanel extends HTMLElement {
     el.querySelectorAll("[data-toggle]").forEach((span) => {
       const entityId = span.getAttribute("data-toggle");
       span.addEventListener("click", () => {
+        // The toggle <button> respects `disabled`, but the name <span> is a plain element -
+        // guard it here too so an unavailable light can't get an optimistic render for a
+        // service call that can't succeed.
+        if (this._hass.states[entityId]?.state === "unavailable") return;
         // Prefer our own optimistic override over hass.states: a repeated click well
         // within the round-trip to the backend must alternate off the last click's
         // intent, not the pre-click state hass hasn't caught up to yet.

@@ -250,6 +250,119 @@ test("a toggle override is dropped once hass's own pushed state catches up to it
   assert.deepEqual(panel._toggleOverrides, {});
 });
 
+test("a pending brightness override renders immediately, overriding the not-yet-updated hass brightness", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const lights = { innerHTML: "", querySelector: () => null, querySelectorAll: () => [] };
+
+  panel.querySelector = (selector) => (selector === "#plejd-lights" ? lights : null);
+  panel._hass = {
+    states: {
+      "light.kitchen": {
+        entity_id: "light.kitchen",
+        state: "on",
+        attributes: { friendly_name: "Kitchen", brightness: 51, supported_color_modes: ["brightness"] }, // 20%
+      },
+    },
+    entities: { "light.kitchen": { platform: "plejd" } },
+  };
+  panel._brightnessOverrides = { "light.kitchen": 80 }; // a slider release just sent 80%, hass hasn't caught up
+
+  panel._updateLights();
+
+  assert.match(lights.innerHTML, /value="80" data-brightness="light\.kitchen"/);
+  assert.match(lights.innerHTML, /data-level="light\.kitchen"[^>]*>80%/);
+  assert.deepEqual(panel._brightnessOverrides, { "light.kitchen": 80 }); // not confirmed yet - still held
+});
+
+test("a brightness override is dropped once hass's own pushed brightness catches up to it", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const lights = { innerHTML: "", querySelector: () => null, querySelectorAll: () => [] };
+
+  panel.querySelector = (selector) => (selector === "#plejd-lights" ? lights : null);
+  panel._hass = {
+    states: {
+      "light.kitchen": {
+        entity_id: "light.kitchen",
+        state: "on",
+        attributes: { friendly_name: "Kitchen", brightness: 204, supported_color_modes: ["brightness"] }, // 80%
+      },
+    },
+    entities: { "light.kitchen": { platform: "plejd" } },
+  };
+  panel._brightnessOverrides = { "light.kitchen": 80 }; // matches the real brightness now
+
+  panel._updateLights();
+
+  assert.deepEqual(panel._brightnessOverrides, {});
+});
+
+test("setting brightness marks a light as on so a follow-up render doesn't show it stuck off", async () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._hass = {
+    states: { "light.patio": { entity_id: "light.patio", state: "off", attributes: {} } },
+    callService: () => Promise.resolve(),
+  };
+
+  await panel._setLightBrightness("light.patio", 60);
+
+  // brightness_pct always turns the light on - the row must reflect that immediately,
+  // not wait for hass's push, or a follow-up tap would read it as still off and send
+  // another turn_on instead of turning it off.
+  assert.equal(panel._toggleOverrides["light.patio"], true);
+  assert.equal(panel._brightnessOverrides["light.patio"], 60);
+});
+
+test("_updateLights disables the toggle and slider for an unavailable light", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  const lights = { innerHTML: "", querySelector: () => null, querySelectorAll: () => [] };
+
+  panel.querySelector = (selector) => (selector === "#plejd-lights" ? lights : null);
+  panel._hass = {
+    states: {
+      "light.kitchen": {
+        entity_id: "light.kitchen",
+        state: "unavailable",
+        attributes: { friendly_name: "Kitchen", supported_color_modes: ["brightness"] },
+      },
+    },
+    entities: { "light.kitchen": { platform: "plejd" } },
+  };
+
+  panel._updateLights();
+
+  assert.match(lights.innerHTML, /data-toggle="light\.kitchen"[^>]*role="switch"[^>]*disabled/);
+  assert.match(lights.innerHTML, /data-brightness="light\.kitchen" disabled/);
+  assert.match(lights.innerHTML, /data-level="light\.kitchen"[^>]*>unavailable/);
+});
+
+test("clicking an unavailable light's toggle or name does not send a service call", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._hass = {
+    states: { "light.kitchen": { state: "unavailable" } },
+    callService: () => {
+      throw new Error("should not be called");
+    },
+  };
+  panel.querySelector = () => null;
+
+  const listeners = {};
+  const span = {
+    getAttribute: () => "light.kitchen",
+    addEventListener: (ev, fn) => {
+      listeners[ev] = fn;
+    },
+  };
+  const el = { querySelectorAll: (sel) => (sel === "[data-toggle]" ? [span] : []) };
+
+  panel._wireLights(el);
+  assert.doesNotThrow(() => listeners.click());
+});
+
 test("_updateLights renders a brightness slider only for dimmable lights", () => {
   const PanelClass = loadPanelClass();
   const panel = new PanelClass();
@@ -617,10 +730,23 @@ test("a failed brightness service call is caught and logged, not thrown", async 
   const PanelClass = loadPanelClass({ console: { ...console, warn: (...args) => warnings.push(args) } });
   const panel = new PanelClass();
   panel._hass = { states: {}, callService: () => Promise.reject(new Error("boom")) };
+  panel.querySelector = () => null;
 
   await panel._setLightBrightness("light.kitchen", 50);
 
   assert.equal(warnings.length, 1);
+});
+
+test("a failed brightness service call rolls back both optimistic overrides", async () => {
+  const PanelClass = loadPanelClass({ console: { ...console, warn: () => {} } });
+  const panel = new PanelClass();
+  panel._hass = { states: {}, callService: () => Promise.reject(new Error("boom")) };
+  panel.querySelector = () => null;
+
+  await panel._setLightBrightness("light.kitchen", 50);
+
+  assert.equal(panel._toggleOverrides["light.kitchen"], undefined);
+  assert.equal(panel._brightnessOverrides["light.kitchen"], undefined);
 });
 
 test("deleting a binding preserves an in-progress add form", async () => {
