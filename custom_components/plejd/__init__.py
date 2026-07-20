@@ -41,6 +41,7 @@ PLATFORMS: list[Platform] = [
 
 SERVICE_ADD_DEVICE = "add_device"
 SERVICE_SCAN_DEVICES = "scan_new_devices"
+SERVICE_ALL_OFF = "all_off"
 
 _INPUT_SETTING_SCHEMA = vol.Schema({vol.Required("input"): int, vol.Required("button_type"): str})
 
@@ -125,10 +126,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         _LOGGER.debug("Plejd scan found unprovisioned device(s): %s", [d["address"] for d in new_devices])
         hass.bus.async_fire(f"{DOMAIN}_new_devices_found", {"devices": new_devices})
 
+    async def _async_handle_all_off(call) -> None:
+        await coordinator.async_all_off()
+
     hass.services.async_register(DOMAIN, SERVICE_ADD_DEVICE, _async_handle_add_device, schema=_ADD_DEVICE_SCHEMA)
     entry.async_on_unload(lambda: hass.services.async_remove(DOMAIN, SERVICE_ADD_DEVICE))
     hass.services.async_register(DOMAIN, SERVICE_SCAN_DEVICES, _async_handle_scan_devices)
     entry.async_on_unload(lambda: hass.services.async_remove(DOMAIN, SERVICE_SCAN_DEVICES))
+    hass.services.async_register(DOMAIN, SERVICE_ALL_OFF, _async_handle_all_off)
+    entry.async_on_unload(lambda: hass.services.async_remove(DOMAIN, SERVICE_ALL_OFF))
 
     # Remote → light dim bindings (managed from the dashboard via the WebSocket API).
     # Optional, like the panel: a storage error must not stop the mesh/lights loading.
