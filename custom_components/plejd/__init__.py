@@ -136,6 +136,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def _async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     # Schedules live in the entry options; reload so added/removed switches take effect.
+    # Skip when the schedule WebSocket API is already reloading this entry itself (it awaits
+    # the reload to report success/failure back to the dashboard) - avoids a double reload.
+    if hass.data.get(schedule_ws.DATA_MANUAL_RELOAD) == entry.entry_id:
+        return
     await hass.config_entries.async_reload(entry.entry_id)
 
 

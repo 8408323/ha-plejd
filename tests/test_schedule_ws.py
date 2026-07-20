@@ -5,7 +5,7 @@ from __future__ import annotations
 import types
 
 from plejd import schedule_ws
-from plejd.schedule_ws import DATA_ENTRY
+from plejd.schedule_ws import DATA_ENTRY, DATA_MANUAL_RELOAD
 
 
 class _Conn:
@@ -25,6 +25,7 @@ class _ConfigEntries:
         self.updated = None
         self.reloaded = None
         self.reload_fails = False
+        self.reload_ok = True
 
     def async_update_entry(self, entry, *, options):
         self.updated = options
@@ -34,6 +35,7 @@ class _ConfigEntries:
         if self.reload_fails:
             raise RuntimeError("reload failed")
         self.reloaded = entry_id
+        return self.reload_ok
 
 
 class _Coordinator:
@@ -210,6 +212,46 @@ async def test_add_returns_error_when_reload_fails():
     assert conn.result is None
 
 
+async def test_add_returns_error_when_reload_reports_failure():
+    # async_reload() can return False (e.g. setup entered retry) instead of raising.
+    entry = _entry(options={})
+    hass = _hass(entry)
+    hass.config_entries.reload_ok = False
+    conn = _Conn()
+    await schedule_ws.ws_add(hass, conn, {"id": 1, "name": "X", "days": [0], "time": "06:00", "scene": 3, "fade": 0})
+    assert conn.error == (1, "reload_failed", "Schedule saved, but Plejd failed to reload; try again")
+    assert conn.result is None
+    assert DATA_MANUAL_RELOAD not in hass.data
+
+
+async def test_add_does_not_double_reload_via_update_listener():
+    # DATA_MANUAL_RELOAD must be cleared once persist finishes so the entry's update
+    # listener (_async_reload_entry) reloads normally on the next unrelated options change.
+    entry = _entry(options={})
+    hass = _hass(entry)
+    conn = _Conn()
+    await schedule_ws.ws_add(hass, conn, {"id": 1, "name": "X", "days": [0], "time": "06:00", "scene": 3, "fade": 0})
+    assert DATA_MANUAL_RELOAD not in hass.data
+
+
+async def test_add_resets_stale_gateway_transport_when_no_gateway():
+    entry = _entry(options={"transport": "gateway"})  # entry.data has no gateways/resource_set_id
+    hass = _hass(entry)
+    conn = _Conn()
+    await schedule_ws.ws_add(hass, conn, {"id": 1, "name": "X", "days": [0], "time": "06:00", "scene": 3, "fade": 0})
+    assert entry.options["transport"] == "auto"
+
+
+async def test_add_preserves_transport_when_gateway_present():
+    entry = _entry(options={"transport": "gateway"})
+    entry.data["gateways"] = ["GWY-1"]
+    entry.data["resource_set_id"] = "rs1"
+    hass = _hass(entry)
+    conn = _Conn()
+    await schedule_ws.ws_add(hass, conn, {"id": 1, "name": "X", "days": [0], "time": "06:00", "scene": 3, "fade": 0})
+    assert entry.options["transport"] == "gateway"
+
+
 # ── delete ───────────────────────────────────────────────────────────────────
 
 
@@ -266,6 +308,48 @@ async def test_delete_returns_error_when_reload_fails():
     await schedule_ws.ws_delete(hass, conn, {"id": 2, "schedule_id": 0})
     assert conn.error == (2, "save_failed", "Could not save schedules")
     assert conn.result is None
+
+
+async def test_delete_returns_error_when_reload_reports_failure():
+    coordinator = _Coordinator()
+    entry = _entry(options={"schedules": [_SCHEDULE]}, runtime_data=coordinator)
+    hass = _hass(entry)
+    hass.config_entries.reload_ok = False
+    conn = _Conn()
+    await schedule_ws.ws_delete(hass, conn, {"id": 2, "schedule_id": 0})
+    assert conn.error == (2, "reload_failed", "Schedule saved, but Plejd failed to reload; try again")
+    assert conn.result is None
+
+
+async def test_delete_resets_stale_gateway_transport_when_no_gateway():
+    coordinator = _Coordinator()
+    entry = _entry(options={"schedules": [_SCHEDULE], "transport": "gateway"}, runtime_data=coordinator)
+    hass = _hass(entry)
+    conn = _Conn()
+    await schedule_ws.ws_delete(hass, conn, {"id": 2, "schedule_id": 0})
+    assert entry.options["transport"] == "auto"
+
+
+async def test_delete_preserves_concurrent_edit_made_during_mesh_clear():
+    # A schedule added by another WS call while we awaited async_remove_time_event() must
+    # survive the delete's persist instead of being overwritten by the pre-await snapshot.
+    other = {"id": 5, "slot": 2, "name": "Other", "days": [1], "time": "07:00:00", "scene": 3, "fade": 0}
+
+    class _ConcurrentCoordinator:
+        def __init__(self, entry):
+            self.entry = entry
+
+        async def async_remove_time_event(self, slot):
+            # Simulate a concurrent ws_add completing (and persisting) mid-await.
+            self.entry.options = {**self.entry.options, "schedules": [*self.entry.options["schedules"], other]}
+
+    entry = _entry(options={"schedules": [_SCHEDULE]})
+    entry.runtime_data = _ConcurrentCoordinator(entry)
+    hass = _hass(entry)
+    conn = _Conn()
+    await schedule_ws.ws_delete(hass, conn, {"id": 2, "schedule_id": 0})
+    assert entry.options["schedules"] == [other]
+    assert conn.result == (2, {"schedules": [other]})
 
 
 # ── registration ─────────────────────────────────────────────────────────────

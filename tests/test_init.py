@@ -163,6 +163,15 @@ async def test_reload_listener_reloads_entry():
     assert hass.config_entries.reloaded == "e1"
 
 
+async def test_reload_listener_skips_when_schedule_ws_reloading_manually():
+    from plejd import _async_reload_entry, schedule_ws
+
+    hass, entry = _hass(), _entry()
+    hass.data[schedule_ws.DATA_MANUAL_RELOAD] = entry.entry_id
+    await _async_reload_entry(hass, entry)
+    assert getattr(hass.config_entries, "reloaded", None) is None
+
+
 def test_every_platform_module_is_forwarded():
     # Guard against adding a platform file but forgetting to forward it.
     import pathlib

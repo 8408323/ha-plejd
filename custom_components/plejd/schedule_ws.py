@@ -15,11 +15,24 @@ import voluptuous as vol
 from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant
 
-from .const import CONF_SCENES, CONF_SCHEDULES, DOMAIN, TIME_EVENT_SLOTS
+from .const import (
+    CONF_GATEWAYS,
+    CONF_RESOURCE_SET_ID,
+    CONF_SCENES,
+    CONF_SCHEDULES,
+    CONF_TRANSPORT,
+    DOMAIN,
+    TIME_EVENT_SLOTS,
+    TRANSPORT_AUTO,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
 DATA_ENTRY = f"{DOMAIN}_schedule_entry"
+
+# Set on hass.data while _async_persist is awaiting its own reload, so the entry's update
+# listener (_async_reload_entry in __init__.py) skips its reload instead of racing this one.
+DATA_MANUAL_RELOAD = f"{DOMAIN}_schedule_manual_reload"
 
 _NEXT_ID_KEY = "next_schedule_id"
 
@@ -34,6 +47,12 @@ def _parse_time(value: str) -> tuple[int, int, int] | None:
     if hour > 23 or minute > 59 or second > 59:
         return None
     return hour, minute, second
+
+
+def _current_transport(entry) -> str:
+    """Mirror the config-flow schedules step: drop a gateway-only preference once there's no usable gateway."""
+    has_gateway = bool(entry.data.get(CONF_GATEWAYS) and entry.data.get(CONF_RESOURCE_SET_ID))
+    return entry.options.get(CONF_TRANSPORT, TRANSPORT_AUTO) if has_gateway else TRANSPORT_AUTO
 
 
 @websocket_api.require_admin
@@ -106,7 +125,12 @@ async def ws_add(hass: HomeAssistant, connection, msg) -> None:
         "fade": fade,
     }
     schedules.append(schedule)
-    options = {**entry.options, CONF_SCHEDULES: schedules, _NEXT_ID_KEY: next_id + 1}
+    options = {
+        **entry.options,
+        CONF_SCHEDULES: schedules,
+        _NEXT_ID_KEY: next_id + 1,
+        CONF_TRANSPORT: _current_transport(entry),
+    }
     if not await _async_persist(hass, connection, msg, entry, options):
         return
     connection.send_result(msg["id"], {"schedules": schedules})
@@ -133,8 +157,11 @@ async def ws_delete(hass: HomeAssistant, connection, msg) -> None:
     except Exception:  # noqa: BLE001 - best-effort; persist the deletion whatever the mesh does
         _LOGGER.warning("Plejd: could not clear schedule slot %s from the mesh", target["slot"])
 
-    kept = [s for s in schedules if s["id"] != msg["schedule_id"]]
-    options = {**entry.options, CONF_SCHEDULES: kept}
+    # Re-read after the await: another schedule WS edit may have completed and persisted
+    # options while this one was in flight, and the pre-await `schedules` snapshot is stale.
+    current: list[dict] = list(entry.options.get(CONF_SCHEDULES, []))
+    kept = [s for s in current if s["id"] != msg["schedule_id"]]
+    options = {**entry.options, CONF_SCHEDULES: kept, CONF_TRANSPORT: _current_transport(entry)}
     if not await _async_persist(hass, connection, msg, entry, options):
         return
     connection.send_result(msg["id"], {"schedules": kept})
@@ -142,12 +169,20 @@ async def ws_delete(hass: HomeAssistant, connection, msg) -> None:
 
 async def _async_persist(hass: HomeAssistant, connection, msg, entry, options: dict) -> bool:
     """Save `options` on the entry and reload it so the switch platform picks up the change."""
+    # Claim the manual-reload so the entry's update listener (_async_reload_entry) doesn't
+    # also reload for this same options change - we need this reload's own success/failure.
+    hass.data[DATA_MANUAL_RELOAD] = entry.entry_id
     try:
         hass.config_entries.async_update_entry(entry, options=options)
-        await hass.config_entries.async_reload(entry.entry_id)
+        reloaded = await hass.config_entries.async_reload(entry.entry_id)
     except Exception:  # noqa: BLE001 - log the detail server-side, return a stable generic message
         _LOGGER.exception("Plejd: failed to save schedules")
         connection.send_error(msg["id"], "save_failed", "Could not save schedules")
+        return False
+    finally:
+        hass.data.pop(DATA_MANUAL_RELOAD, None)
+    if reloaded is False:
+        connection.send_error(msg["id"], "reload_failed", "Schedule saved, but Plejd failed to reload; try again")
         return False
     return True
 
