@@ -10,6 +10,7 @@ import pytest
 from plejd import (
     PLATFORMS,
     SERVICE_ADD_DEVICE,
+    SERVICE_ALL_OFF,
     SERVICE_SCAN_DEVICES,
     async_setup_entry,
     async_unload_entry,
@@ -22,6 +23,7 @@ class _FakeCoordinator:
     def __init__(self, hass, entry):
         self.started = False
         self.shutdown = False
+        self.all_off_calls = 0
         _FakeCoordinator.instances.append(self)
 
     async def async_start(self):
@@ -32,6 +34,9 @@ class _FakeCoordinator:
 
     async def async_handle_device_registry_update(self, event):
         return None
+
+    async def async_all_off(self):
+        self.all_off_calls += 1
 
 
 class _FakeHolidayMode:
@@ -436,6 +441,40 @@ async def test_scan_fires_event_with_empty_list_when_no_devices(monkeypatch):
     handler = hass.services._handlers[f"plejd.{SERVICE_SCAN_DEVICES}"]
     await handler(types.SimpleNamespace(data={}))
     assert hass.bus.fired[0] == ("plejd_new_devices_found", {"devices": []})
+
+
+# ── Service: all_off ──────────────────────────────────────────────────────────
+
+
+async def test_all_off_service_is_registered_on_setup(monkeypatch):
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    _FakeCoordinator.instances.clear()
+    hass, entry = _hass(), _entry()
+    await async_setup_entry(hass, entry)
+    assert f"plejd.{SERVICE_ALL_OFF}" in hass.services._handlers
+
+
+async def test_all_off_service_unregistered_on_unload(monkeypatch):
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    _FakeCoordinator.instances.clear()
+    hass, entry = _hass(), _entry()
+    unloads: list = []
+    entry.async_on_unload = unloads.append
+    await async_setup_entry(hass, entry)
+    assert f"plejd.{SERVICE_ALL_OFF}" in hass.services._handlers
+    for unload in unloads:
+        unload()
+    assert f"plejd.{SERVICE_ALL_OFF}" not in hass.services._handlers
+
+
+async def test_all_off_service_calls_coordinator(monkeypatch):
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    _FakeCoordinator.instances.clear()
+    hass, entry = _hass(), _entry()
+    await async_setup_entry(hass, entry)
+    handler = hass.services._handlers[f"plejd.{SERVICE_ALL_OFF}"]
+    await handler(types.SimpleNamespace(data={}))
+    assert entry.runtime_data.all_off_calls == 1
 
 
 # ── Dashboard panel ───────────────────────────────────────────────────────────

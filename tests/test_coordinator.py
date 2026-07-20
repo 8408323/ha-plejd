@@ -177,6 +177,75 @@ async def test_set_output_without_connection_raises():
         await c.async_set_output(5, True, 1)
 
 
+async def test_all_off_turns_off_every_light_output(monkeypatch):
+    from plejd.const import CMD_GROUP_STATE_AND_LEVEL
+    from plejd.protocol import decode_command
+
+    client = _FakeClient()
+    _patch_connect(monkeypatch, client)
+    ble = types.SimpleNamespace(address="01:02:03:04:05:a0")
+    hass = _hass([_info("01:02:03:04:05:a0")], {"01:02:03:04:05:a0": ble})
+    dev2 = {**_DEV, "device_id": "d2", "address": 6}
+    dev_switch = {**_DEV, "device_id": "d3", "address": 7, "category": "switch"}
+    dev_no_address = {**_DEV, "device_id": "d4", "address": None}
+    entry = _entry(discovered=None)
+    entry.data[CONF_DEVICES] = [_DEV, dev2, dev_switch, dev_no_address]
+    c = PlejdCoordinator(hass, entry)
+    await c.async_start()
+    client.writes.clear()  # drop connect-time reads; only the all_off writes matter here
+
+    await c.async_all_off()
+
+    commands = [decode_command(c._connection.mesh.decrypt(w[1])) for w in client.writes if w[0] == PLEJD_CHAR_DATA_UUID]
+    off_cmds = [cmd for cmd in commands if cmd.command == CMD_GROUP_STATE_AND_LEVEL]
+    assert sorted(cmd.address for cmd in off_cmds) == [5, 6]  # only the two light outputs
+    assert all(cmd.data[0] == 0 for cmd in off_cmds)  # off, not on
+
+
+async def test_all_off_one_output_failure_does_not_skip_the_rest(monkeypatch):
+    """A write failure for one light output must not abort turning off the rest."""
+    from homeassistant.exceptions import HomeAssistantError
+
+    dev2 = {**_DEV, "device_id": "d2", "address": 6}
+    entry = types.SimpleNamespace(
+        entry_id="e1",
+        data={CONF_CRYPTO_KEY: _KEY_HEX, CONF_DEVICES: [_DEV, dev2], CONF_DISCOVERED_ADDRESS: None},
+    )
+    c = PlejdCoordinator(_hass(), entry)
+    attempted: list[int] = []
+
+    async def _async_set_output(address, on, level):
+        attempted.append(address)
+        if address == 5:
+            raise HomeAssistantError("not connected")
+
+    monkeypatch.setattr(c, "async_set_output", _async_set_output)
+    await c.async_all_off()  # no exception propagates
+    assert sorted(attempted) == [5, 6]  # output 6 was still turned off despite output 5 failing
+
+
+async def test_all_off_raises_when_every_output_fails(monkeypatch):
+    """If no output was actually turned off, the caller must be told all_off failed."""
+    from homeassistant.exceptions import HomeAssistantError
+
+    dev2 = {**_DEV, "device_id": "d2", "address": 6}
+    entry = types.SimpleNamespace(
+        entry_id="e1",
+        data={CONF_CRYPTO_KEY: _KEY_HEX, CONF_DEVICES: [_DEV, dev2], CONF_DISCOVERED_ADDRESS: None},
+    )
+    c = PlejdCoordinator(_hass(), entry)
+    attempted: list[int] = []
+
+    async def _async_set_output(address, on, level):
+        attempted.append(address)
+        raise HomeAssistantError("not connected")
+
+    monkeypatch.setattr(c, "async_set_output", _async_set_output)
+    with pytest.raises(HomeAssistantError, match="failed to turn off any output"):
+        await c.async_all_off()
+    assert sorted(attempted) == [5, 6]  # both outputs were still attempted
+
+
 async def test_set_group_output_writes_group_command_and_reflects_member_state(monkeypatch):
     from plejd.protocol import decode_command
 
