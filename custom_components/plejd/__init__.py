@@ -11,7 +11,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry
 
-from . import dim_binding_ws, panel, remote_profile_ws
+from . import dim_binding_ws, panel, remote_profile_ws, schedule_ws
 from .add_device import async_add_device
 from .bindings import PlejdDimBindings
 from .const import CONF_SHOW_PANEL, DOMAIN
@@ -147,6 +147,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     entry.async_on_unload(lambda: hass.data.pop(dim_binding_ws.DATA_BINDINGS, None))
     entry.async_on_unload(dim_bindings.shutdown)
 
+    # Schedules (managed from the dashboard via the WebSocket API too, mirroring bindings above).
+    hass.data[schedule_ws.DATA_ENTRY] = entry
+    entry.async_on_unload(lambda: hass.data.pop(schedule_ws.DATA_ENTRY, None))
+
     # Custom remote button-profile overrides (see remote_profiles.py). Same optional,
     # storage-backed pattern as the dim bindings above.
     remote_profiles = PlejdRemoteProfiles(hass)
@@ -159,6 +163,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     if not hass.data.get(_WS_REGISTERED):
         dim_binding_ws.async_register(hass)  # hass-global commands; register once
+        schedule_ws.async_register(hass)
         remote_profile_ws.async_register(hass)
         hass.data[_WS_REGISTERED] = True
     return True
@@ -166,6 +171,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def _async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     # Schedules live in the entry options; reload so added/removed switches take effect.
+    # Skip when the schedule WebSocket API is already reloading this entry itself (it awaits
+    # the reload to report success/failure back to the dashboard) - avoids a double reload.
+    if hass.data.get(schedule_ws.DATA_MANUAL_RELOAD) == entry.entry_id:
+        # The first skipped call is always this listener firing for _async_persist's own
+        # async_update_entry() below, already covered by the reload it's about to await -
+        # not a real concurrent change, so it must not schedule a follow-up reload too.
+        if hass.data.get(schedule_ws.DATA_MANUAL_RELOAD_SEEN) == entry.entry_id:
+            # A second skipped call while still guarded IS a genuinely different options
+            # change (e.g. a concurrent options-flow edit) that may land after the in-flight
+            # reload already read entry state - mark it for a follow-up instead of dropping it.
+            hass.data[schedule_ws.DATA_RELOAD_PENDING] = entry.entry_id
+        else:
+            hass.data[schedule_ws.DATA_MANUAL_RELOAD_SEEN] = entry.entry_id
+        return
     await hass.config_entries.async_reload(entry.entry_id)
 
 
