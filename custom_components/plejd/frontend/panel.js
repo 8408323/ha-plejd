@@ -475,6 +475,7 @@ class PlejdPanel extends HTMLElement {
         })
           .then(() => {
             this._coverPositionOverrides[entityId] = position;
+            this._scheduleCoversUpdate();
           })
           .catch((err) => console.warn(`Plejd panel: set_cover_position failed for ${entityId}`, err));
       });
@@ -494,7 +495,10 @@ class PlejdPanel extends HTMLElement {
     const commandedPosition = service === "open_cover" ? 100 : service === "close_cover" ? 0 : null;
     this._callService("cover", service, { entity_id: entityId })
       .then(() => {
-        if (commandedPosition != null) this._coverPositionOverrides[entityId] = commandedPosition;
+        if (commandedPosition != null) {
+          this._coverPositionOverrides[entityId] = commandedPosition;
+          this._scheduleCoversUpdate();
+        }
       })
       .catch((err) => console.warn(`Plejd panel: ${service} failed for ${entityId}`, err));
   }

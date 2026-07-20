@@ -448,6 +448,7 @@ test("clicking a cover's Open/Close/Stop buttons calls the matching cover servic
     calls.push({ domain, service, data });
     return Promise.resolve();
   };
+  panel.querySelector = () => null;
 
   const { el, listeners } = makeCoverRowEl("cover.kitchen_blind", 42);
   panel._wireCovers(el);
@@ -471,6 +472,7 @@ test("releasing the position slider sends set_cover_position once, wired on chan
     calls.push({ domain, service, data });
     return Promise.resolve();
   };
+  panel.querySelector = () => null;
 
   const { el, listeners, slider } = makeCoverRowEl("cover.kitchen_blind", 42);
   panel._wireCovers(el);
@@ -489,6 +491,7 @@ test("dragging a cover position slider marks it active until release", () => {
   const PanelClass = loadPanelClass();
   const panel = new PanelClass();
   panel._callService = () => Promise.resolve();
+  panel.querySelector = () => null;
 
   const { el, listeners, slider } = makeCoverRowEl("cover.kitchen_blind", 42);
   panel._wireCovers(el);
@@ -505,6 +508,7 @@ test("releasing a cover position slider remembers the sent value as an optimisti
   const PanelClass = loadPanelClass();
   const panel = new PanelClass();
   panel._callService = () => Promise.resolve();
+  panel.querySelector = () => null;
 
   const { el, listeners, slider } = makeCoverRowEl("cover.kitchen_blind", 42);
   panel._wireCovers(el);
@@ -514,6 +518,61 @@ test("releasing a cover position slider remembers the sent value as an optimisti
   await new Promise((resolve) => setTimeout(resolve, 0));
 
   assert.equal(panel._coverPositionOverrides["cover.kitchen_blind"], 65);
+});
+
+test("releasing a cover position slider schedules a re-render so the slider reflects the override", async () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._callService = () => Promise.resolve();
+  let scheduled = 0;
+  panel._scheduleCoversUpdate = () => {
+    scheduled += 1;
+  };
+
+  const { el, listeners, slider } = makeCoverRowEl("cover.kitchen_blind", 42);
+  panel._wireCovers(el);
+
+  slider.value = "65";
+  listeners.change({ target: slider });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(scheduled, 1);
+});
+
+test("clicking Open/Close schedules a re-render so the slider reflects the commanded position", async () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._callService = () => Promise.resolve();
+  let scheduled = 0;
+  panel._scheduleCoversUpdate = () => {
+    scheduled += 1;
+  };
+
+  const { el, listeners } = makeCoverRowEl("cover.kitchen_blind", 42);
+  panel._wireCovers(el);
+
+  listeners.open();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(scheduled, 1);
+});
+
+test("clicking Stop does not schedule a re-render (no commanded position to reflect)", async () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._callService = () => Promise.resolve();
+  let scheduled = 0;
+  panel._scheduleCoversUpdate = () => {
+    scheduled += 1;
+  };
+
+  const { el, listeners } = makeCoverRowEl("cover.kitchen_blind", 42);
+  panel._wireCovers(el);
+
+  listeners.stop();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(scheduled, 0);
 });
 
 test("a failed cover service call is caught and logged, not thrown", async () => {
@@ -556,6 +615,7 @@ test("clicking Open/Close records the just-commanded position as the slider over
   const PanelClass = loadPanelClass();
   const panel = new PanelClass();
   panel._callService = () => Promise.resolve();
+  panel.querySelector = () => null;
 
   const { el, listeners } = makeCoverRowEl("cover.kitchen_blind", 42);
   panel._wireCovers(el);
