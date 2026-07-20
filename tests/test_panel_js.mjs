@@ -1236,7 +1236,7 @@ test("clicking Open/Close schedules a re-render so the slider reflects the comma
   assert.equal(scheduled, 1);
 });
 
-test("clicking Stop does not schedule a re-render (no commanded position to reflect)", async () => {
+test("clicking Stop schedules a re-render like the other cover actions", async () => {
   const PanelClass = loadPanelClass();
   const panel = new PanelClass();
   panel._callService = () => Promise.resolve();
@@ -1251,7 +1251,7 @@ test("clicking Stop does not schedule a re-render (no commanded position to refl
   listeners.stop();
   await new Promise((resolve) => setTimeout(resolve, 0));
 
-  assert.equal(scheduled, 0);
+  assert.equal(scheduled, 1);
 });
 
 test("a failed cover service call is caught and logged, not thrown", async () => {
@@ -1261,6 +1261,7 @@ test("a failed cover service call is caught and logged, not thrown", async () =>
   });
   const panel = new PanelClass();
   panel._callService = () => Promise.reject(new Error("boom"));
+  panel.querySelector = () => null;
 
   const { el, listeners } = makeCoverRowEl("cover.kitchen_blind", 42);
   panel._wireCovers(el);
@@ -1279,6 +1280,7 @@ test("a rejected set_cover_position does not record an optimistic override", asy
   });
   const panel = new PanelClass();
   panel._callService = () => Promise.reject(new Error("boom"));
+  panel.querySelector = () => null;
 
   const { el, listeners, slider } = makeCoverRowEl("cover.kitchen_blind", 42);
   panel._wireCovers(el);
@@ -1312,6 +1314,7 @@ test("clicking Stop does not touch the slider override", async () => {
   const PanelClass = loadPanelClass();
   const panel = new PanelClass();
   panel._callService = () => Promise.resolve();
+  panel.querySelector = () => null;
   panel._coverPositionOverrides["cover.kitchen_blind"] = 65;
 
   const { el, listeners } = makeCoverRowEl("cover.kitchen_blind", 42);
@@ -1327,6 +1330,7 @@ test("a rejected Open/Close call does not record an optimistic override", async 
   const PanelClass = loadPanelClass({ console: { ...console, warn: () => {} } });
   const panel = new PanelClass();
   panel._callService = () => Promise.reject(new Error("boom"));
+  panel.querySelector = () => null;
 
   const { el, listeners } = makeCoverRowEl("cover.kitchen_blind", 42);
   panel._wireCovers(el);
@@ -1341,6 +1345,7 @@ test("a pointer-cancelled slider drag clears the drag guard so renders resume", 
   const PanelClass = loadPanelClass();
   const panel = new PanelClass();
   panel._callService = () => Promise.resolve();
+  panel.querySelector = () => null;
 
   const { el, listeners, slider } = makeCoverRowEl("cover.kitchen_blind", 42);
   panel._wireCovers(el);
@@ -1350,6 +1355,29 @@ test("a pointer-cancelled slider drag clears the drag guard so renders resume", 
 
   listeners.pointercancel();
   assert.equal(panel._draggingCoverEntity, null);
+});
+
+test("a pointer-cancelled slider drag schedules a catch-up render", () => {
+  const frames = [];
+  const PanelClass = loadPanelClass({
+    requestAnimationFrame(callback) {
+      frames.push(callback);
+      return frames.length;
+    },
+    cancelAnimationFrame() {},
+  });
+  const panel = new PanelClass();
+  panel._callService = () => Promise.resolve();
+
+  const { el, listeners, slider } = makeCoverRowEl("cover.kitchen_blind", 42);
+  panel._wireCovers(el);
+
+  listeners.input({ target: slider });
+  frames.length = 0; // discard the drag-start frame; only the cancel's own catch-up matters
+
+  listeners.pointercancel();
+
+  assert.equal(frames.length, 1); // a hass push skipped mid-drag is not left stale forever
 });
 
 test("disconnectedCallback clears a stuck drag guard so a reconnect's render isn't skipped forever", () => {

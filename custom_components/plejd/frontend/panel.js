@@ -95,6 +95,10 @@ class PlejdPanel extends HTMLElement {
     // (cover.py has no position read-back), so hass never reports current_position; without
     // this the slider would forget the user's last input and fall back to "unknown" again.
     this._coverPositionOverrides = {};
+    // entity_id -> integer, bumped on every cover command (open/close/stop/position). Lets
+    // a resolved command tell whether a newer command has since superseded it, so an older
+    // reply resolving after a newer one can't overwrite the override with a stale position.
+    this._coverCommandTokens = {};
     // entity_id of a position slider mid-drag, else null — guards _updateCovers so a hass
     // state push mid-drag can't replace the <input> before its release "change" handler runs.
     this._draggingCoverEntity = null;
@@ -912,17 +916,21 @@ class PlejdPanel extends HTMLElement {
     const rows = covers
       .map((s) => {
         const name = s.attributes.friendly_name || s.entity_id;
+        const unavailable = s.state === "unavailable";
         const canSetPosition = Boolean((s.attributes.supported_features || 0) & COVER_FEATURE_SET_POSITION);
         const position = clampPosition(s.attributes.current_position);
-        const positionLabel = position != null ? `${position}%` : s.state;
+        const positionLabel = unavailable ? "unavailable" : position != null ? `${position}%` : s.state;
         // Prefer our own optimistic override over hass.states: cover.py never reports a
         // real current_position, so falling back to a fixed number (e.g. 0) would render
         // every unknown-position cover as if it were closed. Omitting the value attribute
         // when nothing is known yet leaves the slider at its native, non-committal midpoint.
         const knownPosition = position != null ? position : this._coverPositionOverrides[s.entity_id];
         const slider = canSetPosition
-          ? `<input type="range" min="0" max="100"${knownPosition != null ? ` value="${knownPosition}"` : ""} data-cover-position="${esc(s.entity_id)}" style="flex:1">`
+          ? `<input type="range" min="0" max="100"${knownPosition != null ? ` value="${knownPosition}"` : ""} data-cover-position="${esc(s.entity_id)}" ${unavailable ? "disabled" : ""} style="flex:1">`
           : "";
+        // Disabled (not just dimmed) when unavailable: a click/drag can only fail/no-op,
+        // and these Plejd covers never report current_position to correct a stale render.
+        const btnStyle = `${BTN}${unavailable ? ";opacity:.5;cursor:not-allowed" : ""}`;
         return `
           <div style="padding:10px 4px;border-bottom:1px solid var(--divider-color,#e0e0e0)">
             <div style="display:flex;align-items:center;gap:12px">
@@ -930,9 +938,9 @@ class PlejdPanel extends HTMLElement {
               <span style="color:var(--secondary-text-color,#727272)">${esc(positionLabel)}</span>
             </div>
             <div style="display:flex;align-items:center;gap:8px;margin-top:8px">
-              <button data-cover-open="${esc(s.entity_id)}" type="button" style="${BTN}">Open</button>
-              <button data-cover-stop="${esc(s.entity_id)}" type="button" style="${BTN};background:var(--secondary-text-color,#727272)">Stop</button>
-              <button data-cover-close="${esc(s.entity_id)}" type="button" style="${BTN}">Close</button>
+              <button data-cover-open="${esc(s.entity_id)}" type="button" style="${btnStyle}" ${unavailable ? "disabled" : ""}>Open</button>
+              <button data-cover-stop="${esc(s.entity_id)}" type="button" style="${btnStyle};background:var(--secondary-text-color,#727272)" ${unavailable ? "disabled" : ""}>Stop</button>
+              <button data-cover-close="${esc(s.entity_id)}" type="button" style="${btnStyle}" ${unavailable ? "disabled" : ""}>Close</button>
               ${slider}
             </div>
           </div>`;
@@ -969,6 +977,7 @@ class PlejdPanel extends HTMLElement {
       input.addEventListener("change", (e) => {
         this._draggingCoverEntity = null;
         const position = Number(e.target.value);
+        const token = this._nextCoverCommandToken(entityId);
         // Only remember the override once HA actually accepts the command — recording it
         // unconditionally would keep showing the requested position even after a rejected
         // call (e.g. mesh/gateway unavailable), since PlejdCover never reports a real one.
@@ -977,18 +986,39 @@ class PlejdPanel extends HTMLElement {
           position,
         })
           .then(() => {
-            this._coverPositionOverrides[entityId] = position;
+            // Only apply if no newer command for this entity has superseded this one - an
+            // older reply resolving after a newer one must not overwrite it with a stale
+            // position.
+            if (this._coverCommandTokens[entityId] === token) this._coverPositionOverrides[entityId] = position;
             this._scheduleCoversUpdate();
           })
-          .catch((err) => console.warn(`Plejd panel: set_cover_position failed for ${entityId}`, err));
+          .catch((err) => {
+            console.warn(`Plejd panel: set_cover_position failed for ${entityId}`, err);
+            // Nothing was recorded - re-render so the slider falls back to the last known
+            // good value instead of silently keeping the rejected one shown.
+            this._scheduleCoversUpdate();
+          });
       });
       // "change" only fires when a drag ends normally; a touch drag interrupted by the OS
       // (e.g. a system gesture) fires "pointercancel" instead, with no "change" to follow.
       // Without this, the guard would stay set forever and freeze the Covers card.
       input.addEventListener("pointercancel", () => {
-        if (this._draggingCoverEntity === entityId) this._draggingCoverEntity = null;
+        if (this._draggingCoverEntity === entityId) {
+          this._draggingCoverEntity = null;
+          // A hass push skipped while dragging is never replayed otherwise - catch up now,
+          // same as the normal "change" (release) path does.
+          this._scheduleCoversUpdate();
+        }
       });
     });
+  }
+
+  // A fresh token for entityId, so a resolved cover command can later tell whether a
+  // newer command has since superseded it (see _coverCommandTokens above).
+  _nextCoverCommandToken(entityId) {
+    const token = (this._coverCommandTokens[entityId] || 0) + 1;
+    this._coverCommandTokens[entityId] = token;
+    return token;
   }
 
   _onCoverAction(entityId, service) {
@@ -996,14 +1026,18 @@ class PlejdPanel extends HTMLElement {
     // the slider override must track them too — otherwise a stale slider value (e.g. from
     // an earlier drag) would keep rendering after Close/Open supersedes it.
     const commandedPosition = service === "open_cover" ? 100 : service === "close_cover" ? 0 : null;
+    const token = this._nextCoverCommandToken(entityId);
     this._callService("cover", service, { entity_id: entityId })
       .then(() => {
-        if (commandedPosition != null) {
+        if (commandedPosition != null && this._coverCommandTokens[entityId] === token) {
           this._coverPositionOverrides[entityId] = commandedPosition;
-          this._scheduleCoversUpdate();
         }
+        this._scheduleCoversUpdate();
       })
-      .catch((err) => console.warn(`Plejd panel: ${service} failed for ${entityId}`, err));
+      .catch((err) => {
+        console.warn(`Plejd panel: ${service} failed for ${entityId}`, err);
+        this._scheduleCoversUpdate();
+      });
   }
 
   _triggerOptions(deviceId, selected) {
