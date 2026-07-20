@@ -97,7 +97,7 @@ class PlejdHolidayMode:
             self._on_until = await self._async_load_deadlines()
             self._unsub = async_track_time_interval(self._hass, self._async_tick, CHECK_INTERVAL)
 
-    async def async_stop(self) -> None:
+    async def async_stop(self) -> bool:
         """Stop the recurring schedule and turn off any lights it turned on (idempotent).
 
         Awaited directly by callers (the switch entity, and __init__.py's unload, before
@@ -105,15 +105,23 @@ class PlejdHolidayMode:
         reliably completes while the target entities/connection still exist. Always
         persists afterward (even with nothing to turn off), so it correctly clears the
         store when nothing was ever restored/tracked this session.
+
+        Returns False if a light could not be turned off despite the retry, so a caller
+        acting on an explicit user request (the switch) can surface that instead of
+        reporting success while a holiday-owned light is still on.
         """
         async with self._lock:
             if self._unsub is not None:
                 self._unsub()
                 self._unsub = None
+            all_off = True
             for entity_id in list(self._on_until):
                 if await self._async_turn_off_with_retry(entity_id):
                     del self._on_until[entity_id]
+                else:
+                    all_off = False
             await self._async_persist()
+            return all_off
 
     async def _async_load_deadlines(self) -> dict[str, datetime]:
         """Best-effort load of persisted deadlines.
@@ -173,7 +181,11 @@ class PlejdHolidayMode:
         return state is not None and state.state == "on"
 
     async def _async_persist(self) -> None:
-        await self._store.async_save({eid: deadline.isoformat() for eid, deadline in self._on_until.items()})
+        """Best-effort save: a full disk must not abort the stop/unload cleanup that called this."""
+        try:
+            await self._store.async_save({eid: deadline.isoformat() for eid, deadline in self._on_until.items()})
+        except Exception:  # noqa: BLE001 - persistence is best-effort, never fatal to the caller
+            _LOGGER.warning("Plejd holiday mode: could not persist deadlines", exc_info=True)
 
     async def _async_turn_on(self, entity_id: str) -> bool:
         try:
@@ -193,6 +205,8 @@ class PlejdHolidayMode:
 
     async def _async_tick(self, _now: object) -> None:
         async with self._lock:
+            if self._unsub is None:
+                return  # queued behind an async_stop() that already ran; nothing to do
             await self._async_apply(dt_util.now())
 
     async def _async_apply(self, now_local: datetime) -> None:

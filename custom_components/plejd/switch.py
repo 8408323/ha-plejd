@@ -8,6 +8,7 @@ from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
@@ -150,7 +151,11 @@ class PlejdHolidaySwitch(SwitchEntity, RestoreEntity):
         self.async_write_ha_state()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
-        await self._manager.async_stop()
+        if not await self._manager.async_stop():
+            raise HomeAssistantError(
+                "Plejd holiday mode: a light could not be turned off; it stays tracked and "
+                "will be retried the next time holiday mode starts"
+            )
         self._attr_is_on = False
         self.async_write_ha_state()
 

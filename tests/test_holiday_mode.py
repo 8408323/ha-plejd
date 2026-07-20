@@ -204,8 +204,9 @@ async def test_stop_cancels_timer_turns_off_tracked_lights_and_clears_pending_st
     await manager.async_start()
     manager._on_until["light.a"] = _local(20, 0)
 
-    await manager.async_stop()
+    result = await manager.async_stop()
 
+    assert result is True  # everything it owned was turned off
     assert unsubbed == [True]  # the timer's own unsub was invoked -> no leaked timer
     assert manager.is_running is False
     assert manager._on_until == {}
@@ -216,7 +217,7 @@ async def test_stop_cancels_timer_turns_off_tracked_lights_and_clears_pending_st
 async def test_stop_without_start_is_a_noop():
     hass = _hass()
     manager = PlejdHolidayMode(hass, _entry())
-    await manager.async_stop()  # must not raise
+    assert await manager.async_stop() is True  # must not raise
     assert manager.is_running is False
     assert hass.data[("store", STORE_KEY)] == {}  # persists even with nothing to turn off
 
@@ -501,8 +502,9 @@ async def test_stop_retries_a_failed_turn_off_once():
     manager = PlejdHolidayMode(hass, _entry())
     manager._on_until["light.a"] = _local(20, 0)
 
-    await manager.async_stop()
+    result = await manager.async_stop()
 
+    assert result is True  # the retry succeeded, so nothing is left stranded
     assert hass.services.calls == [("light", "turn_off", {"entity_id": "light.a"})]  # succeeded on retry
     assert manager._on_until == {}
 
@@ -513,10 +515,44 @@ async def test_stop_gives_up_after_exhausting_retries_but_keeps_tracking():
     manager = PlejdHolidayMode(hass, _entry())
     manager._on_until["light.a"] = _local(20, 0)
 
-    await manager.async_stop()
+    result = await manager.async_stop()
 
+    assert result is False  # a caller acting on this must not report success (#89 review)
     assert manager._on_until == {"light.a": _local(20, 0)}  # not silently lost
     assert manager.is_running is False
+
+
+async def test_stop_treats_a_persist_failure_as_best_effort():
+    class _BrokenStore:
+        async def async_save(self, data):
+            raise OSError("simulated disk-full error")
+
+    hass = _hass()
+    manager = PlejdHolidayMode(hass, _entry())
+    manager._store = _BrokenStore()
+    manager._on_until["light.a"] = _local(20, 0)
+
+    result = await manager.async_stop()  # must not raise despite the failed persist (#89 review)
+
+    assert result is True  # the light was still turned off; only the save failed
+    assert manager._on_until == {}
+    assert hass.services.calls == [("light", "turn_off", {"entity_id": "light.a"})]
+
+
+async def test_tick_is_a_noop_once_unsub_has_been_cleared_by_stop(monkeypatch):
+    # Models a tick invocation that was already queued (fired before async_stop()
+    # cancelled the timer) but only gets to acquire the lock after stop already ran
+    # to completion (#89 review) — it must not turn any light back on with no timer
+    # left to ever expire it.
+    monkeypatch.setattr(dt_util, "now", lambda: _local(20, 0))  # inside the default window
+    options = {CONF_HOLIDAY_LIGHTS: ["light.a"]}
+    manager = _manager(_hass(), _entry(options=options), rng=_FakeRandom(["light.a"]))
+    manager._unsub = None  # as if async_stop() had already run
+
+    await manager._async_tick(None)
+
+    assert manager._hass.services.calls == []
+    assert manager._on_until == {}
 
 
 # ── race conditions: stop-while-in-flight, overlapping starts ──────────────────

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import types
 
+import pytest
+from homeassistant.exceptions import HomeAssistantError
 from plejd.cloud import PlejdCloudDevice
 from plejd.holiday_mode import DATA_HOLIDAY_MODE, PlejdHolidayMode
 from plejd.protocol import OutputState
@@ -183,6 +185,21 @@ async def test_holiday_switch_turn_off_stops_the_manager():
     await sw.async_turn_off()
     assert manager.is_running is False
     assert sw.is_on is False
+
+
+async def test_holiday_switch_turn_off_raises_when_a_light_stays_stuck_on():
+    manager = _holiday_manager()
+
+    async def _stop_incomplete():
+        return False  # a target light could not be turned off despite the retry
+
+    manager.async_stop = _stop_incomplete
+    sw = PlejdHolidaySwitch(_Coordinator([]), manager)
+    sw._attr_is_on = True
+
+    with pytest.raises(HomeAssistantError):
+        await sw.async_turn_off()
+    assert sw.is_on is True  # must not report success while a holiday-owned light is on
 
 
 async def test_holiday_switch_restores_on_and_restarts_manager():
