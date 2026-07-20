@@ -7,6 +7,12 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Covers on the Plejd dashboard.** The panel now lists every Plejd cover
+  (JAL/MTR blind) alongside the lights, with **Open / Close / Stop** buttons
+  calling the standard `cover.open_cover` / `cover.close_cover` /
+  `cover.stop_cover` services. A cover that supports setting an exact position
+  also gets a slider that sends `cover.set_cover_position` only on release,
+  not on every drag tick, to avoid flooding the mesh.
 - **Holiday mode (presence simulation).** The Home Assistant equivalent of the
   Plejd app's "Semesterläge": a **Holiday mode** switch that, while on and within
   a configurable active time-of-day window (default 18:00-23:00, may cross
