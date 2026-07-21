@@ -118,17 +118,6 @@ RELAY_HARDWARE: frozenset[int] = frozenset({3, 8, 17, 18})
 RELAY_POLE_OPTIONS: dict[str, int] = {"two_pole": 0, "one_pole": 1}
 # Hardware with relay pole config (IRelayConfigurable: DIM-01-2P hw 11, DIM-01-2P-LC2 hw 25).
 RELAY_CONFIG_HARDWARE: frozenset[int] = frozenset({11, 25})
-# Button-type wire values for setPlejdDeviceInputSetting's "buttonType" field (app: Knappinställning).
-# NOTE(#99): the app's picker actually has 3 options - "Återfjädrande" (spring-return,
-# -> push_button), "Strömställande standard" (undefined-position toggle), and
-# "Strömställande till-/frånslag" (defined-position toggle). Only one "Toggle" wire value
-# is confirmed, so both standard/till-frånslag currently map to it; whether they're
-# actually distinct wire values is unconfirmed pending a capture with the cert-pinning
-# on cloud.plejd.com bypassed.
-INPUT_BUTTON_TYPE_OPTIONS: dict[str, str] = {
-    "push_button": "PushButton",
-    "toggle": "Toggle",
-}
 CMD_SCENE = 0x0021  # execute scene
 CMD_TIME_EVENT_TIME = 0x0258  # set/remove a time event's schedule
 CMD_TIME_EVENT_TYPE = 0x0259  # what a time event does (TimeEventResult)

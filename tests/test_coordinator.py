@@ -1780,52 +1780,6 @@ async def test_rename_device_raises_when_cloud_rejects(monkeypatch):
         await c.async_rename_device("d1", "X")
 
 
-async def test_set_input_button_type_calls_cloud(monkeypatch):
-    c = PlejdCoordinator(_hass(), _cloud_entry())
-    captured = {}
-
-    async def _login(*a):
-        return "tok"
-
-    async def _set(session, token, site_id, device_id, input_index, button_type):
-        captured.update(site_id=site_id, device_id=device_id, input_index=input_index, button_type=button_type)
-
-    monkeypatch.setattr(coordinator_mod, "async_login", _login)
-    monkeypatch.setattr(coordinator_mod, "async_set_input_setting", _set)
-    await c.async_set_input_button_type("d1", 1, "Toggle")
-    assert captured == {"site_id": "S1", "device_id": "d1", "input_index": 1, "button_type": "Toggle"}
-
-
-async def test_set_input_button_type_requires_credentials(monkeypatch):
-    from homeassistant.exceptions import HomeAssistantError
-
-    c = PlejdCoordinator(_hass(), _entry())  # no CONF_EMAIL / CONF_PASSWORD
-
-    async def _boom(*a):
-        raise AssertionError("must not log in without credentials")
-
-    monkeypatch.setattr(coordinator_mod, "async_login", _boom)
-    with pytest.raises(HomeAssistantError):
-        await c.async_set_input_button_type("d1", 0, "PushButton")
-
-
-async def test_set_input_button_type_propagates_cloud_error(monkeypatch):
-    from plejd.cloud import PlejdCloudError
-
-    c = PlejdCoordinator(_hass(), _cloud_entry())
-
-    async def _login(*a):
-        return "tok"
-
-    async def _fail(*a):
-        raise PlejdCloudError("rejected")
-
-    monkeypatch.setattr(coordinator_mod, "async_login", _login)
-    monkeypatch.setattr(coordinator_mod, "async_set_input_setting", _fail)
-    with pytest.raises(PlejdCloudError):
-        await c.async_set_input_button_type("d1", 0, "Toggle")
-
-
 async def test_registry_update_mirrors_rename(monkeypatch):
     from plejd.const import DOMAIN
 

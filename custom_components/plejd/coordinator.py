@@ -39,7 +39,6 @@ from .cloud import (
     async_get_site,
     async_login,
     async_set_device_title,
-    async_set_input_setting,
 )
 from .connection import PlejdConnection
 from .const import (
@@ -484,14 +483,6 @@ class PlejdCoordinator:
             return
         if not await async_set_device_title(session, token, self.site_id, device_id, parse_id, title):
             raise HomeAssistantError(f"Plejd rejected the rename of device {device_id}")
-
-    async def async_set_input_button_type(self, device_id: str, input_index: int, button_type: str) -> None:
-        """Change one input's button-type setting on an already-commissioned device."""
-        if not self._email or not self._password:
-            raise HomeAssistantError("Plejd cloud credentials are not configured")
-        session = async_get_clientsession(self.hass)
-        token = await async_login(session, self._email, self._password)
-        await async_set_input_setting(session, token, self.site_id, device_id, input_index, button_type)
 
     async def async_handle_device_registry_update(self, event: object) -> None:
         """When the user renames one of our devices in HA, push the new name to Plejd."""
