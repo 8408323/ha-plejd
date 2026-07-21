@@ -2974,6 +2974,96 @@ test("the bindings list summarizes press actions alongside up/down/stop", () => 
   assert.match(bindingsEl.innerHTML, /Remote B/); // press-only binding's device via its first press trigger
 });
 
+// ── binding editor: device kind ──────────────────────────────────────────────
+
+test("_loadTriggers caches the device_kind alongside the triggers", async () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._callWS = () =>
+    Promise.resolve({ triggers: [{ type: "opened" }], buttons: { source: "generic", groups: [] }, device_kind: "door_window" });
+
+  await panel._loadTriggers("dev1");
+
+  assert.equal(panel._deviceKinds.dev1, "door_window");
+});
+
+test("_loadTriggers defaults the cached device_kind to remote when the reply omits it", async () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._callWS = () => Promise.resolve({ triggers: [] });
+
+  await panel._loadTriggers("dev1");
+
+  assert.equal(panel._deviceKinds.dev1, "remote");
+});
+
+function renderedEditorHtml(panel) {
+  panel._hass = panel._hass || { states: {}, areas: {}, devices: {} };
+  const bindingsEl = { innerHTML: "", querySelector: () => null, querySelectorAll: () => [] };
+  panel.querySelector = (sel) => (sel === "#plejd-bindings" ? bindingsEl : null);
+  panel._renderEditor();
+  return bindingsEl.innerHTML;
+}
+
+test("_renderEditor shows the dim up/down/release grid for a remote device", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._bindings = [];
+  panel._form.device = "dev1";
+  panel._triggers = { dev1: [{ type: "brightness_move_up" }] };
+  panel._deviceKinds = { dev1: "remote" };
+
+  const html = renderedEditorHtml(panel);
+
+  assert.match(html, /Dim up \(hold\)/);
+  assert.match(html, /Dim down \(hold\)/);
+  assert.match(html, /Release \(stop\)/);
+});
+
+test("_renderEditor hides the dim grid and explains why for a door/window device", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._bindings = [];
+  panel._form.device = "dev1";
+  panel._triggers = { dev1: [{ type: "opened" }, { type: "closed" }] };
+  panel._deviceKinds = { dev1: "door_window" };
+
+  const html = renderedEditorHtml(panel);
+
+  assert.doesNotMatch(html, /Dim up \(hold\)/);
+  assert.doesNotMatch(html, /id="f-up"/);
+  assert.match(html, /door\/window sensor/);
+  assert.match(html, /Press actions/); // still available for the door/window event
+});
+
+test("_renderEditor hides the dim grid and explains why for a motion device", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._bindings = [];
+  panel._form.device = "dev1";
+  panel._triggers = { dev1: [{ type: "occupied" }] };
+  panel._deviceKinds = { dev1: "motion" };
+
+  const html = renderedEditorHtml(panel);
+
+  assert.doesNotMatch(html, /Dim up \(hold\)/);
+  assert.match(html, /motion sensor/);
+  assert.match(html, /Press actions/);
+});
+
+test("_renderEditor defaults an unclassified device to the remote dim grid", () => {
+  const PanelClass = loadPanelClass();
+  const panel = new PanelClass();
+  panel._bindings = [];
+  panel._form.device = "dev1";
+  panel._triggers = { dev1: [] };
+  panel._deviceKinds = {}; // not yet loaded
+
+  const html = renderedEditorHtml(panel);
+
+  assert.match(html, /Dim up \(hold\)/);
+});
+
 // ── schedules ────────────────────────────────────────────────────────────────
 
 function scheduleFormEl(values, days = []) {
