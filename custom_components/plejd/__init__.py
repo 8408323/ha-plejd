@@ -14,7 +14,7 @@ from homeassistant.helpers import device_registry
 from . import dim_binding_ws, panel, remote_profile_ws, schedule_ws
 from .add_device import async_add_device
 from .bindings import PlejdDimBindings
-from .const import CONF_SHOW_PANEL, DOMAIN
+from .const import CONF_SHOW_PANEL, DOMAIN, ROOM_CATEGORIES
 from .coordinator import PlejdCoordinator
 from .discovery import async_bluetooth_available, async_scan_unprovisioned
 from .holiday_mode import DATA_HOLIDAY_MODE, PlejdHolidayMode
@@ -55,7 +55,7 @@ _ADD_DEVICE_SCHEMA = vol.Schema(
         vol.Optional("hardware_id", default="0"): str,
         vol.Optional("room_id"): str,
         vol.Optional("room_title"): str,
-        vol.Optional("room_category"): str,
+        vol.Optional("room_category"): vol.In(ROOM_CATEGORIES),
         vol.Optional("firmware_build_time", default=0): int,
         vol.Optional("input_settings", default=[]): [_INPUT_SETTING_SCHEMA],
     }
@@ -65,8 +65,8 @@ _UPDATE_ROOM_SCHEMA = vol.Schema(
     {
         vol.Required("room_id"): str,
         vol.Optional("title"): str,
-        vol.Optional("order"): int,
-        vol.Optional("category"): str,
+        vol.Optional("order"): vol.All(int, vol.Range(min=0)),
+        vol.Optional("category"): vol.In(ROOM_CATEGORIES),
     }
 )
 

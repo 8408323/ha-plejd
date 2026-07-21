@@ -123,6 +123,22 @@ class PlejdCloudRoom:
 
 
 @dataclass
+class PlejdCloudRoomInfo:
+    """Every room on the site, for room management (existence + occupancy checks).
+
+    Unlike PlejdCloudRoom, not filtered to light-only groups with a controllable member -
+    that list is built for the room-group light entity feature and silently excludes an
+    empty room (no group entity is worth creating for it) or a room whose only members
+    aren't lights, which is exactly the wrong lens for "does this room exist" / "is it
+    safe to delete" (see #114 review).
+    """
+
+    room_id: str
+    name: str
+    has_devices: bool  # any device's roomId matches this room, regardless of category
+
+
+@dataclass
 class PlejdCloudSite:
     """A site: its crypto key, mesh key, devices, scenes, and any gateway."""
 
@@ -143,6 +159,8 @@ class PlejdCloudSite:
     device_addresses: dict[str, int] = field(default_factory=dict)
     # rooms with a group address, so a whole room is controlled in one 0x0098 command.
     rooms: list[PlejdCloudRoom] = field(default_factory=list)
+    # every room on the site, for room management - see PlejdCloudRoomInfo.
+    all_rooms: list[PlejdCloudRoomInfo] = field(default_factory=list)
 
 
 def _headers(token: str | None = None) -> dict[str, str]:
@@ -613,6 +631,17 @@ def parse_site(site: dict) -> PlejdCloudSite:
             )
         )
 
+    device_room_ids = {d.room_id for d in devices if d.room_id}
+    all_rooms = [
+        PlejdCloudRoomInfo(
+            room_id=r["roomId"],
+            name=(r.get("title") if isinstance(r.get("title"), str) else "").strip() or "Room",
+            has_devices=r["roomId"] in device_room_ids,
+        )
+        for r in raw_rooms
+        if isinstance(r, dict) and isinstance(r.get("roomId"), str)
+    ]
+
     meta = site.get("site") or site  # id/title are nested under "site" in the real payload
     device_addresses: dict[str, int] = {}
     for device_id, addr in device_address.items():
@@ -635,4 +664,5 @@ def parse_site(site: dict) -> PlejdCloudSite:
         firmware_by_device=firmware_by_device,
         device_addresses=device_addresses,
         rooms=rooms,
+        all_rooms=all_rooms,
     )

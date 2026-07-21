@@ -310,6 +310,35 @@ def test_input_setting_schema_requires_input_and_button_type():
     }
 
 
+def test_add_device_schema_rejects_invalid_room_category():
+    import voluptuous as vol
+
+    with pytest.raises(vol.Invalid):
+        plejd._ADD_DEVICE_SCHEMA({"device_address": "AA:BB:CC:DD:EE:FF", "name": "X", "room_category": "KidsRoom"})
+    assert (
+        plejd._ADD_DEVICE_SCHEMA({"device_address": "AA:BB:CC:DD:EE:FF", "name": "X", "room_category": "Garage"})[
+            "room_category"
+        ]
+        == "Garage"
+    )
+
+
+def test_update_room_schema_rejects_negative_order():
+    import voluptuous as vol
+
+    with pytest.raises(vol.Invalid):
+        plejd._UPDATE_ROOM_SCHEMA({"room_id": "r1", "order": -1})
+    assert plejd._UPDATE_ROOM_SCHEMA({"room_id": "r1", "order": 0})["order"] == 0
+
+
+def test_update_room_schema_rejects_invalid_category():
+    import voluptuous as vol
+
+    with pytest.raises(vol.Invalid):
+        plejd._UPDATE_ROOM_SCHEMA({"room_id": "r1", "category": "NotARealCategory"})
+    assert plejd._UPDATE_ROOM_SCHEMA({"room_id": "r1", "category": "Kitchen"})["category"] == "Kitchen"
+
+
 async def test_add_device_service_unregistered_on_unload(monkeypatch):
     monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
     _FakeCoordinator.instances.clear()

@@ -79,7 +79,7 @@ async def async_update_room(
     if category is not None and category not in ROOM_CATEGORIES:
         raise HomeAssistantError(f"Invalid room category '{category}'; must be one of {', '.join(ROOM_CATEGORIES)}")
     http_session, token, site = await _async_login_and_get_site(hass, entry)
-    if not any(r.room_id == room_id for r in site.rooms):
+    if not any(r.room_id == room_id for r in site.all_rooms):
         raise HomeAssistantError(f"Plejd room {room_id} not found on this site")
     try:
         ok = await async_cloud_update_room(
@@ -100,10 +100,10 @@ async def async_remove_room(hass: HomeAssistant, entry: ConfigEntry, *, room_id:
     instead of relying on the cloud's own rejection.
     """
     http_session, token, site = await _async_login_and_get_site(hass, entry)
-    room = next((r for r in site.rooms if r.room_id == room_id), None)
+    room = next((r for r in site.all_rooms if r.room_id == room_id), None)
     if room is None:
         raise HomeAssistantError(f"Plejd room {room_id} not found on this site")
-    if room.member_addresses:
+    if room.has_devices:
         raise HomeAssistantError(f"Plejd room '{room.name}' still has devices in it and can't be removed")
     try:
         ok = await async_cloud_remove_room(http_session, token, site.site_id, room_id)

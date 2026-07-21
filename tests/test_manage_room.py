@@ -7,24 +7,17 @@ from unittest.mock import AsyncMock
 
 import pytest
 from homeassistant.exceptions import HomeAssistantError
-from plejd.cloud import PlejdCloudError, PlejdCloudRoom, PlejdCloudSite
+from plejd.cloud import PlejdCloudError, PlejdCloudRoomInfo, PlejdCloudSite
 from plejd.manage_room import async_remove_room, async_update_room
 
 _KEY = bytes(range(16))
 
 
-def _room(room_id="r1", name="Vardagsrum", member_addresses=None) -> PlejdCloudRoom:
-    return PlejdCloudRoom(
-        room_id=room_id,
-        name=name,
-        address=14,
-        member_addresses=member_addresses or [],
-        dimmable=True,
-        dimmable_addresses=member_addresses or [],
-    )
+def _room(room_id="r1", name="Vardagsrum", has_devices=False) -> PlejdCloudRoomInfo:
+    return PlejdCloudRoomInfo(room_id=room_id, name=name, has_devices=has_devices)
 
 
-def _site(rooms=None) -> PlejdCloudSite:
+def _site(all_rooms=None) -> PlejdCloudSite:
     return PlejdCloudSite(
         site_id="S1",
         title="Home",
@@ -36,7 +29,7 @@ def _site(rooms=None) -> PlejdCloudSite:
         scenes=[],
         gateways=[],
         resource_set_id=None,
-        rooms=rooms or [],
+        all_rooms=all_rooms or [],
     )
 
 
@@ -102,16 +95,7 @@ async def test_update_room_forwards_fields_and_reloads(monkeypatch):
     await async_update_room(hass, entry, room_id="r1", title="Kök", order=1, category="Kitchen")
 
     update_mock.assert_awaited_once_with(None, "tok", "S1", "r1", title="Kök", order=1, category="Kitchen")
-    assert entry.data["rooms"] == [
-        {
-            "room_id": "r1",
-            "name": "Kök",
-            "address": 14,
-            "member_addresses": [],
-            "dimmable": True,
-            "dimmable_addresses": [],
-        }
-    ]
+    assert entry.data["rooms"] == []  # refreshed from fresh_site.rooms (unrelated light-grouping list)
     hass.config_entries.async_reload.assert_awaited_once_with("e1")
 
 
@@ -143,9 +127,7 @@ async def test_remove_room_raises_if_room_not_found(monkeypatch):
 
 async def test_remove_room_refuses_when_room_has_devices(monkeypatch):
     monkeypatch.setattr("plejd.manage_room.async_login", AsyncMock(return_value="tok"))
-    monkeypatch.setattr(
-        "plejd.manage_room.async_get_site", AsyncMock(return_value=_site([_room(member_addresses=[5])]))
-    )
+    monkeypatch.setattr("plejd.manage_room.async_get_site", AsyncMock(return_value=_site([_room(has_devices=True)])))
     remove_mock = AsyncMock()
     monkeypatch.setattr("plejd.manage_room.async_cloud_remove_room", remove_mock)
     with pytest.raises(HomeAssistantError, match="still has devices"):

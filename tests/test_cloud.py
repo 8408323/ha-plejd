@@ -663,6 +663,36 @@ def test_parse_site_parses_rooms_with_group_addresses():
     assert by_addr[16].member_addresses == [11]  # d1.out0 also belongs to group 16
 
 
+def test_parse_site_all_rooms_includes_empty_and_non_light_rooms():
+    # all_rooms (for room management) must not share `rooms`'s light-grouping filtering:
+    # an empty room (r3, no group members) and a room with only a non-light member would
+    # both be silently dropped from `rooms`, which is exactly wrong for "does this room
+    # exist" / "is it safe to delete" (see PR #114 review).
+    site = {
+        **_SITE,
+        "rooms": [
+            {"roomId": "r1", "title": "Kitchen"},
+            {"roomId": "r3", "title": "Empty room"},
+        ],
+        "roomAddress": {"r1": 14, "r3": 99},
+        "outputGroups": {"d1": {"0": [14]}},
+    }
+    parsed = parse_site(site)
+    assert [r.address for r in parsed.rooms] == [14]  # r3 still excluded from the light-group list
+    by_id = {r.room_id: r for r in parsed.all_rooms}
+    assert set(by_id) == {"r1", "r3"}
+    assert by_id["r1"].name == "Kitchen"
+    assert by_id["r1"].has_devices is True  # d1/d2 (from _SITE's devices[]) have roomId "r1"
+    assert by_id["r3"].name == "Empty room"
+    assert by_id["r3"].has_devices is False
+
+
+def test_parse_site_all_rooms_skips_malformed_room_entries():
+    site = {**_SITE, "rooms": [{"roomId": "r1", "title": "Kitchen"}, "not-a-dict", {"title": "no id"}, None]}
+    all_rooms = parse_site(site).all_rooms
+    assert [r.room_id for r in all_rooms] == ["r1"]
+
+
 def test_parse_site_excludes_room_with_non_light_member():
     site = {
         **_SITE,
