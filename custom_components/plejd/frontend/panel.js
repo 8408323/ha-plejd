@@ -73,6 +73,7 @@ class PlejdPanel extends HTMLElement {
     this._bindings = null; // loaded list, null until the first WS list resolves (or a failed load)
     this._loadFailed = false; // a list load errored — block saving so it can't overwrite storage
     this._triggers = {}; // device_id -> its device triggers (only successful loads are cached)
+    this._deviceKinds = {}; // device_id -> "remote" | "door_window" | "motion" (cached alongside triggers)
     this._areasById = {};
     this._devicesById = {};
     this._registriesLoaded = false;
@@ -223,6 +224,7 @@ class PlejdPanel extends HTMLElement {
     try {
       const res = await this._callWS({ type: "plejd/device_triggers", device_id: deviceId });
       this._triggers[deviceId] = res.triggers || []; // cache only on success (even if empty)
+      this._deviceKinds[deviceId] = res.device_kind || "remote";
     } catch (err) {
       // Don't cache a failed load — leave it unset so re-selecting the remote retries.
       this._error = `Could not load triggers: ${err.message || err}`;
@@ -1162,14 +1164,22 @@ class PlejdPanel extends HTMLElement {
 
     const pressRows = this._form.presses.map((row, i) => this._pressRowHtml(row, i)).join("");
 
-    const triggerRow = this._form.device
+    const deviceKind = this._deviceKinds[this._form.device] || "remote";
+    const isRemote = deviceKind === "remote";
+    const dimGrid = isRemote
       ? `
         <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:12px">
           <div><label for="f-up" style="${LABEL}">Dim up (hold)</label><select id="f-up" style="${INPUT}">${this._triggerOptions(this._form.device, this._form.up)}</select></div>
           <div><label for="f-down" style="${LABEL}">Dim down (hold)</label><select id="f-down" style="${INPUT}">${this._triggerOptions(this._form.device, this._form.down)}</select></div>
           <div><label for="f-stop" style="${LABEL}">Release (stop)</label><select id="f-stop" style="${INPUT}">${this._triggerOptions(this._form.device, this._form.stop)}</select></div>
         </div>
-        ${this._form.device in this._triggers && this._triggers[this._form.device].length === 0 ? '<p style="color:var(--secondary-text-color,#727272);font-size:.85rem;margin:8px 0 0">This device exposes no triggers.</p>' : ""}
+        ${this._form.device in this._triggers && this._triggers[this._form.device].length === 0 ? '<p style="color:var(--secondary-text-color,#727272);font-size:.85rem;margin:8px 0 0">This device exposes no triggers.</p>' : ""}`
+      : `<p style="color:var(--secondary-text-color,#727272);font-size:.85rem;margin:12px 0 0">
+          This is a ${deviceKind === "door_window" ? "door/window" : "motion"} sensor, not a dimmer remote — use a press action below to react to it.
+        </p>`;
+    const triggerRow = this._form.device
+      ? `
+        ${dimGrid}
         <div style="margin-top:16px">
           <div style="display:flex;justify-content:space-between;align-items:center">
             <span style="${LABEL};margin:0">Press actions</span>
