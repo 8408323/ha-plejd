@@ -45,15 +45,22 @@ add_device:
       name: Room category
       description: >-
         Category for a newly-created room (ignored if room_id is set or
-        room_title is omitted). Passed through to the Plejd cloud as-is;
-        defaults to "Other" if omitted. The exact set of category values the
-        app's own room-category picker uses is unconfirmed, so this is a free
-        text field rather than a dropdown - if you know the value the app
-        uses for the category you want (e.g. from your own experimentation),
-        enter it here.
+        room_title is omitted). Defaults to "Other" if omitted.
       required: false
       selector:
-        text:
+        select:
+          options:
+            - LivingRoom
+            - Kitchen
+            - Outdoor
+            - Bedroom
+            - Hallway
+            - Bathroom
+            - Office
+            - Laundry
+            - Storage
+            - Other
+            - Garage
     firmware_build_time:
       name: Firmware build time
       description: >-
@@ -83,6 +90,65 @@ all_off:
   description: >-
     Turn off every Plejd light output in the site in one action, mirroring the
     Plejd app's site-wide "all off" control.
+
+update_room:
+  name: Update room
+  description: >-
+    Rename, reorder, and/or recategorize an existing room, then reload the
+    config entry. Only the fields you provide are changed.
+  fields:
+    room_id:
+      name: Room ID
+      description: Plejd cloud ID of the room to update.
+      required: true
+      selector:
+        text:
+    title:
+      name: Title
+      description: New room name.
+      required: false
+      selector:
+        text:
+    order:
+      name: Order
+      description: New position of the room in the room list (0-based).
+      required: false
+      selector:
+        number:
+          mode: box
+          min: 0
+    category:
+      name: Category
+      description: New room category.
+      required: false
+      selector:
+        select:
+          options:
+            - LivingRoom
+            - Kitchen
+            - Outdoor
+            - Bedroom
+            - Hallway
+            - Bathroom
+            - Office
+            - Laundry
+            - Storage
+            - Other
+            - Garage
+
+remove_room:
+  name: Remove room
+  description: >-
+    Remove a room, then reload the config entry. The Plejd cloud (and this
+    service) refuse to remove a room that still has devices in it - move or
+    remove its devices first.
+  fields:
+    room_id:
+      name: Room ID
+      description: Plejd cloud ID of the room to remove.
+      required: true
+      selector:
+        text:
 
 start_dim:
   name: Start dimming

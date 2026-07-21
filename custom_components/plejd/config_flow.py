@@ -50,6 +50,7 @@ from .const import (
     DOMAIN,
     HOLIDAY_WINDOW_END_DEFAULT,
     HOLIDAY_WINDOW_START_DEFAULT,
+    ROOM_CATEGORIES,
     TIME_EVENT_SLOTS,
     TRANSPORT_AUTO,
     TRANSPORT_BLE,
@@ -418,7 +419,9 @@ class PlejdOptionsFlow(OptionsFlow):
             {
                 vol.Required("name"): str,
                 vol.Optional("room_title", default=""): str,
-                vol.Optional("room_category", default=""): str,
+                vol.Optional("room_category", default=""): SelectSelector(
+                    SelectSelectorConfig(options=["", *ROOM_CATEGORIES])
+                ),
             }
         )
         return self.async_show_form(
