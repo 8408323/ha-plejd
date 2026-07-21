@@ -453,7 +453,11 @@ def parse_site(site: dict) -> PlejdCloudSite:
     seen_addr: set[int] = set()
     for device_id, idx_map in input_address.items():
         for idx_str, addr in (idx_map or {}).items():
-            address = int(addr)
+            try:
+                address = int(addr)
+                input_index = int(idx_str)
+            except (ValueError, TypeError):
+                continue  # malformed entry from the cloud - skip it, not fatal
             if address in seen_addr:
                 continue
             seen_addr.add(address)
@@ -462,7 +466,7 @@ def parse_site(site: dict) -> PlejdCloudSite:
                     device_id=device_id,
                     name=name_by_device.get(device_id) or "Button",
                     address=address,
-                    input_index=int(idx_str),
+                    input_index=input_index,
                 )
             )
 
