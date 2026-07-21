@@ -142,6 +142,13 @@ def test_parse_site_keeps_input_index_for_two_input_device():
     assert sorted((i.address, i.input_index) for i in parsed.inputs) == [(11, 0), (12, 1)]
 
 
+def test_parse_site_skips_malformed_input_address_entries():
+    # A non-numeric index or address must not abort the whole site parse - just that entry.
+    site = {**_SITE, "inputAddress": {"d1": {"bad": 11, "1": "also-bad", "2": 13}}}
+    parsed = parse_site(site)
+    assert [(i.address, i.input_index) for i in parsed.inputs] == [(13, 2)]
+
+
 async def test_get_site_accepts_dict_result():
     with aioresponses() as m:
         m.post(_SITE_BY_ID, payload={"result": _SITE})  # not wrapped in a list
