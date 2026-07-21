@@ -510,6 +510,24 @@ async def test_add_device_details_success_finishes_flow(monkeypatch):
     assert res["type"] == "create_entry" and res["data"] == {"schedules": []}
 
 
+async def test_add_device_details_passes_room_category_through(monkeypatch):
+    added = []
+
+    async def _fake_add_device(hass, entry, *, address, name, room_title=None, room_category=None, **kwargs):
+        added.append((address, name, room_title, room_category))
+
+    monkeypatch.setattr(cf, "async_add_device", _fake_add_device)
+
+    flow = _opt_flow(options={"schedules": []})
+    flow._new_device_address = "AA:BB:CC:DD:EE:FF"
+    res = await flow.async_step_add_device_details(
+        {"name": "Taklampa", "room_title": "Garage", "room_category": "Garage"}
+    )
+
+    assert added == [("AA:BB:CC:DD:EE:FF", "Taklampa", "Garage", "Garage")]
+    assert res["type"] == "create_entry" and res["data"] == {"schedules": []}
+
+
 async def test_add_device_details_shows_error_on_failure(monkeypatch):
     from homeassistant.exceptions import HomeAssistantError
 

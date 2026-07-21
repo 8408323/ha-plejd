@@ -338,6 +338,7 @@ async def test_add_device_service_forwards_call_data(monkeypatch):
             "hardware_id": "1",
             "room_id": "r1",
             "room_title": "Sovrum",
+            "room_category": "Bedroom",
             "firmware_build_time": 123,
             "input_settings": [{"input": 0, "button_type": "Toggle"}],
         }
@@ -352,6 +353,7 @@ async def test_add_device_service_forwards_call_data(monkeypatch):
         hardware_id="1",
         room_id="r1",
         room_title="Sovrum",
+        room_category="Bedroom",
         firmware_build_time=123,
         input_settings=[{"input": 0, "button_type": "Toggle"}],
     )
@@ -378,6 +380,7 @@ async def test_add_device_service_forwards_defaults(monkeypatch):
         hardware_id="0",
         room_id=None,
         room_title=None,
+        room_category=None,
         firmware_build_time=0,
         input_settings=[],
     )
