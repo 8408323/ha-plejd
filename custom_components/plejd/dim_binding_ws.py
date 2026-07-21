@@ -18,7 +18,7 @@ from homeassistant.helpers import device_registry as dr
 from .bindings import InvalidDimBinding
 from .const import DOMAIN
 from .remote_profile_ws import DATA_REMOTE_PROFILES
-from .remote_profiles import build_buttons_view
+from .remote_profiles import build_buttons_view, classify_device_kind
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -86,7 +86,8 @@ async def ws_device_triggers(hass: HomeAssistant, connection, msg) -> None:
     buttons = build_buttons_view(
         device_triggers, manufacturer=manufacturer, model=model, model_id=model_id, custom_profile=custom_profile
     )
-    connection.send_result(msg["id"], {"triggers": device_triggers, "buttons": buttons})
+    device_kind = classify_device_kind(hass, device_id)
+    connection.send_result(msg["id"], {"triggers": device_triggers, "buttons": buttons, "device_kind": device_kind})
 
 
 def _device_manufacturer_model(hass: HomeAssistant, device_id: str) -> tuple[str | None, str | None, str | None]:

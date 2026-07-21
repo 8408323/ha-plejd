@@ -21,13 +21,51 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+from homeassistant.components.binary_sensor import BinarySensorDeviceClass
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.storage import Store
 
 from .const import DOMAIN
 
 STORE_VERSION = 1
 STORE_KEY = f"{DOMAIN}.remote_profiles"
+
+DEVICE_KIND_DOOR_WINDOW = "door_window"
+DEVICE_KIND_MOTION = "motion"
+DEVICE_KIND_REMOTE = "remote"
+
+# binary_sensor device classes that report an open/closed state rather than button
+# presses - offering a "buttons" picker for these is misleading (see #107).
+_DOOR_WINDOW_CLASSES = frozenset(
+    {
+        BinarySensorDeviceClass.DOOR,
+        BinarySensorDeviceClass.WINDOW,
+        BinarySensorDeviceClass.GARAGE_DOOR,
+        BinarySensorDeviceClass.OPENING,
+    }
+)
+_MOTION_CLASSES = frozenset({BinarySensorDeviceClass.MOTION, BinarySensorDeviceClass.OCCUPANCY})
+
+
+def classify_device_kind(hass: HomeAssistant, device_id: str) -> str:
+    """Classify a bound device as door/window, motion, or a (default) button remote.
+
+    Based on the device_class of its binary_sensor entities, if any - the same signal
+    HA's own dashboards use to distinguish a contact sensor from a motion sensor from
+    a plain switch. A device with no binary_sensor entity (the common case for an
+    actual button remote) falls back to "remote", the pre-existing behaviour.
+    """
+    registry = er.async_get(hass)
+    for entry in er.async_entries_for_device(registry, device_id, include_disabled_entities=True):
+        if entry.entity_id.split(".", 1)[0] != "binary_sensor":
+            continue
+        device_class = entry.device_class or getattr(entry, "original_device_class", None)
+        if device_class in _DOOR_WINDOW_CLASSES:
+            return DEVICE_KIND_DOOR_WINDOW
+        if device_class in _MOTION_CLASSES:
+            return DEVICE_KIND_MOTION
+    return DEVICE_KIND_REMOTE
 
 
 class InvalidRemoteProfile(ValueError):

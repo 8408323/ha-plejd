@@ -310,7 +310,12 @@ except ImportError:
 
     class _BinarySensorDeviceClass(str, enum.Enum):
         MOTION = "motion"
+        OCCUPANCY = "occupancy"
         PROBLEM = "problem"
+        DOOR = "door"
+        WINDOW = "window"
+        GARAGE_DOOR = "garage_door"
+        OPENING = "opening"
 
     class _BinarySensorEntity:
         def async_on_remove(self, func):
@@ -504,8 +509,13 @@ except ImportError:
         entities = getattr(registry, "_entities", {})
         return [e for e in entities.values() if getattr(e, "config_entry_id", None) == config_entry_id]
 
+    def _er_async_entries_for_device(registry, device_id, include_disabled_entities=False):
+        entities = getattr(registry, "_entities", {})
+        return [e for e in entities.values() if getattr(e, "device_id", None) == device_id]
+
     _er.async_get = _er_async_get  # type: ignore[attr-defined]
     _er.async_entries_for_config_entry = _er_async_entries_for_config_entry  # type: ignore[attr-defined]
+    _er.async_entries_for_device = _er_async_entries_for_device  # type: ignore[attr-defined]
     _er.EntityRegistry = _EntityRegistry  # type: ignore[attr-defined]
     sys.modules.setdefault("homeassistant.helpers.entity_registry", _er)
 
