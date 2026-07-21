@@ -17,15 +17,19 @@ from plejd.cloud import (
     async_get_site,
     async_get_sites,
     async_login,
+    async_remove_room,
     async_set_device_title,
     async_set_input_setting,
+    async_update_room,
     parse_site,
 )
 from plejd.const import (
     PLEJD_FN_COMPATIBLE_DEVICES,
     PLEJD_FN_CREATE_DEVICE,
     PLEJD_FN_CREATE_ROOM,
+    PLEJD_FN_REMOVE_ROOM,
     PLEJD_FN_SET_INPUT,
+    PLEJD_FN_UPDATE_ROOM,
     PLEJD_PARSE_URL,
 )
 
@@ -35,6 +39,8 @@ _SITE_BY_ID = PLEJD_PARSE_URL + "functions/getSiteById"
 _FIRMWARE = PLEJD_PARSE_URL + "functions/getFirmwaresByHardwareId"
 _CREATE_DEVICE = PLEJD_PARSE_URL + PLEJD_FN_CREATE_DEVICE
 _CREATE_ROOM = PLEJD_PARSE_URL + PLEJD_FN_CREATE_ROOM
+_UPDATE_ROOM = PLEJD_PARSE_URL + PLEJD_FN_UPDATE_ROOM
+_REMOVE_ROOM = PLEJD_PARSE_URL + PLEJD_FN_REMOVE_ROOM
 _SET_INPUT = PLEJD_PARSE_URL + PLEJD_FN_SET_INPUT
 
 _SITE = {
@@ -566,6 +572,74 @@ async def test_create_room_uses_supplied_category():
     assert captured["category"] == "Garage"
 
 
+async def test_update_room_sends_only_provided_fields():
+    from aioresponses import CallbackResult
+
+    captured: dict = {}
+
+    def _capture(url, **kwargs):
+        captured.update(kwargs.get("json", {}))
+        return CallbackResult(payload={"result": True})
+
+    with aioresponses() as m:
+        m.post(_UPDATE_ROOM, callback=_capture)
+        async with aiohttp.ClientSession() as s:
+            ok = await async_update_room(s, "tok", "site1", "room1", title="Vardagsrum")
+    assert ok is True
+    assert captured == {"siteId": "site1", "roomId": "room1", "title": "Vardagsrum"}
+
+
+async def test_update_room_sends_all_provided_fields():
+    from aioresponses import CallbackResult
+
+    captured: dict = {}
+
+    def _capture(url, **kwargs):
+        captured.update(kwargs.get("json", {}))
+        return CallbackResult(payload={"result": True})
+
+    with aioresponses() as m:
+        m.post(_UPDATE_ROOM, callback=_capture)
+        async with aiohttp.ClientSession() as s:
+            await async_update_room(s, "tok", "site1", "room1", title="Kök", order=2, category="Kitchen")
+    assert captured == {"siteId": "site1", "roomId": "room1", "title": "Kök", "order": 2, "category": "Kitchen"}
+
+
+async def test_update_room_rejects_malformed_truthy_result():
+    # A malformed but truthy `result` (not the literal True the real API sends on success)
+    # must not be treated as a successful update - reject it strictly, like device rename.
+    with aioresponses() as m:
+        m.post(_UPDATE_ROOM, payload={"result": "yes"})
+        async with aiohttp.ClientSession() as s:
+            ok = await async_update_room(s, "tok", "site1", "room1", title="X")
+    assert ok is False
+
+
+async def test_remove_room_posts_correct_payload():
+    from aioresponses import CallbackResult
+
+    captured: dict = {}
+
+    def _capture(url, **kwargs):
+        captured.update(kwargs.get("json", {}))
+        return CallbackResult(payload={"result": True})
+
+    with aioresponses() as m:
+        m.post(_REMOVE_ROOM, callback=_capture)
+        async with aiohttp.ClientSession() as s:
+            ok = await async_remove_room(s, "tok", "site1", "room1")
+    assert ok is True
+    assert captured == {"siteId": "site1", "roomId": "room1"}
+
+
+async def test_remove_room_rejects_malformed_truthy_result():
+    with aioresponses() as m:
+        m.post(_REMOVE_ROOM, payload={"result": {}})
+        async with aiohttp.ClientSession() as s:
+            ok = await async_remove_room(s, "tok", "site1", "room1")
+    assert ok is False
+
+
 async def test_set_input_setting_posts_toggle():
     from aioresponses import CallbackResult
 
@@ -605,6 +679,36 @@ def test_parse_site_parses_rooms_with_group_addresses():
     assert by_addr[14].dimmable is True
     assert by_addr[16].name == "Room"  # fallback when the room has no title entry
     assert by_addr[16].member_addresses == [11]  # d1.out0 also belongs to group 16
+
+
+def test_parse_site_all_rooms_includes_empty_and_non_light_rooms():
+    # all_rooms (for room management) must not share `rooms`'s light-grouping filtering:
+    # an empty room (r3, no group members) and a room with only a non-light member would
+    # both be silently dropped from `rooms`, which is exactly wrong for "does this room
+    # exist" / "is it safe to delete" (see PR #114 review).
+    site = {
+        **_SITE,
+        "rooms": [
+            {"roomId": "r1", "title": "Kitchen"},
+            {"roomId": "r3", "title": "Empty room"},
+        ],
+        "roomAddress": {"r1": 14, "r3": 99},
+        "outputGroups": {"d1": {"0": [14]}},
+    }
+    parsed = parse_site(site)
+    assert [r.address for r in parsed.rooms] == [14]  # r3 still excluded from the light-group list
+    by_id = {r.room_id: r for r in parsed.all_rooms}
+    assert set(by_id) == {"r1", "r3"}
+    assert by_id["r1"].name == "Kitchen"
+    assert by_id["r1"].has_devices is True  # d1/d2 (from _SITE's devices[]) have roomId "r1"
+    assert by_id["r3"].name == "Empty room"
+    assert by_id["r3"].has_devices is False
+
+
+def test_parse_site_all_rooms_skips_malformed_room_entries():
+    site = {**_SITE, "rooms": [{"roomId": "r1", "title": "Kitchen"}, "not-a-dict", {"title": "no id"}, None]}
+    all_rooms = parse_site(site).all_rooms
+    assert [r.room_id for r in all_rooms] == ["r1"]
 
 
 def test_parse_site_excludes_room_with_non_light_member():

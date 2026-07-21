@@ -14,10 +14,11 @@ from homeassistant.helpers import device_registry
 from . import dim_binding_ws, panel, remote_profile_ws, schedule_ws
 from .add_device import async_add_device
 from .bindings import PlejdDimBindings
-from .const import CONF_SHOW_PANEL, DOMAIN
+from .const import CONF_SHOW_PANEL, DOMAIN, ROOM_CATEGORIES
 from .coordinator import PlejdCoordinator
 from .discovery import async_bluetooth_available, async_scan_unprovisioned
 from .holiday_mode import DATA_HOLIDAY_MODE, PlejdHolidayMode
+from .manage_room import async_remove_room, async_update_room
 from .remote_profiles import PlejdRemoteProfiles
 
 _WS_REGISTERED = f"{DOMAIN}_ws_registered"
@@ -42,6 +43,8 @@ PLATFORMS: list[Platform] = [
 SERVICE_ADD_DEVICE = "add_device"
 SERVICE_SCAN_DEVICES = "scan_new_devices"
 SERVICE_ALL_OFF = "all_off"
+SERVICE_UPDATE_ROOM = "update_room"
+SERVICE_REMOVE_ROOM = "remove_room"
 
 _INPUT_SETTING_SCHEMA = vol.Schema({vol.Required("input"): int, vol.Required("button_type"): str})
 
@@ -52,11 +55,22 @@ _ADD_DEVICE_SCHEMA = vol.Schema(
         vol.Optional("hardware_id", default="0"): str,
         vol.Optional("room_id"): str,
         vol.Optional("room_title"): str,
-        vol.Optional("room_category"): str,
+        vol.Optional("room_category"): vol.In(ROOM_CATEGORIES),
         vol.Optional("firmware_build_time", default=0): int,
         vol.Optional("input_settings", default=[]): [_INPUT_SETTING_SCHEMA],
     }
 )
+
+_UPDATE_ROOM_SCHEMA = vol.Schema(
+    {
+        vol.Required("room_id"): str,
+        vol.Optional("title"): str,
+        vol.Optional("order"): vol.All(int, vol.Range(min=0)),
+        vol.Optional("category"): vol.In(ROOM_CATEGORIES),
+    }
+)
+
+_REMOVE_ROOM_SCHEMA = vol.Schema({vol.Required("room_id"): str})
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -131,12 +145,29 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     async def _async_handle_all_off(call) -> None:
         await coordinator.async_all_off()
 
+    async def _async_handle_update_room(call) -> None:
+        await async_update_room(
+            hass,
+            entry,
+            room_id=call.data["room_id"],
+            title=call.data.get("title"),
+            order=call.data.get("order"),
+            category=call.data.get("category"),
+        )
+
+    async def _async_handle_remove_room(call) -> None:
+        await async_remove_room(hass, entry, room_id=call.data["room_id"])
+
     hass.services.async_register(DOMAIN, SERVICE_ADD_DEVICE, _async_handle_add_device, schema=_ADD_DEVICE_SCHEMA)
     entry.async_on_unload(lambda: hass.services.async_remove(DOMAIN, SERVICE_ADD_DEVICE))
     hass.services.async_register(DOMAIN, SERVICE_SCAN_DEVICES, _async_handle_scan_devices)
     entry.async_on_unload(lambda: hass.services.async_remove(DOMAIN, SERVICE_SCAN_DEVICES))
     hass.services.async_register(DOMAIN, SERVICE_ALL_OFF, _async_handle_all_off)
     entry.async_on_unload(lambda: hass.services.async_remove(DOMAIN, SERVICE_ALL_OFF))
+    hass.services.async_register(DOMAIN, SERVICE_UPDATE_ROOM, _async_handle_update_room, schema=_UPDATE_ROOM_SCHEMA)
+    entry.async_on_unload(lambda: hass.services.async_remove(DOMAIN, SERVICE_UPDATE_ROOM))
+    hass.services.async_register(DOMAIN, SERVICE_REMOVE_ROOM, _async_handle_remove_room, schema=_REMOVE_ROOM_SCHEMA)
+    entry.async_on_unload(lambda: hass.services.async_remove(DOMAIN, SERVICE_REMOVE_ROOM))
 
     # Remote → light dim bindings (managed from the dashboard via the WebSocket API).
     # Optional, like the panel: a storage error must not stop the mesh/lights loading.
