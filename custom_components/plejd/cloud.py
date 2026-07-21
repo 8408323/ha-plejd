@@ -400,12 +400,14 @@ async def async_update_room(
         params["order"] = order
     if category is not None:
         params["category"] = category
-    return bool(await _call_function(session, token, PLEJD_FN_UPDATE_ROOM, params))
+    result = await _call_function(session, token, PLEJD_FN_UPDATE_ROOM, params)
+    return result is True
 
 
 async def async_remove_room(session: ClientSession, token: str, site_id: str, room_id: str) -> bool:
     """Remove a room. The cloud rejects this if the room still has devices in it."""
-    return bool(await _call_function(session, token, PLEJD_FN_REMOVE_ROOM, {"siteId": site_id, "roomId": room_id}))
+    result = await _call_function(session, token, PLEJD_FN_REMOVE_ROOM, {"siteId": site_id, "roomId": room_id})
+    return result is True
 
 
 async def async_set_input_setting(

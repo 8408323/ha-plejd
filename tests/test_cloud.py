@@ -605,6 +605,16 @@ async def test_update_room_sends_all_provided_fields():
     assert captured == {"siteId": "site1", "roomId": "room1", "title": "Kök", "order": 2, "category": "Kitchen"}
 
 
+async def test_update_room_rejects_malformed_truthy_result():
+    # A malformed but truthy `result` (not the literal True the real API sends on success)
+    # must not be treated as a successful update - reject it strictly, like device rename.
+    with aioresponses() as m:
+        m.post(_UPDATE_ROOM, payload={"result": "yes"})
+        async with aiohttp.ClientSession() as s:
+            ok = await async_update_room(s, "tok", "site1", "room1", title="X")
+    assert ok is False
+
+
 async def test_remove_room_posts_correct_payload():
     from aioresponses import CallbackResult
 
@@ -620,6 +630,14 @@ async def test_remove_room_posts_correct_payload():
             ok = await async_remove_room(s, "tok", "site1", "room1")
     assert ok is True
     assert captured == {"siteId": "site1", "roomId": "room1"}
+
+
+async def test_remove_room_rejects_malformed_truthy_result():
+    with aioresponses() as m:
+        m.post(_REMOVE_ROOM, payload={"result": {}})
+        async with aiohttp.ClientSession() as s:
+            ok = await async_remove_room(s, "tok", "site1", "room1")
+    assert ok is False
 
 
 async def test_set_input_setting_posts_toggle():

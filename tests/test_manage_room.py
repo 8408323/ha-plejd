@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from homeassistant.exceptions import HomeAssistantError
+from plejd import schedule_ws
 from plejd.cloud import PlejdAuthError, PlejdCloudError, PlejdCloudRoomInfo, PlejdCloudSite
 from plejd.manage_room import async_remove_room, async_update_room
 
@@ -35,6 +36,7 @@ def _site(all_rooms=None) -> PlejdCloudSite:
 
 def _hass():
     return types.SimpleNamespace(
+        data={},
         config_entries=types.SimpleNamespace(
             async_update_entry=lambda entry, data: setattr(entry, "data", data),
             async_reload=AsyncMock(),
@@ -121,6 +123,38 @@ async def test_update_room_forwards_fields_and_reloads(monkeypatch):
     update_mock.assert_awaited_once_with(None, "tok", "S1", "r1", title="Kök", order=1, category="Kitchen")
     assert entry.data["rooms"] == []  # refreshed from fresh_site.rooms (unrelated light-grouping list)
     hass.config_entries.async_reload.assert_awaited_once_with("e1")
+    # the manual-reload guard must not leak past a successful call, or a later, genuinely
+    # concurrent options/data change would be wrongly suppressed by _async_reload_entry
+    assert schedule_ws.DATA_MANUAL_RELOAD not in hass.data
+    assert schedule_ws.DATA_MANUAL_RELOAD_SEEN not in hass.data
+
+
+async def test_update_room_runs_a_follow_up_reload_for_a_concurrent_change(monkeypatch):
+    # _async_reload_entry sets DATA_RELOAD_PENDING when it suppressed a genuinely
+    # concurrent options/data change's own reload while ours was in flight - that change
+    # must still get its own reload afterward instead of being silently dropped.
+    hass = _hass()
+    entry = _entry()
+    monkeypatch.setattr("plejd.manage_room.async_login", AsyncMock(return_value="tok"))
+    monkeypatch.setattr(
+        "plejd.manage_room.async_get_site",
+        AsyncMock(side_effect=[_site([_room()]), _site([_room()])]),
+    )
+    monkeypatch.setattr("plejd.manage_room.async_cloud_update_room", AsyncMock(return_value=True))
+
+    calls: list[str] = []
+
+    async def _reload_sets_pending(entry_id):
+        calls.append(entry_id)
+        if len(calls) == 1:  # only the first reload race-loses to the concurrent change
+            hass.data[schedule_ws.DATA_RELOAD_PENDING] = entry_id
+
+    hass.config_entries.async_reload = AsyncMock(side_effect=_reload_sets_pending)
+
+    await async_update_room(hass, entry, room_id="r1", title="X")
+
+    assert hass.config_entries.async_reload.await_count == 2  # ours, then the follow-up
+    assert schedule_ws.DATA_RELOAD_PENDING not in hass.data
 
 
 async def test_update_room_raises_on_cloud_error_during_update(monkeypatch):
