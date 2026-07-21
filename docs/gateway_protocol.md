@@ -7,8 +7,15 @@ in BLE range of the mesh — it relays mesh commands to a **Plejd Gateway (GWY-0
 over the Plejd cloud. It co-exists with local BLE; the app prefers it when
 `!IsLoggedInToMesh && site.IsEnabledForRemoteControl()`.
 
-> Status: **decoded from the app, not yet live-validated** (the test site has no
-> gateway). Confirm against a real GWY-01 + capture before relying on it. See #38.
+> Status: decoded from the app; core message flow (**live-validated** 2026-05-31,
+> see below) and the full pub/sub envelope, `MeshStateRequest`/`MeshStateReply`,
+> and raw `mesh.in`/`mesh.out` relay (**live-validated** 2026-07-21 against a real
+> GWY-01 + WireGuard-mode capture, see `docs/reverse_engineering.md`) are confirmed.
+> `cloud.plejd.com` (Parse `functions/*`, used for setup/auth, not this transport) was
+> found certificate-pinned for at least two calls (a scene-save, a Semesterläge
+> fetch) — whether this also affects the login/`getSiteById` setup flow on that same
+> host is unconfirmed. See `docs/reverse_engineering.md`'s Capture methods section
+> before assuming either way.
 
 ## Transport at a glance
 
@@ -142,6 +149,17 @@ uint16. → `OutputState(on, level)`. (Same on/off + 16-bit level model as the B
 a real gateway 2026-05-31: the reply arrives on `control.out` op `update`.
 
 Keep-alive: `control.in` `{controlType:"Ping"}` → `control.out` `{controlType:"Pong"}`.
+
+A 2026-07-21 capture observed unsolicited `Pong` pushes from the cloud roughly every
+~70s, with no outgoing `Ping` visible in that capture window — the app's real cadence
+and whether the cloud ever pings proactively on its own timer are unconfirmed from
+this alone (the window may simply have missed an outgoing `Ping`). This integration's
+`GATEWAY_PING_INTERVAL` (60s) + `GATEWAY_PONG_TIMEOUT` (10s) in `gateway_transport.py`
+is a deliberate, independent connection-health design choice — an app-level keep-alive
+to detect a hung socket the WS heartbeat alone wouldn't catch — not an attempt to
+mirror the app's own cadence bit-for-bit, so no code change follows from this
+observation alone. Worth re-confirming with a longer capture if the exact interval
+ever matters (e.g. to reduce false-positive reconnects).
 
 ## Detecting gateway availability (from the cloud site data we already fetch)
 
