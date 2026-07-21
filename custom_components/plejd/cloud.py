@@ -24,10 +24,12 @@ from .const import (
     PLEJD_FN_CREATE_DEVICE,
     PLEJD_FN_CREATE_ROOM,
     PLEJD_FN_FIRMWARE_BY_HW,
+    PLEJD_FN_REMOVE_ROOM,
     PLEJD_FN_SET_INPUT,
     PLEJD_FN_SITE_BY_ID,
     PLEJD_FN_SITE_LIST,
     PLEJD_FN_UPDATE_DEVICE,
+    PLEJD_FN_UPDATE_ROOM,
     PLEJD_PARSE_APP_ID,
     PLEJD_PARSE_LOGIN,
     PLEJD_PARSE_URL,
@@ -360,6 +362,32 @@ async def async_create_room(
         {"siteId": site_id, "roomId": room_id, "title": title, "category": category, "imageHash": 0},
     )
     return room_id
+
+
+async def async_update_room(
+    session: ClientSession,
+    token: str,
+    site_id: str,
+    room_id: str,
+    *,
+    title: str | None = None,
+    order: int | None = None,
+    category: str | None = None,
+) -> bool:
+    """Rename, reorder, and/or recategorize a room. Only the supplied fields are sent."""
+    params: dict[str, object] = {"siteId": site_id, "roomId": room_id}
+    if title is not None:
+        params["title"] = title
+    if order is not None:
+        params["order"] = order
+    if category is not None:
+        params["category"] = category
+    return bool(await _call_function(session, token, PLEJD_FN_UPDATE_ROOM, params))
+
+
+async def async_remove_room(session: ClientSession, token: str, site_id: str, room_id: str) -> bool:
+    """Remove a room. The cloud rejects this if the room still has devices in it."""
+    return bool(await _call_function(session, token, PLEJD_FN_REMOVE_ROOM, {"siteId": site_id, "roomId": room_id}))
 
 
 async def async_set_input_setting(

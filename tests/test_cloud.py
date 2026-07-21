@@ -17,15 +17,19 @@ from plejd.cloud import (
     async_get_site,
     async_get_sites,
     async_login,
+    async_remove_room,
     async_set_device_title,
     async_set_input_setting,
+    async_update_room,
     parse_site,
 )
 from plejd.const import (
     PLEJD_FN_COMPATIBLE_DEVICES,
     PLEJD_FN_CREATE_DEVICE,
     PLEJD_FN_CREATE_ROOM,
+    PLEJD_FN_REMOVE_ROOM,
     PLEJD_FN_SET_INPUT,
+    PLEJD_FN_UPDATE_ROOM,
     PLEJD_PARSE_URL,
 )
 
@@ -35,6 +39,8 @@ _SITE_BY_ID = PLEJD_PARSE_URL + "functions/getSiteById"
 _FIRMWARE = PLEJD_PARSE_URL + "functions/getFirmwaresByHardwareId"
 _CREATE_DEVICE = PLEJD_PARSE_URL + PLEJD_FN_CREATE_DEVICE
 _CREATE_ROOM = PLEJD_PARSE_URL + PLEJD_FN_CREATE_ROOM
+_UPDATE_ROOM = PLEJD_PARSE_URL + PLEJD_FN_UPDATE_ROOM
+_REMOVE_ROOM = PLEJD_PARSE_URL + PLEJD_FN_REMOVE_ROOM
 _SET_INPUT = PLEJD_PARSE_URL + PLEJD_FN_SET_INPUT
 
 _SITE = {
@@ -564,6 +570,56 @@ async def test_create_room_uses_supplied_category():
             await async_create_room(s, "tok", "site1", "Garage", category="Garage")
     assert captured["title"] == "Garage"
     assert captured["category"] == "Garage"
+
+
+async def test_update_room_sends_only_provided_fields():
+    from aioresponses import CallbackResult
+
+    captured: dict = {}
+
+    def _capture(url, **kwargs):
+        captured.update(kwargs.get("json", {}))
+        return CallbackResult(payload={"result": True})
+
+    with aioresponses() as m:
+        m.post(_UPDATE_ROOM, callback=_capture)
+        async with aiohttp.ClientSession() as s:
+            ok = await async_update_room(s, "tok", "site1", "room1", title="Vardagsrum")
+    assert ok is True
+    assert captured == {"siteId": "site1", "roomId": "room1", "title": "Vardagsrum"}
+
+
+async def test_update_room_sends_all_provided_fields():
+    from aioresponses import CallbackResult
+
+    captured: dict = {}
+
+    def _capture(url, **kwargs):
+        captured.update(kwargs.get("json", {}))
+        return CallbackResult(payload={"result": True})
+
+    with aioresponses() as m:
+        m.post(_UPDATE_ROOM, callback=_capture)
+        async with aiohttp.ClientSession() as s:
+            await async_update_room(s, "tok", "site1", "room1", title="Kök", order=2, category="Kitchen")
+    assert captured == {"siteId": "site1", "roomId": "room1", "title": "Kök", "order": 2, "category": "Kitchen"}
+
+
+async def test_remove_room_posts_correct_payload():
+    from aioresponses import CallbackResult
+
+    captured: dict = {}
+
+    def _capture(url, **kwargs):
+        captured.update(kwargs.get("json", {}))
+        return CallbackResult(payload={"result": True})
+
+    with aioresponses() as m:
+        m.post(_REMOVE_ROOM, callback=_capture)
+        async with aiohttp.ClientSession() as s:
+            ok = await async_remove_room(s, "tok", "site1", "room1")
+    assert ok is True
+    assert captured == {"siteId": "site1", "roomId": "room1"}
 
 
 async def test_set_input_setting_posts_toggle():

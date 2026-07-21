@@ -182,11 +182,32 @@ PLEJD_PARSE_LOGIN = "login"  # POST {username, password} -> {sessionToken}
 PLEJD_FN_SITE_LIST = "functions/getSiteList"  # -> [{siteId, ...}]
 PLEJD_FN_SITE_BY_ID = "functions/getSiteById"  # {siteId} -> site w/ cryptoKey + devices
 PLEJD_FN_FIRMWARE_BY_HW = "functions/getFirmwaresByHardwareId"  # {hardwareId, faceplateId} -> [] when up to date
-PLEJD_FN_UPDATE_DEVICE = "functions/updateDevice_V2"  # {siteId, deviceId, deviceParseId, title} -> rename in the app
+PLEJD_FN_UPDATE_DEVICE = (
+    "functions/updateDevice_V2"  # {siteId, deviceId, deviceParseId, title|traits|hiddenFromRoomList}
+)
 PLEJD_FN_CREATE_DEVICE = "functions/createPlejdDevice_V2"  # register new device to site
 PLEJD_FN_COMPATIBLE_DEVICES = "functions/getCompatibleDevices"  # {devices:[{hardwareId,...}]} -> neededAddresses
 PLEJD_FN_CREATE_ROOM = "functions/createRoom"  # {siteId, roomId, title, category, imageHash} -> int
+PLEJD_FN_UPDATE_ROOM = "functions/updateRoom"  # {siteId, roomId, title?, order?, category?, imageHash?} -> bool
+PLEJD_FN_REMOVE_ROOM = "functions/removeRoom"  # {siteId, roomId} -> bool; cloud requires the room to be empty
 PLEJD_FN_SET_INPUT = "functions/setPlejdDeviceInputSetting"  # {siteId, deviceId, input, buttonType, ...} -> bool
+
+# Room.RoomCategory enum values, sent to createRoom/updateRoom's "category" field as-is
+# (the app does `.ToString()` on the enum). Excludes KidsRoom - the app itself marks it
+# obsolete ("old KidsRoom rooms now use Bedroom instead") and hides it from the picker.
+ROOM_CATEGORIES = (
+    "LivingRoom",
+    "Kitchen",
+    "Outdoor",
+    "Bedroom",
+    "Hallway",
+    "Bathroom",
+    "Office",
+    "Laundry",
+    "Storage",
+    "Other",
+    "Garage",
+)
 
 # ── Device types (Plejd.Shared HardwareType enum: id -> product name) ──
 HARDWARE_TYPES: dict[int, str] = {

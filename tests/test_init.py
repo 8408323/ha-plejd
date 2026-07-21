@@ -11,7 +11,9 @@ from plejd import (
     PLATFORMS,
     SERVICE_ADD_DEVICE,
     SERVICE_ALL_OFF,
+    SERVICE_REMOVE_ROOM,
     SERVICE_SCAN_DEVICES,
+    SERVICE_UPDATE_ROOM,
     async_setup_entry,
     async_unload_entry,
 )
@@ -526,6 +528,101 @@ async def test_all_off_service_calls_coordinator(monkeypatch):
     handler = hass.services._handlers[f"plejd.{SERVICE_ALL_OFF}"]
     await handler(types.SimpleNamespace(data={}))
     assert entry.runtime_data.all_off_calls == 1
+
+
+# ── Services: update_room / remove_room ───────────────────────────────────────
+#
+# async_update_room() / async_remove_room() themselves (cloud calls, precondition
+# checks, error paths) are unit-tested in test_manage_room.py. These tests only
+# cover that the services are registered and forward call.data correctly.
+
+
+async def test_update_room_service_is_registered_on_setup(monkeypatch):
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    _FakeCoordinator.instances.clear()
+    hass, entry = _hass(), _entry()
+    await async_setup_entry(hass, entry)
+    assert f"plejd.{SERVICE_UPDATE_ROOM}" in hass.services._handlers
+
+
+async def test_update_room_service_unregistered_on_unload(monkeypatch):
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    _FakeCoordinator.instances.clear()
+    hass, entry = _hass(), _entry()
+    unloads: list = []
+    entry.async_on_unload = unloads.append
+    await async_setup_entry(hass, entry)
+    assert f"plejd.{SERVICE_UPDATE_ROOM}" in hass.services._handlers
+    for unload in unloads:
+        unload()
+    assert f"plejd.{SERVICE_UPDATE_ROOM}" not in hass.services._handlers
+
+
+async def test_update_room_service_forwards_call_data(monkeypatch):
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    _FakeCoordinator.instances.clear()
+    hass, entry = _hass(), _entry()
+
+    update_room = AsyncMock()
+    monkeypatch.setattr(plejd, "async_update_room", update_room)
+
+    await async_setup_entry(hass, entry)
+    handler = hass.services._handlers[f"plejd.{SERVICE_UPDATE_ROOM}"]
+    call = types.SimpleNamespace(data={"room_id": "r1", "title": "Kök", "order": 2, "category": "Kitchen"})
+    await handler(call)
+
+    update_room.assert_awaited_once_with(hass, entry, room_id="r1", title="Kök", order=2, category="Kitchen")
+
+
+async def test_update_room_service_forwards_defaults(monkeypatch):
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    _FakeCoordinator.instances.clear()
+    hass, entry = _hass(), _entry()
+
+    update_room = AsyncMock()
+    monkeypatch.setattr(plejd, "async_update_room", update_room)
+
+    await async_setup_entry(hass, entry)
+    handler = hass.services._handlers[f"plejd.{SERVICE_UPDATE_ROOM}"]
+    await handler(types.SimpleNamespace(data={"room_id": "r1"}))
+
+    update_room.assert_awaited_once_with(hass, entry, room_id="r1", title=None, order=None, category=None)
+
+
+async def test_remove_room_service_is_registered_on_setup(monkeypatch):
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    _FakeCoordinator.instances.clear()
+    hass, entry = _hass(), _entry()
+    await async_setup_entry(hass, entry)
+    assert f"plejd.{SERVICE_REMOVE_ROOM}" in hass.services._handlers
+
+
+async def test_remove_room_service_unregistered_on_unload(monkeypatch):
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    _FakeCoordinator.instances.clear()
+    hass, entry = _hass(), _entry()
+    unloads: list = []
+    entry.async_on_unload = unloads.append
+    await async_setup_entry(hass, entry)
+    assert f"plejd.{SERVICE_REMOVE_ROOM}" in hass.services._handlers
+    for unload in unloads:
+        unload()
+    assert f"plejd.{SERVICE_REMOVE_ROOM}" not in hass.services._handlers
+
+
+async def test_remove_room_service_forwards_call_data(monkeypatch):
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    _FakeCoordinator.instances.clear()
+    hass, entry = _hass(), _entry()
+
+    remove_room = AsyncMock()
+    monkeypatch.setattr(plejd, "async_remove_room", remove_room)
+
+    await async_setup_entry(hass, entry)
+    handler = hass.services._handlers[f"plejd.{SERVICE_REMOVE_ROOM}"]
+    await handler(types.SimpleNamespace(data={"room_id": "r1"}))
+
+    remove_room.assert_awaited_once_with(hass, entry, room_id="r1")
 
 
 # ── Dashboard panel ───────────────────────────────────────────────────────────
