@@ -87,6 +87,7 @@ class PlejdCloudInput:
     device_id: str
     name: str
     address: int
+    input_index: int = 0  # which physical input on the device (Ingång 1/2); needed for async_set_input_setting
 
 
 @dataclass
@@ -451,13 +452,18 @@ def parse_site(site: dict) -> PlejdCloudSite:
     inputs: list[PlejdCloudInput] = []
     seen_addr: set[int] = set()
     for device_id, idx_map in input_address.items():
-        for addr in (idx_map or {}).values():
+        for idx_str, addr in (idx_map or {}).items():
             address = int(addr)
             if address in seen_addr:
                 continue
             seen_addr.add(address)
             inputs.append(
-                PlejdCloudInput(device_id=device_id, name=name_by_device.get(device_id) or "Button", address=address)
+                PlejdCloudInput(
+                    device_id=device_id,
+                    name=name_by_device.get(device_id) or "Button",
+                    address=address,
+                    input_index=int(idx_str),
+                )
             )
 
     motion: list[PlejdCloudMotion] = []

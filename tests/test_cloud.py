@@ -126,11 +126,20 @@ async def test_get_site_parses_devices():
     assert by_id["d3"].category == "cover" and by_id["d3"].model == "JAL-01"
     # scenes: only those with a sceneIndex entry are kept
     assert [(s.name, s.index) for s in site.scenes] == [("Movie", 3)]
-    # inputs: deduped by address; named from devices[]
-    assert sorted((i.address, i.name) for i in site.inputs) == [(11, "Kitchen"), (31, "Blind")]
+    # inputs: deduped by address; named from devices[]; input_index kept for later writes
+    assert sorted((i.address, i.name, i.input_index) for i in site.inputs) == [(11, "Kitchen", 0), (31, "Blind", 0)]
     # physical device addresses (for fault polling), keyed by device_id, incl. sensor w1
     assert site.device_addresses == {"d1": 1, "d2": 2, "d3": 3, "w1": 33}
     assert [(m.address, m.name) for m in site.motion] == [(33, "Motion sensor")]
+
+
+def test_parse_site_keeps_input_index_for_two_input_device():
+    # A real two-input device (distinct addresses per input, unlike d1's fixture above
+    # where both indices share one address and get deduped) must keep each input's own
+    # index, since async_set_input_setting needs it to target the right physical input.
+    site = {**_SITE, "inputAddress": {"d1": {"0": 11, "1": 12}}}
+    parsed = parse_site(site)
+    assert sorted((i.address, i.input_index) for i in parsed.inputs) == [(11, 0), (12, 1)]
 
 
 async def test_get_site_accepts_dict_result():
