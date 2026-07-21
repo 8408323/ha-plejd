@@ -52,6 +52,7 @@ _ADD_DEVICE_SCHEMA = vol.Schema(
         vol.Optional("hardware_id", default="0"): str,
         vol.Optional("room_id"): str,
         vol.Optional("room_title"): str,
+        vol.Optional("room_category"): str,
         vol.Optional("firmware_build_time", default=0): int,
         vol.Optional("input_settings", default=[]): [_INPUT_SETTING_SCHEMA],
     }
@@ -111,6 +112,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             hardware_id=call.data.get("hardware_id", "0"),
             room_id=call.data.get("room_id"),
             room_title=call.data.get("room_title"),
+            room_category=call.data.get("room_category"),
             firmware_build_time=int(call.data.get("firmware_build_time", 0)),
             input_settings=call.data.get("input_settings", []),
         )

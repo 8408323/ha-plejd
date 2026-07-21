@@ -50,6 +50,7 @@ async def async_add_device(
     hardware_id: str = "0",
     room_id: str | None = None,
     room_title: str | None = None,
+    room_category: str | None = None,
     firmware_build_time: int = 0,
     input_settings: list[dict] | None = None,
 ) -> None:
@@ -99,7 +100,16 @@ async def async_add_device(
     device_id = address.replace(":", "").lower()
     try:
         await async_commission_device(
-            http_session, token, site, ble_device, name, hardware_id, firmware_build_time, room_id, room_title
+            http_session,
+            token,
+            site,
+            ble_device,
+            name,
+            hardware_id,
+            firmware_build_time,
+            room_id,
+            room_title,
+            room_category,
         )
     except Exception as err:
         raise HomeAssistantError(f"Plejd commissioning failed: {err}") from err

@@ -396,19 +396,31 @@ class PlejdOptionsFlow(OptionsFlow):
         if user_input is not None:
             name = (user_input.get("name") or "").strip()
             room_title = (user_input.get("room_title") or "").strip() or None
+            room_category = (user_input.get("room_category") or "").strip() or None
             if not name:
                 errors["name"] = "name_required"
             else:
                 try:
                     await async_add_device(
-                        self.hass, self._entry, address=self._new_device_address, name=name, room_title=room_title
+                        self.hass,
+                        self._entry,
+                        address=self._new_device_address,
+                        name=name,
+                        room_title=room_title,
+                        room_category=room_category,
                     )
                 except HomeAssistantError as err:
                     errors["base"] = "add_device_failed"
                     description_placeholders["error"] = str(err)
                 else:
                     return self.async_create_entry(title="", data=dict(self._entry.options))
-        schema = vol.Schema({vol.Required("name"): str, vol.Optional("room_title", default=""): str})
+        schema = vol.Schema(
+            {
+                vol.Required("name"): str,
+                vol.Optional("room_title", default=""): str,
+                vol.Optional("room_category", default=""): str,
+            }
+        )
         return self.async_show_form(
             step_id="add_device_details",
             data_schema=schema,

@@ -41,6 +41,19 @@ add_device:
       required: false
       selector:
         text:
+    room_category:
+      name: Room category
+      description: >-
+        Category for a newly-created room (ignored if room_id is set or
+        room_title is omitted). Passed through to the Plejd cloud as-is;
+        defaults to "Other" if omitted. The exact set of category values the
+        app's own room-category picker uses is unconfirmed, so this is a free
+        text field rather than a dropdown - if you know the value the app
+        uses for the category you want (e.g. from your own experimentation),
+        enter it here.
+      required: false
+      selector:
+        text:
     firmware_build_time:
       name: Firmware build time
       description: >-

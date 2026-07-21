@@ -159,7 +159,8 @@
         "description": "Name the device found at {address}, and optionally put it in a new room.",
         "data": {
           "name": "Name",
-          "room_title": "New room (optional)"
+          "room_title": "New room (optional)",
+          "room_category": "New room category (optional, defaults to Other)"
         }
       },
       "dashboard": {
