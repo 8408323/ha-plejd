@@ -11,9 +11,11 @@ over the Plejd cloud. It co-exists with local BLE; the app prefers it when
 > see below) and the full pub/sub envelope, `MeshStateRequest`/`MeshStateReply`,
 > and raw `mesh.in`/`mesh.out` relay (**live-validated** 2026-07-21 against a real
 > GWY-01 + WireGuard-mode capture, see `docs/reverse_engineering.md`) are confirmed.
-> `cloud.plejd.com` (Parse `functions/*`, used for setup/auth, not this transport)
-> is certificate-pinned and blocks capturing anything on that separate host — see
-> `docs/reverse_engineering.md`'s Capture methods section.
+> `cloud.plejd.com` (Parse `functions/*`, used for setup/auth, not this transport) was
+> found certificate-pinned for at least two calls (a scene-save, a Semesterläge
+> fetch) — whether this also affects the login/`getSiteById` setup flow on that same
+> host is unconfirmed. See `docs/reverse_engineering.md`'s Capture methods section
+> before assuming either way.
 
 ## Transport at a glance
 
