@@ -121,7 +121,7 @@ async def test_add_device_commissions_and_reloads(monkeypatch):
     commissioned: list = []
 
     async def _fake_commission(
-        http_session, token, site, ble_device, name, hw="0", fw=0, room_id=None, room_title=None
+        http_session, token, site, ble_device, name, hw="0", fw=0, room_id=None, room_title=None, room_category=None
     ):
         commissioned.append({"name": name, "hw": hw, "room_id": room_id})
         return NewDeviceAddresses(device_address=5, output_addresses={0: 50})
@@ -224,6 +224,20 @@ async def test_add_device_passes_room_title_through_to_commission(monkeypatch):
     assert commission_mock.call_args[0][8] == "Bibliotek"
 
 
+async def test_add_device_passes_room_category_through_to_commission(monkeypatch):
+    hass = _hass(ble_devices={_ADDR: _device()})
+    monkeypatch.setattr("plejd.add_device.async_login", AsyncMock(return_value="tok"))
+    monkeypatch.setattr("plejd.add_device.async_get_site", AsyncMock(return_value=_site()))
+    commission_mock = AsyncMock(return_value=NewDeviceAddresses(device_address=5, output_addresses={}))
+    monkeypatch.setattr("plejd.add_device.async_commission_device", commission_mock)
+    monkeypatch.setattr("plejd.add_device.async_set_input_setting", AsyncMock())
+
+    await async_add_device(hass, _entry(), address=_ADDR, name="Taklampa", room_title="Garage", room_category="Garage")
+
+    assert commission_mock.call_args[0][8] == "Garage"
+    assert commission_mock.call_args[0][9] == "Garage"
+
+
 async def test_add_device_applies_input_settings(monkeypatch):
     hass = _hass(ble_devices={_ADDR: _device()})
     monkeypatch.setattr("plejd.add_device.async_login", AsyncMock(return_value="tok"))
@@ -298,7 +312,7 @@ async def test_add_device_auto_extracts_hw_and_build_time_from_advertisement(mon
     commissioned = []
 
     async def _fake_commission(
-        http_session, token, site, ble_device, name, hw="0", fw=0, room_id=None, room_title=None
+        http_session, token, site, ble_device, name, hw="0", fw=0, room_id=None, room_title=None, room_category=None
     ):
         commissioned.append({"hw": hw, "fw": fw})
         return NewDeviceAddresses(device_address=5, output_addresses={})

@@ -477,6 +477,58 @@ async def test_async_commission_device_creates_room_from_title(monkeypatch):
     assert captured[0][0].room_id == "room-uuid-1"
 
 
+async def test_async_commission_device_forwards_room_category(monkeypatch):
+    client = _mock_client()
+    client.read_gatt_char.side_effect = [bytes([1, 2, 3, 4, 5, 6, 7, 8]), bytes([0x02]), bytes([10])]
+    addresses = NewDeviceAddresses(device_address=10, output_addresses={})
+    session = MagicMock()
+    site = _site()
+
+    async def _fake_create(session, token, site_id, device_id, hw, fw, device_infos=None, **kw):
+        return addresses
+
+    import plejd.commission as cm
+
+    monkeypatch.setattr(cm, "async_get_needed_output_count", AsyncMock(return_value=1))
+    create_room = AsyncMock(return_value="room-uuid-1")
+    monkeypatch.setattr(cm, "async_create_room", create_room)
+    monkeypatch.setattr(cm, "async_create_device", _fake_create)
+    with (
+        patch("plejd.commission.establish_connection", return_value=client),
+        patch("plejd.commission.asyncio.sleep"),
+    ):
+        await async_commission_device(
+            session, "tok", site, _device(), "Hall", room_title="Garage", room_category="Garage"
+        )
+
+    create_room.assert_awaited_once_with(session, "tok", site.site_id, "Garage", category="Garage")
+
+
+async def test_async_commission_device_omits_category_kwarg_when_not_supplied(monkeypatch):
+    client = _mock_client()
+    client.read_gatt_char.side_effect = [bytes([1, 2, 3, 4, 5, 6, 7, 8]), bytes([0x02]), bytes([10])]
+    addresses = NewDeviceAddresses(device_address=10, output_addresses={})
+
+    async def _fake_create(session, token, site_id, device_id, hw, fw, device_infos=None, **kw):
+        return addresses
+
+    import plejd.commission as cm
+
+    monkeypatch.setattr(cm, "async_get_needed_output_count", AsyncMock(return_value=1))
+    create_room = AsyncMock(return_value="room-uuid-1")
+    monkeypatch.setattr(cm, "async_create_room", create_room)
+    monkeypatch.setattr(cm, "async_create_device", _fake_create)
+    with (
+        patch("plejd.commission.establish_connection", return_value=client),
+        patch("plejd.commission.asyncio.sleep"),
+    ):
+        await async_commission_device(MagicMock(), "tok", _site(), _device(), "Hall", room_title="Bibliotek")
+
+    # No category kwarg at all when the caller didn't supply one - async_create_room's
+    # own default ("Other") applies, this call site doesn't hardcode anything.
+    assert "category" not in create_room.await_args.kwargs
+
+
 async def test_async_commission_device_does_not_create_room_if_mesh_key_missing(monkeypatch):
     import plejd.commission as cm
 
