@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import types
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from homeassistant.exceptions import ConfigEntryAuthFailed, HomeAssistantError
+from homeassistant.exceptions import HomeAssistantError
 from plejd.cloud import PlejdAuthError, PlejdCloudError, PlejdCloudRoomInfo, PlejdCloudSite
 from plejd.manage_room import async_remove_room, async_update_room
 
@@ -43,7 +43,11 @@ def _hass():
 
 
 def _entry(data=None):
-    return types.SimpleNamespace(entry_id="e1", data=data or {"email": "u@x.com", "password": "pw", "site_id": "S1"})
+    return types.SimpleNamespace(
+        entry_id="e1",
+        data=data or {"email": "u@x.com", "password": "pw", "site_id": "S1"},
+        async_start_reauth=lambda hass: None,
+    )
 
 
 async def test_update_room_raises_with_no_fields(monkeypatch):
@@ -81,11 +85,16 @@ async def test_update_room_raises_on_get_site_failure(monkeypatch):
 
 
 async def test_update_room_triggers_reauth_on_stale_credentials(monkeypatch):
-    # A rejected password must start HA's reauth flow, not just fail the service call
-    # forever (#114 review) - mirrors coordinator.py's own PlejdAuthError handling.
+    # A rejected password must explicitly start HA's reauth flow (ConfigEntryAuthFailed
+    # alone only auto-triggers reauth from async_setup_entry/a coordinator's own update
+    # method, not an arbitrary service handler - #114 review), not just fail forever.
     monkeypatch.setattr("plejd.manage_room.async_login", AsyncMock(side_effect=PlejdAuthError("bad creds")))
-    with pytest.raises(ConfigEntryAuthFailed):
-        await async_update_room(_hass(), _entry(), room_id="r1", title="X")
+    hass = _hass()
+    entry = _entry()
+    entry.async_start_reauth = MagicMock()
+    with pytest.raises(HomeAssistantError, match="reauthentication started"):
+        await async_update_room(hass, entry, room_id="r1", title="X")
+    entry.async_start_reauth.assert_called_once_with(hass)
 
 
 async def test_update_room_raises_when_cloud_rejects_update(monkeypatch):
