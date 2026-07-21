@@ -6,8 +6,8 @@ import types
 from unittest.mock import AsyncMock
 
 import pytest
-from homeassistant.exceptions import HomeAssistantError
-from plejd.cloud import PlejdCloudError, PlejdCloudRoomInfo, PlejdCloudSite
+from homeassistant.exceptions import ConfigEntryAuthFailed, HomeAssistantError
+from plejd.cloud import PlejdAuthError, PlejdCloudError, PlejdCloudRoomInfo, PlejdCloudSite
 from plejd.manage_room import async_remove_room, async_update_room
 
 _KEY = bytes(range(16))
@@ -70,6 +70,21 @@ async def test_update_room_raises_if_room_not_found(monkeypatch):
 async def test_update_room_raises_on_login_failure(monkeypatch):
     monkeypatch.setattr("plejd.manage_room.async_login", AsyncMock(side_effect=PlejdCloudError("down")))
     with pytest.raises(HomeAssistantError, match="Plejd cloud error"):
+        await async_update_room(_hass(), _entry(), room_id="r1", title="X")
+
+
+async def test_update_room_raises_on_get_site_failure(monkeypatch):
+    monkeypatch.setattr("plejd.manage_room.async_login", AsyncMock(return_value="tok"))
+    monkeypatch.setattr("plejd.manage_room.async_get_site", AsyncMock(side_effect=PlejdCloudError("down")))
+    with pytest.raises(HomeAssistantError, match="Plejd cloud error"):
+        await async_update_room(_hass(), _entry(), room_id="r1", title="X")
+
+
+async def test_update_room_triggers_reauth_on_stale_credentials(monkeypatch):
+    # A rejected password must start HA's reauth flow, not just fail the service call
+    # forever (#114 review) - mirrors coordinator.py's own PlejdAuthError handling.
+    monkeypatch.setattr("plejd.manage_room.async_login", AsyncMock(side_effect=PlejdAuthError("bad creds")))
+    with pytest.raises(ConfigEntryAuthFailed):
         await async_update_room(_hass(), _entry(), room_id="r1", title="X")
 
 

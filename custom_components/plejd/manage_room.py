@@ -12,10 +12,10 @@ from dataclasses import asdict
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.exceptions import ConfigEntryAuthFailed, HomeAssistantError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .cloud import PlejdCloudError, async_get_site, async_login
+from .cloud import PlejdAuthError, PlejdCloudError, async_get_site, async_login
 from .cloud import async_remove_room as async_cloud_remove_room
 from .cloud import async_update_room as async_cloud_update_room
 from .const import (
@@ -36,6 +36,11 @@ async def _async_login_and_get_site(hass: HomeAssistant, entry: ConfigEntry):
     http_session = async_get_clientsession(hass)
     try:
         token = await async_login(http_session, entry.data[CONF_EMAIL], entry.data[CONF_PASSWORD])
+    except PlejdAuthError as err:
+        raise ConfigEntryAuthFailed("Plejd cloud credentials rejected") from err
+    except PlejdCloudError as err:
+        raise HomeAssistantError(f"Plejd cloud error: {err}") from err
+    try:
         site = await async_get_site(http_session, token, entry.data[CONF_SITE_ID])
     except PlejdCloudError as err:
         raise HomeAssistantError(f"Plejd cloud error: {err}") from err
