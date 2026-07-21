@@ -83,7 +83,14 @@ async def test_device_triggers_empty_for_unknown_device():
     hass = _hass(device_automations={})
     conn = _Conn()
     await dim_binding_ws.ws_device_triggers(hass, conn, {"id": 5, "device_id": "gone"})
-    assert conn.result == (5, {"triggers": [], "buttons": {"device_type": None, "source": "generic", "groups": []}})
+    assert conn.result == (
+        5,
+        {
+            "triggers": [],
+            "buttons": {"device_type": None, "source": "generic", "groups": []},
+            "device_kind": "remote",
+        },
+    )
 
 
 # ── "buttons" grouped view (device_triggers extension) ──────────────────────
@@ -162,6 +169,24 @@ async def test_device_triggers_buttons_prefers_custom_override_over_builtin_prof
     _, payload = conn.result
     assert payload["buttons"]["source"] == "custom"
     assert payload["buttons"]["groups"][0]["id"] == "my_button"
+
+
+async def test_device_triggers_reports_door_window_device_kind():
+    from homeassistant.helpers import entity_registry as er
+
+    trigs = [{"platform": "device", "type": "opened"}, {"platform": "device", "type": "closed"}]
+    hass = _hass(device_automations={"dev1": trigs})
+    hass.entity_registry = er.EntityRegistry(
+        {
+            "binary_sensor.front_door": types.SimpleNamespace(
+                entity_id="binary_sensor.front_door", device_id="dev1", device_class="door"
+            )
+        }
+    )
+    conn = _Conn()
+    await dim_binding_ws.ws_device_triggers(hass, conn, {"id": 5, "device_id": "dev1"})
+    _, payload = conn.result
+    assert payload["device_kind"] == "door_window"
 
 
 async def test_device_triggers_buttons_ignores_missing_device_in_registry():

@@ -5,18 +5,30 @@ from __future__ import annotations
 import types
 
 import pytest
+from homeassistant.helpers import entity_registry as er
 from plejd.remote_profiles import (
+    DEVICE_KIND_DOOR_WINDOW,
+    DEVICE_KIND_MOTION,
+    DEVICE_KIND_REMOTE,
     InvalidRemoteProfile,
     PlejdRemoteProfiles,
     build_buttons_view,
+    classify_device_kind,
     group_generic,
     humanize,
     match_builtin_profile,
 )
 
 
-def _hass(data=None):
-    return types.SimpleNamespace(data=data if data is not None else {})
+def _hass(data=None, entity_registry=None):
+    h = types.SimpleNamespace(data=data if data is not None else {})
+    if entity_registry is not None:
+        h.entity_registry = entity_registry
+    return h
+
+
+def _entity(entity_id, device_id, device_class=None):
+    return types.SimpleNamespace(entity_id=entity_id, device_id=device_id, device_class=device_class)
 
 
 # ── humanize ─────────────────────────────────────────────────────────────────
@@ -286,3 +298,56 @@ async def test_async_save_rejects_invalid_profile_shapes(profile):
     with pytest.raises(InvalidRemoteProfile):
         await profiles.async_save("dev1", profile)
     assert profiles.profiles == {}  # rejected before persisting
+
+
+# ── classify_device_kind ───────────────────────────────────────────────────────
+
+
+def test_classify_door_sensor():
+    registry = er.EntityRegistry({"binary_sensor.front_door": _entity("binary_sensor.front_door", "dev1", "door")})
+    assert classify_device_kind(_hass(entity_registry=registry), "dev1") == DEVICE_KIND_DOOR_WINDOW
+
+
+def test_classify_window_sensor():
+    registry = er.EntityRegistry(
+        {"binary_sensor.kitchen_window": _entity("binary_sensor.kitchen_window", "dev1", "window")}
+    )
+    assert classify_device_kind(_hass(entity_registry=registry), "dev1") == DEVICE_KIND_DOOR_WINDOW
+
+
+def test_classify_garage_door_and_opening_also_door_window():
+    for device_class in ("garage_door", "opening"):
+        registry = er.EntityRegistry({"binary_sensor.x": _entity("binary_sensor.x", "dev1", device_class)})
+        assert classify_device_kind(_hass(entity_registry=registry), "dev1") == DEVICE_KIND_DOOR_WINDOW
+
+
+def test_classify_motion_sensor():
+    registry = er.EntityRegistry({"binary_sensor.hall_motion": _entity("binary_sensor.hall_motion", "dev1", "motion")})
+    assert classify_device_kind(_hass(entity_registry=registry), "dev1") == DEVICE_KIND_MOTION
+
+
+def test_classify_occupancy_also_motion():
+    registry = er.EntityRegistry({"binary_sensor.x": _entity("binary_sensor.x", "dev1", "occupancy")})
+    assert classify_device_kind(_hass(entity_registry=registry), "dev1") == DEVICE_KIND_MOTION
+
+
+def test_classify_button_remote_has_no_binary_sensor():
+    # A real button remote has no binary_sensor entity at all - falls back to "remote".
+    registry = er.EntityRegistry({"event.remote_button": _entity("event.remote_button", "dev1", None)})
+    assert classify_device_kind(_hass(entity_registry=registry), "dev1") == DEVICE_KIND_REMOTE
+
+
+def test_classify_binary_sensor_with_other_device_class_falls_back_to_remote():
+    # A binary_sensor that isn't a door/window/motion class (e.g. "problem") doesn't
+    # match either bucket - falls back to the default rather than misclassifying it.
+    registry = er.EntityRegistry({"binary_sensor.x": _entity("binary_sensor.x", "dev1", "problem")})
+    assert classify_device_kind(_hass(entity_registry=registry), "dev1") == DEVICE_KIND_REMOTE
+
+
+def test_classify_ignores_entities_belonging_to_other_devices():
+    registry = er.EntityRegistry({"binary_sensor.other": _entity("binary_sensor.other", "dev2", "door")})
+    assert classify_device_kind(_hass(entity_registry=registry), "dev1") == DEVICE_KIND_REMOTE
+
+
+def test_classify_no_registry_falls_back_to_remote():
+    assert classify_device_kind(_hass(), "dev1") == DEVICE_KIND_REMOTE
