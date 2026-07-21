@@ -139,6 +139,18 @@ then extract + decompile as described above.
 `mitmdump -s tools/capture.py --listen-host 0.0.0.0 --listen-port 8888 --ssl-insecure`
 for the login → site → crypto-key calls. The BLE traffic does not cross the proxy.
 
+> **2026-07-21 update, read before relying on the recipe above:** a live capture
+> this session found `cloud.plejd.com` certificate-pinned for at least two Parse
+> `functions/*` calls (a scene-save and a Semesterläge fetch) — the connection
+> failed with "the client does not trust the proxy's certificate" even with the
+> mitmproxy CA otherwise trusted and working for every other host. **Login and
+> `getSiteById` were not re-tested this session** (the app was already holding a
+> cached session throughout), so it's unconfirmed whether pinning also affects the
+> login → site → crypto-key flow this section describes, or only some other subset
+> of `functions/*` calls. Try the recipe above first; if it fails the same way, the
+> whole Parse API needs a pinning bypass (e.g. Frida hooking the app's TLS/pinning
+> implementation), not just a mitmproxy CA install.
+
 **This HTTP-proxy mode cannot see the gateway/mesh-relay channel** (`wss://ws-ie.api.plejd.cloud`,
 see `docs/gateway_protocol.md`) — confirmed 2026-07-21 by watching a real settings
 change round-trip succeed in the app while producing zero proxy-visible traffic.
@@ -156,15 +168,9 @@ tunnel on. Run this on a host reachable from the phone's WiFi network — a WSL
 guest's own IP is typically NAT'd behind its Windows host and unreachable, so run
 it on the Windows host directly if capturing from WSL.
 
-**`cloud.plejd.com` (the Parse `functions/*` API — room/scene/device create-update-delete,
-input settings, etc., see `custom_components/plejd/cloud.py`'s `_call_function`) is
-certificate-pinned**, confirmed 2026-07-21: even with the mitmproxy CA otherwise
-trusted and working for every other host, a connection attempt to it fails with
-"the client does not trust the proxy's certificate." This blocks capturing *any*
-create/update/delete-style cloud call — a pinning bypass (e.g. Frida hooking the
-app's TLS/pinning implementation) is needed for that host specifically, independent
-of proxy vs. WireGuard mode. The gateway/mesh-relay channel above is a different
-host and is not pinned.
+This gateway/mesh-relay channel is a **different host** than the pinned
+`cloud.plejd.com` above and is not pinned — WireGuard mode was enough to capture
+it cleanly.
 
 ## Secrets
 
