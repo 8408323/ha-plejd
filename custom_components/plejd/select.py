@@ -17,13 +17,14 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 
-from .cloud import PlejdCloudDevice
+from .cloud import PlejdCloudDevice, PlejdCloudInput
 from .const import (
     BOOT_STATE_OPTIONS,
     CATEGORY_LIGHT,
     CATEGORY_SWITCH,
     CURVE_OPTIONS,
     DOMAIN,
+    INPUT_BUTTON_TYPE_OPTIONS,
     PHASE_DIM_HARDWARE,
     PHASE_DIM_OPTIONS,
     RELAY_CONFIG_HARDWARE,
@@ -33,7 +34,7 @@ from .coordinator import PlejdCoordinator
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> None:
-    """Set up Plejd dimmer-tuning selects (curve + phase edge + boot state + relay pole)."""
+    """Set up Plejd dimmer-tuning selects (curve + phase edge + boot state + relay pole + input button type)."""
     coordinator: PlejdCoordinator = entry.runtime_data
     entities: list[SelectEntity] = []
     for device in coordinator.devices:
@@ -48,6 +49,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
             entities.append(PlejdBootStateSelect(coordinator, device))
         if device.hardware_id in RELAY_CONFIG_HARDWARE:
             entities.append(PlejdRelayPoleSelect(coordinator, device))
+    for button in coordinator.inputs:
+        entities.append(PlejdInputButtonTypeSelect(coordinator, button))
     async_add_entities(entities)
 
 
@@ -222,3 +225,39 @@ class PlejdRelayPoleSelect(SelectEntity, RestoreEntity):
             if option != getattr(self, "_attr_current_option", None):
                 self._attr_current_option = option
                 self.async_write_ha_state()
+
+
+class PlejdInputButtonTypeSelect(SelectEntity, RestoreEntity):
+    """A wall-switch input's button-type setting (push-button vs. toggle).
+
+    Cloud-only, unlike the other selects here — the site payload has no readback for
+    this setting, so it's restore-state only until the user picks a value.
+    """
+
+    _attr_has_entity_name = True
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_translation_key = "input_button_type"
+    _attr_options = list(INPUT_BUTTON_TYPE_OPTIONS)
+
+    def __init__(self, coordinator: PlejdCoordinator, button: PlejdCloudInput) -> None:
+        self._coordinator = coordinator
+        self._button = button
+        self._attr_unique_id = f"input_{button.device_id}_{button.input_index}_button_type"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, button.device_id)},
+            name=button.name,
+            manufacturer="Plejd",
+        )
+
+    async def async_select_option(self, option: str) -> None:
+        await self._coordinator.async_set_input_button_type(
+            self._button.device_id, self._button.input_index, INPUT_BUTTON_TYPE_OPTIONS[option]
+        )
+        self._attr_current_option = option
+        self.async_write_ha_state()
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        last = await self.async_get_last_state()
+        if last is not None and last.state in INPUT_BUTTON_TYPE_OPTIONS:
+            self._attr_current_option = last.state

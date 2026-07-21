@@ -5,8 +5,14 @@ from __future__ import annotations
 import types
 
 from homeassistant.const import EntityCategory
-from plejd.cloud import PlejdCloudDevice
-from plejd.select import PlejdBootStateSelect, PlejdOutputSettingSelect, PlejdRelayPoleSelect, async_setup_entry
+from plejd.cloud import PlejdCloudDevice, PlejdCloudInput
+from plejd.select import (
+    PlejdBootStateSelect,
+    PlejdInputButtonTypeSelect,
+    PlejdOutputSettingSelect,
+    PlejdRelayPoleSelect,
+    async_setup_entry,
+)
 
 
 def _device(category="light", address=5, dimmable=True, output_index=0, hardware_id=1):
@@ -25,13 +31,19 @@ def _device(category="light", address=5, dimmable=True, output_index=0, hardware
     )
 
 
+def _button(device_id="b1", address=11, input_index=0):
+    return PlejdCloudInput(device_id=device_id, name="Kitchen switch", address=address, input_index=input_index)
+
+
 class _Coordinator:
-    def __init__(self, devices, settings=None):
+    def __init__(self, devices, settings=None, inputs=()):
         self.devices = devices
+        self.inputs = list(inputs)
         self.curve_calls = []
         self.phase_calls = []
         self.boot_state_calls = []
         self.relay_pole_calls = []
+        self.input_button_type_calls = []
         self._settings = settings
         self._listener = None
 
@@ -53,6 +65,9 @@ class _Coordinator:
 
     async def async_set_output_relay_config(self, address, output, config):
         self.relay_pole_calls.append((address, output, config))
+
+    async def async_set_input_button_type(self, device_id, input_index, button_type):
+        self.input_button_type_calls.append((device_id, input_index, button_type))
 
 
 async def test_setup_creates_selects_per_category():
@@ -430,4 +445,72 @@ async def test_relay_pole_listener_ignores_unknown_raw_value():
     await entity.async_added_to_hass()
     coord._settings = OutputSettings(relay_pole_config=99)
     coord._listener()
+    assert getattr(entity, "_attr_current_option", None) is None
+
+
+# ── PlejdInputButtonTypeSelect ────────────────────────────────────────────────
+
+
+async def test_setup_creates_one_select_per_input():
+    coord = _Coordinator([], inputs=[_button(device_id="b1"), _button(device_id="b2", address=12)])
+    entry = types.SimpleNamespace(runtime_data=coord)
+    added = []
+    await async_setup_entry(None, entry, lambda entities: added.extend(entities))
+    assert [e._attr_translation_key for e in added] == ["input_button_type", "input_button_type"]
+
+
+def test_input_button_type_options_and_unique_id():
+    entity = PlejdInputButtonTypeSelect(_Coordinator([]), _button())
+    assert entity._attr_entity_category == EntityCategory.CONFIG
+    assert entity._attr_options == ["push_button", "toggle"]
+    assert entity._attr_unique_id == "input_b1_0_button_type"
+
+
+def test_input_button_type_unique_id_includes_input_index():
+    entity = PlejdInputButtonTypeSelect(_Coordinator([]), _button(input_index=1))
+    assert entity._attr_unique_id == "input_b1_1_button_type"
+
+
+async def test_input_button_type_select_option_calls_coordinator():
+    coord = _Coordinator([])
+    entity = PlejdInputButtonTypeSelect(coord, _button(input_index=1))
+    await entity.async_select_option("toggle")
+    assert coord.input_button_type_calls == [("b1", 1, "Toggle")]
+    assert entity._attr_current_option == "toggle"
+
+    await entity.async_select_option("push_button")
+    assert coord.input_button_type_calls[-1] == ("b1", 1, "PushButton")
+    assert entity._attr_current_option == "push_button"
+
+
+async def test_input_button_type_restores_last_known_option():
+    entity = PlejdInputButtonTypeSelect(_Coordinator([]), _button())
+
+    async def _last():
+        return types.SimpleNamespace(state="toggle")
+
+    entity.async_get_last_state = _last
+    await entity.async_added_to_hass()
+    assert entity._attr_current_option == "toggle"
+
+
+async def test_input_button_type_ignores_unknown_restored_option():
+    entity = PlejdInputButtonTypeSelect(_Coordinator([]), _button())
+
+    async def _last():
+        return types.SimpleNamespace(state="bogus")
+
+    entity.async_get_last_state = _last
+    await entity.async_added_to_hass()
+    assert getattr(entity, "_attr_current_option", None) is None
+
+
+async def test_input_button_type_no_restored_state():
+    entity = PlejdInputButtonTypeSelect(_Coordinator([]), _button())
+
+    async def _last():
+        return None
+
+    entity.async_get_last_state = _last
+    await entity.async_added_to_hass()
     assert getattr(entity, "_attr_current_option", None) is None

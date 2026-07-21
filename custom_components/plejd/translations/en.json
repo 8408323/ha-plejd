@@ -88,6 +88,13 @@
           "two_pole": "Two-pole",
           "one_pole": "One-pole"
         }
+      },
+      "input_button_type": {
+        "name": "Button type",
+        "state": {
+          "push_button": "Push button",
+          "toggle": "Toggle switch"
+        }
       }
     },
     "button": {
