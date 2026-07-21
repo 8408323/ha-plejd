@@ -139,6 +139,33 @@ then extract + decompile as described above.
 `mitmdump -s tools/capture.py --listen-host 0.0.0.0 --listen-port 8888 --ssl-insecure`
 for the login → site → crypto-key calls. The BLE traffic does not cross the proxy.
 
+**This HTTP-proxy mode cannot see the gateway/mesh-relay channel** (`wss://ws-ie.api.plejd.cloud`,
+see `docs/gateway_protocol.md`) — confirmed 2026-07-21 by watching a real settings
+change round-trip succeed in the app while producing zero proxy-visible traffic.
+The app's networking stack for that one channel doesn't respect the system HTTP
+proxy setting, even though ordinary HTTPS (analytics, etc.) does. To capture it,
+run mitmproxy in **WireGuard mode** instead (intercepts at the IP layer, catching
+everything regardless of app-level proxy awareness):
+
+```
+mitmdump --mode wireguard --listen-host 0.0.0.0 --listen-port 51820 -s tools/capture.py
+```
+
+Import the generated client config into the WireGuard Android app and toggle the
+tunnel on. Run this on a host reachable from the phone's WiFi network — a WSL
+guest's own IP is typically NAT'd behind its Windows host and unreachable, so run
+it on the Windows host directly if capturing from WSL.
+
+**`cloud.plejd.com` (the Parse `functions/*` API — room/scene/device create-update-delete,
+input settings, etc., see `custom_components/plejd/cloud.py`'s `_call_function`) is
+certificate-pinned**, confirmed 2026-07-21: even with the mitmproxy CA otherwise
+trusted and working for every other host, a connection attempt to it fails with
+"the client does not trust the proxy's certificate." This blocks capturing *any*
+create/update/delete-style cloud call — a pinning bypass (e.g. Frida hooking the
+app's TLS/pinning implementation) is needed for that host specifically, independent
+of proxy vs. WireGuard mode. The gateway/mesh-relay channel above is a different
+host and is not pinned.
+
 ## Secrets
 
 The crypto key, account credentials, session tokens, BLE addresses, and all
