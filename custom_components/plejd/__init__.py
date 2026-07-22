@@ -19,6 +19,7 @@ from .coordinator import PlejdCoordinator
 from .discovery import async_bluetooth_available, async_scan_unprovisioned
 from .holiday_mode import DATA_HOLIDAY_MODE, PlejdHolidayMode
 from .manage_room import async_remove_room, async_update_room
+from .manage_scene import async_create_scene, async_remove_scene, async_update_scene
 from .remote_profiles import PlejdRemoteProfiles
 
 _WS_REGISTERED = f"{DOMAIN}_ws_registered"
@@ -45,8 +46,23 @@ SERVICE_SCAN_DEVICES = "scan_new_devices"
 SERVICE_ALL_OFF = "all_off"
 SERVICE_UPDATE_ROOM = "update_room"
 SERVICE_REMOVE_ROOM = "remove_room"
+SERVICE_CREATE_SCENE = "create_scene"
+SERVICE_UPDATE_SCENE = "update_scene"
+SERVICE_REMOVE_SCENE = "remove_scene"
 
 _INPUT_SETTING_SCHEMA = vol.Schema({vol.Required("input"): int, vol.Required("button_type"): str})
+
+_SCENE_STEP_SCHEMA = vol.Schema(
+    {
+        vol.Required("device_id"): str,
+        vol.Required("output"): int,
+        vol.Required("state"): vol.In(["On", "Off", "Temperature", "PWM", "Boost", "Frost"]),
+        vol.Required("value"): int,
+        vol.Optional("color_temperature"): int,
+        vol.Optional("coverable_tilt"): int,
+        vol.Optional("climate_boost_time"): int,
+    }
+)
 
 _ADD_DEVICE_SCHEMA = vol.Schema(
     {
@@ -71,6 +87,27 @@ _UPDATE_ROOM_SCHEMA = vol.Schema(
 )
 
 _REMOVE_ROOM_SCHEMA = vol.Schema({vol.Required("room_id"): str})
+
+_CREATE_SCENE_SCHEMA = vol.Schema(
+    {
+        vol.Required("title"): str,
+        vol.Required("scene_steps"): [_SCENE_STEP_SCHEMA],
+        vol.Optional("order", default=0): vol.All(int, vol.Range(min=0)),
+        vol.Optional("hidden_from_scene_list", default=False): bool,
+    }
+)
+
+_UPDATE_SCENE_SCHEMA = vol.Schema(
+    {
+        vol.Required("scene_id"): str,
+        vol.Optional("title"): str,
+        vol.Optional("order"): vol.All(int, vol.Range(min=0)),
+        vol.Optional("scene_steps"): [_SCENE_STEP_SCHEMA],
+        vol.Optional("hidden_from_scene_list"): bool,
+    }
+)
+
+_REMOVE_SCENE_SCHEMA = vol.Schema({vol.Required("scene_id"): str})
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -158,6 +195,30 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     async def _async_handle_remove_room(call) -> None:
         await async_remove_room(hass, entry, room_id=call.data["room_id"])
 
+    async def _async_handle_create_scene(call) -> None:
+        await async_create_scene(
+            hass,
+            entry,
+            title=call.data["title"],
+            scene_steps=call.data["scene_steps"],
+            order=call.data["order"],
+            hidden_from_scene_list=call.data["hidden_from_scene_list"],
+        )
+
+    async def _async_handle_update_scene(call) -> None:
+        await async_update_scene(
+            hass,
+            entry,
+            scene_id=call.data["scene_id"],
+            title=call.data.get("title"),
+            order=call.data.get("order"),
+            scene_steps=call.data.get("scene_steps"),
+            hidden_from_scene_list=call.data.get("hidden_from_scene_list"),
+        )
+
+    async def _async_handle_remove_scene(call) -> None:
+        await async_remove_scene(hass, entry, scene_id=call.data["scene_id"])
+
     hass.services.async_register(DOMAIN, SERVICE_ADD_DEVICE, _async_handle_add_device, schema=_ADD_DEVICE_SCHEMA)
     entry.async_on_unload(lambda: hass.services.async_remove(DOMAIN, SERVICE_ADD_DEVICE))
     hass.services.async_register(DOMAIN, SERVICE_SCAN_DEVICES, _async_handle_scan_devices)
@@ -168,6 +229,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     entry.async_on_unload(lambda: hass.services.async_remove(DOMAIN, SERVICE_UPDATE_ROOM))
     hass.services.async_register(DOMAIN, SERVICE_REMOVE_ROOM, _async_handle_remove_room, schema=_REMOVE_ROOM_SCHEMA)
     entry.async_on_unload(lambda: hass.services.async_remove(DOMAIN, SERVICE_REMOVE_ROOM))
+    hass.services.async_register(DOMAIN, SERVICE_CREATE_SCENE, _async_handle_create_scene, schema=_CREATE_SCENE_SCHEMA)
+    entry.async_on_unload(lambda: hass.services.async_remove(DOMAIN, SERVICE_CREATE_SCENE))
+    hass.services.async_register(DOMAIN, SERVICE_UPDATE_SCENE, _async_handle_update_scene, schema=_UPDATE_SCENE_SCHEMA)
+    entry.async_on_unload(lambda: hass.services.async_remove(DOMAIN, SERVICE_UPDATE_SCENE))
+    hass.services.async_register(DOMAIN, SERVICE_REMOVE_SCENE, _async_handle_remove_scene, schema=_REMOVE_SCENE_SCHEMA)
+    entry.async_on_unload(lambda: hass.services.async_remove(DOMAIN, SERVICE_REMOVE_SCENE))
 
     # Remote → light dim bindings (managed from the dashboard via the WebSocket API).
     # Optional, like the panel: a storage error must not stop the mesh/lights loading.

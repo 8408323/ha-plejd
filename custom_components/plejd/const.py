@@ -191,6 +191,13 @@ PLEJD_FN_CREATE_ROOM = "functions/createRoom"  # {siteId, roomId, title, categor
 PLEJD_FN_UPDATE_ROOM = "functions/updateRoom"  # {siteId, roomId, title?, order?, category?, imageHash?} -> bool
 PLEJD_FN_REMOVE_ROOM = "functions/removeRoom"  # {siteId, roomId} -> bool; cloud requires the room to be empty
 PLEJD_FN_SET_INPUT = "functions/setPlejdDeviceInputSetting"  # {siteId, deviceId, input, buttonType, ...} -> bool
+PLEJD_FN_CREATE_SCENE = (
+    "functions/createScene"  # {siteId, sceneId, title, order, sceneSteps, hiddenFromSceneList, settings} -> int
+)
+PLEJD_FN_UPDATE_SCENE = (
+    "functions/updateScene"  # {siteId, sceneId, title?|order?|sceneSteps?|hiddenFromSceneList?|settings?} -> bool
+)
+PLEJD_FN_REMOVE_SCENE = "functions/removeScene"  # {siteId, sceneId} -> bool
 
 # Room.RoomCategory enum values, sent to createRoom/updateRoom's "category" field as-is
 # (the app does `.ToString()` on the enum). Excludes KidsRoom - the app itself marks it
