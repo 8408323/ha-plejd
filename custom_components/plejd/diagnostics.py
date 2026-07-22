@@ -20,6 +20,7 @@ from .const import (
     CONF_DISCOVERED_ADDRESS,
     CONF_GATEWAYS,
     CONF_INSTALLATION_ID,
+    CONF_PENDING_ROOM_MOVES,
     CONF_RESOURCE_SET_ID,
     CONF_SCHEDULES,
     CONF_SITE_ID,
@@ -49,6 +50,11 @@ TO_REDACT = {
     "scene_id",
     # Schedule timings reveal occupancy/routine — redact wholesale (count reported below).
     CONF_SCHEDULES,
+    # move_device_to_room's own pending-moves cache is keyed BY device_id (a dict key,
+    # which async_redact_data can't redact - only values under a matching key name) and
+    # its values carry mesh addresses too - redact the whole structure wholesale rather
+    # than trying to name every nested field individually.
+    CONF_PENDING_ROOM_MOVES,
 }
 
 

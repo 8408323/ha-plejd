@@ -903,6 +903,14 @@ class PlejdCoordinator:
         """Trigger a Plejd scene (broadcast to address 0)."""
         await self._write_vector(protocol.execute_scene(0, index))
 
+    async def async_leave_mesh_group(self, address: int, room_address: int) -> None:
+        """Remove a device from a room's mesh group, as part of moving it to another room."""
+        await self._write_vector(protocol.leave_mesh_group(address, room_address))
+
+    async def async_join_mesh_group(self, address: int, room_address: int) -> None:
+        """Add a device to a room's mesh group, as part of moving it to another room."""
+        await self._write_vector(protocol.join_mesh_group(address, room_address))
+
     async def async_set_climate_setpoint(self, address: int, celsius: float) -> None:
         """Set a thermostat target temperature."""
         await self._write_vector(protocol.set_climate_setpoint(address, celsius))

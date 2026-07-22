@@ -350,7 +350,7 @@ def test_parse_site_device_addresses_drops_garbage_values():
     site = parse_site(
         {
             "plejdMesh": {"cryptoKey": "00" * 16},
-            "deviceAddress": {"d1": 5, "d2": "not-a-number", "d3": None},
+            "deviceAddress": {"d1": 5, "d2": "not-a-number", "d3": None, "d4": 300, "d5": -1, "d6": 0, "d7": True},
             "devices": [],
         }
     )
@@ -838,8 +838,9 @@ def test_parse_site_parses_rooms_with_group_addresses():
             {"roomId": "r1", "title": "Kitchen"},
             {"roomId": "r3", "title": "Empty room"},
         ],
-        # r2 is absent from rooms[] -> name falls back to "Room"; r4's address is non-int -> skipped
-        "roomAddress": {"r1": 14, "r2": 16, "r3": 99, "r4": "bad"},
+        # r2 is absent from rooms[] -> name falls back to "Room"; r4's address is non-int
+        # -> skipped; r5's is a bool (int subclass) -> also skipped, not silently coerced.
+        "roomAddress": {"r1": 14, "r2": 16, "r3": 99, "r4": "bad", "r5": True},
         # d1 (a LIGHT) belongs to both groups; both groups have only light members.
         "outputGroups": {"d1": {"0": [14, 16]}},
     }
@@ -873,14 +874,45 @@ def test_parse_site_all_rooms_includes_empty_and_non_light_rooms():
     assert set(by_id) == {"r1", "r3"}
     assert by_id["r1"].name == "Kitchen"
     assert by_id["r1"].has_devices is True  # d1/d2 (from _SITE's devices[]) have roomId "r1"
+    assert by_id["r1"].address == 14
     assert by_id["r3"].name == "Empty room"
     assert by_id["r3"].has_devices is False
+    # r3 has no light-group members so it's excluded from `rooms`, but move_device_to_room
+    # still needs its address to target the room even though it has no light entity.
+    assert by_id["r3"].address == 99
+
+
+def test_parse_site_all_rooms_address_is_none_for_a_malformed_room_address():
+    site = {
+        **_SITE,
+        "rooms": [{"roomId": "r1", "title": "Kitchen"}],
+        "roomAddress": {"r1": "not-a-number"},
+    }
+    all_rooms = parse_site(site).all_rooms
+    assert all_rooms[0].address is None
 
 
 def test_parse_site_all_rooms_skips_malformed_room_entries():
     site = {**_SITE, "rooms": [{"roomId": "r1", "title": "Kitchen"}, "not-a-dict", {"title": "no id"}, None]}
     all_rooms = parse_site(site).all_rooms
     assert [r.room_id for r in all_rooms] == ["r1"]
+
+
+def test_parse_site_all_rooms_includes_a_room_with_no_matching_rooms_entry():
+    # roomAddress/outputGroups can carry a room_id absent from rooms[] itself (e.g. after
+    # a partial deletion) - all_rooms's whole purpose is "every room on the site", so it
+    # must include that room too, not silently omit it.
+    site = {
+        **_SITE,
+        "rooms": [{"roomId": "r1", "title": "Kitchen"}],
+        "roomAddress": {"r1": 14, "r99": 16},  # r99 has no entry in rooms[] at all
+    }
+    all_rooms = parse_site(site).all_rooms
+    by_id = {r.room_id: r for r in all_rooms}
+    assert set(by_id) == {"r1", "r99"}
+    assert by_id["r99"].name == "Room"
+    assert by_id["r99"].address == 16
+    assert by_id["r99"].has_devices is False
 
 
 def test_parse_site_all_scenes_includes_scenes_missing_from_scene_index():
