@@ -208,6 +208,44 @@ async def test_move_device_leaves_old_room_and_joins_new(monkeypatch):
     assert moved["room_id"] == "r2"
 
 
+async def test_move_device_releases_the_manual_reload_guard_between_its_two_persists(monkeypatch):
+    # A successful move does two separate async_update_entry calls (the early pending-only
+    # persist, then the full one) - _async_reload_entry's own manual-reload/seen tracking
+    # assumes exactly one call per guarded window, so each of these two must see the guard
+    # freshly claimed (DATA_MANUAL_RELOAD_SEEN not yet set), not held open across both. If
+    # it were held open, the real update listener would treat the SECOND call as a
+    # genuinely concurrent change and queue an unnecessary extra reload every time.
+    from plejd import schedule_ws
+
+    hass = _hass()
+    entry = _entry()
+    site = _site(
+        devices=[_device(room_id="r1")],
+        device_addresses={"d1": 39},
+        all_rooms=[_room("r1", "Room A", address=14), _room("r2", "Room B", address=34)],
+    )
+    monkeypatch.setattr("plejd.manage_device_room.async_login", AsyncMock(return_value="tok"))
+    monkeypatch.setattr("plejd.manage_device_room.async_get_site", AsyncMock(side_effect=[site, site]))
+
+    guard_states = []
+    original_update_entry = hass.config_entries.async_update_entry
+
+    def _record_guard_state(entry, data):
+        guard_states.append(
+            (hass.data.get(schedule_ws.DATA_MANUAL_RELOAD), hass.data.get(schedule_ws.DATA_MANUAL_RELOAD_SEEN))
+        )
+        original_update_entry(entry, data)
+
+    hass.config_entries.async_update_entry = _record_guard_state
+
+    await async_move_device_to_room(hass, entry, device_id="d1", room_id="r2")
+
+    assert len(guard_states) == 2  # the early pending-only persist, then the full one
+    for manual_reload, seen in guard_states:
+        assert manual_reload == "e1"
+        assert seen is None  # each call sees a freshly-claimed guard, not one held from before
+
+
 async def test_move_device_joins_via_the_coordinator_current_at_join_time(monkeypatch):
     # entry.runtime_data must be read fresh for EACH mesh write, not cached once for both -
     # simulates an unrelated reload (e.g. an options edit) swapping in a new coordinator
@@ -352,6 +390,44 @@ async def test_move_device_prunes_a_non_light_pending_move_on_room_id_convergenc
     await async_move_device_to_room(hass, entry, device_id="e", room_id="r2")
 
     assert "d1" not in hass.data[DATA_PENDING_ROOM_MOVES][entry.entry_id]  # pruned: room_id alone was enough
+
+
+async def test_move_device_prunes_a_pending_move_for_a_device_removed_from_the_site(monkeypatch):
+    # A device removed from the site entirely (e.g. via remove_device) before its pending
+    # move converges never appears in fresh_site.devices at all - the pruning loop (which
+    # only iterates that list) would never visit it, so without an explicit check it would
+    # sit in `pending` forever, with its membership patch still being re-applied for a
+    # device that no longer exists.
+    hass = _hass()
+    entry = _entry()
+    r1 = PlejdCloudRoom(
+        room_id="r1", name="Room A", address=14, member_addresses=[39], dimmable=True, dimmable_addresses=[39]
+    )
+    site = _site(
+        devices=[_device(room_id="r1", address=39)],
+        device_addresses={"d1": 39},
+        all_rooms=[_room("r1", "Room A", address=14), _room("r2", "Room B", address=34)],
+        rooms=[r1],
+    )
+    monkeypatch.setattr("plejd.manage_device_room.async_login", AsyncMock(return_value="tok"))
+    monkeypatch.setattr("plejd.manage_device_room.async_get_site", AsyncMock(side_effect=[site, site]))
+    await async_move_device_to_room(hass, entry, device_id="d1", room_id="r2")
+    assert "d1" in hass.data[DATA_PENDING_ROOM_MOVES][entry.entry_id]
+
+    # A later, unrelated move: d1 has since been removed from the site entirely - it's
+    # absent from fresh_site.devices, but the cloud's stale room aggregate still lists it.
+    removed_site = _site(
+        devices=[_device(device_id="e", room_id="r1", address=99)],
+        device_addresses={"e": 99},
+        all_rooms=[_room("r1", "Room A", address=14), _room("r2", "Room B", address=34)],
+        rooms=[r1],
+    )
+    monkeypatch.setattr("plejd.manage_device_room.async_get_site", AsyncMock(side_effect=[removed_site, removed_site]))
+    await async_move_device_to_room(hass, entry, device_id="e", room_id="r2")
+
+    assert "d1" not in hass.data[DATA_PENDING_ROOM_MOVES][entry.entry_id]  # pruned: no longer on the site at all
+    rooms_by_id = {r["room_id"]: r for r in entry.data["rooms"]}
+    assert rooms_by_id["r1"]["member_addresses"] == [39]  # untouched: d1's stale entry isn't ours to patch anymore
 
 
 async def test_move_device_leaves_room_membership_untouched_when_output_address_unresolved(monkeypatch):

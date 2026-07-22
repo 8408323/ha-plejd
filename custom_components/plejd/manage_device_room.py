@@ -290,21 +290,23 @@ async def _async_refresh_and_reload(
     # pre-move cloud data and never sends a leave for the room the device is actually
     # already in - the safe failure mode is an "already in room" rejection on an exact
     # retry of the same move (still true, physically), not a silently wrong leave target.
+    # Persisted via the same self-contained, independently-guarded helper used for a
+    # pruned-before-raise entry (not folded into one continuous guard window with the
+    # later persist below) - _async_reload_entry's own manual-reload/seen/pending tracking
+    # assumes exactly one async_update_entry call per guarded window; two calls under a
+    # single window would make the SECOND one look like a genuinely concurrent change and
+    # queue an extra, unnecessary reload every time this function succeeds.
     pending[device_id] = this_move
-    # Claim the manual-reload up front (spanning the early persist below too, not just the
-    # later one) so the entry's update listener (_async_reload_entry) doesn't also reload
-    # for either of these data changes, racing this one - same guard schedule_ws's own
-    # _async_persist uses for the identical async_update_entry -> listener race.
+    await _async_persist_pending(hass, entry, pending)
+    try:
+        fresh_site = await async_get_site(http_session, token, entry.data[CONF_SITE_ID])
+    except PlejdCloudError as err:
+        raise HomeAssistantError(f"Plejd cloud error refreshing site: {err}") from err
+    # Claim the manual-reload so the entry's update listener (_async_reload_entry) doesn't
+    # also reload for this same data change, racing this one - same guard schedule_ws's
+    # own _async_persist uses for the identical async_update_entry -> listener race.
     hass.data[schedule_ws.DATA_MANUAL_RELOAD] = entry.entry_id
     try:
-        # Persisted here too, not just in memory - a restart between now and the full
-        # persist below (e.g. if the fetch that follows never completes) must not lose
-        # this move either; entry.data is what _pending_moves() reseeds from after one.
-        hass.config_entries.async_update_entry(entry, data={**entry.data, CONF_PENDING_ROOM_MOVES: dict(pending)})
-        try:
-            fresh_site = await async_get_site(http_session, token, entry.data[CONF_SITE_ID])
-        except PlejdCloudError as err:
-            raise HomeAssistantError(f"Plejd cloud error refreshing site: {err}") from err
         # Every device with a pending (not-yet-cloud-confirmed) move keeps its intended
         # room_id regardless of what this fresh cloud fetch says - not just the device
         # this particular call just moved - or an earlier move's own correction would get
@@ -323,6 +325,13 @@ async def _async_refresh_and_reload(
                     device_dicts.append({**asdict(d), "room_id": move["room_id"]})
                     continue
             device_dicts.append(asdict(d))
+        # A pending move for a device removed from the site entirely (e.g. via
+        # remove_device) before its move converges never appears in the loop above, so it
+        # would never get pruned there - drop it here too, or the membership patch below
+        # would keep re-applying a correction for a device that no longer exists, forever.
+        fresh_device_ids = {d.device_id for d in fresh_site.devices}
+        for stale_device_id in [dev_id for dev_id in pending if dev_id not in fresh_device_ids]:
+            del pending[stale_device_id]
         # Re-apply every still-pending device's own room-group membership patch too, not
         # just the room_id above - otherwise refreshing for one device's move would wipe
         # out an earlier, still-unconverged device's own membership correction, since this
