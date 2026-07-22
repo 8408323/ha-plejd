@@ -898,6 +898,23 @@ def test_parse_site_all_rooms_skips_malformed_room_entries():
     assert [r.room_id for r in all_rooms] == ["r1"]
 
 
+def test_parse_site_all_rooms_includes_a_room_with_no_matching_rooms_entry():
+    # roomAddress/outputGroups can carry a room_id absent from rooms[] itself (e.g. after
+    # a partial deletion) - all_rooms's whole purpose is "every room on the site", so it
+    # must include that room too, not silently omit it.
+    site = {
+        **_SITE,
+        "rooms": [{"roomId": "r1", "title": "Kitchen"}],
+        "roomAddress": {"r1": 14, "r99": 16},  # r99 has no entry in rooms[] at all
+    }
+    all_rooms = parse_site(site).all_rooms
+    by_id = {r.room_id: r for r in all_rooms}
+    assert set(by_id) == {"r1", "r99"}
+    assert by_id["r99"].name == "Room"
+    assert by_id["r99"].address == 16
+    assert by_id["r99"].has_devices is False
+
+
 def test_parse_site_all_scenes_includes_scenes_missing_from_scene_index():
     # all_scenes (for scene management) must not share `scenes`'s mesh-index filtering:
     # _SITE's sc2 has no sceneIndex entry, so it's excluded from `scenes` (used for

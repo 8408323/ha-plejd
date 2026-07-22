@@ -348,6 +348,39 @@ async def test_move_device_leaves_room_membership_untouched_when_output_address_
     assert rooms_by_id == {"r1": {**vars(old_room)}}  # left untouched, nothing resolvable to key off
 
 
+async def test_move_device_prunes_pending_move_with_unresolved_output_address_on_room_id_alone(monkeypatch):
+    # With no output address to key membership off, there's nothing for
+    # _room_membership_converged to check beyond room_id - it must not block pruning
+    # forever waiting on a membership signal that can never arrive for this device.
+    hass = _hass()
+    entry = _entry()
+    site = _site(
+        devices=[_device(room_id="r1", address=None, outputs=[])],
+        device_addresses={"d1": 39},
+        all_rooms=[_room("r1", "Kok", address=14), _room("r2", "Stora badrummet", address=34)],
+    )
+    monkeypatch.setattr("plejd.manage_device_room.async_login", AsyncMock(return_value="tok"))
+    monkeypatch.setattr("plejd.manage_device_room.async_get_site", AsyncMock(side_effect=[site, site]))
+    await async_move_device_to_room(hass, entry, device_id="d1", room_id="r2")
+    assert "d1" in hass.data[DATA_PENDING_ROOM_MOVES][entry.entry_id]
+
+    # A later, unrelated move: the cloud now reports "d1" already in "r2".
+    converged_site = _site(
+        devices=[
+            _device(device_id="d1", room_id="r2", address=None, outputs=[]),
+            _device(device_id="e", room_id="r1", address=99),
+        ],
+        device_addresses={"d1": 39, "e": 99},
+        all_rooms=[_room("r1", "Kok", address=14), _room("r2", "Stora badrummet", address=34)],
+    )
+    monkeypatch.setattr(
+        "plejd.manage_device_room.async_get_site", AsyncMock(side_effect=[converged_site, converged_site])
+    )
+    await async_move_device_to_room(hass, entry, device_id="e", room_id="r2")
+
+    assert "d1" not in hass.data[DATA_PENDING_ROOM_MOVES][entry.entry_id]  # pruned: room_id alone was enough
+
+
 async def test_move_device_does_not_synthesize_a_room_not_already_present(monkeypatch):
     # parse_site() can exclude a room from `rooms` for a real reason (no other light
     # member, or a non-light member sharing its group address) that this function has no
@@ -620,6 +653,53 @@ async def test_move_device_preserves_the_original_stale_room_across_a_chain_of_m
     assert rooms_by_id == {}  # r1 correctly stripped despite the cloud never showing the move
 
 
+async def test_move_device_strips_the_room_actually_left_when_membership_outpaces_room_id(monkeypatch):
+    # The opposite ordering from the test above: r1 -> r2's room-group MEMBERSHIP has
+    # already converged (the cloud's rooms snapshot now lists the device under r2) even
+    # though roomId hasn't yet. A second move (r2 -> r3) must strip the device from r2
+    # (where the cloud now ACTUALLY shows it), not from the original r1 - a fixed "old
+    # room" would incorrectly leave it cached as still belonging to r2.
+    hass = _hass()
+    entry = _entry()
+    all_rooms = [
+        _room("r1", "Kok", address=14),
+        _room("r2", "Stora badrummet", address=34),
+        _room("r3", "Sovrum", address=46),
+    ]
+    r1 = PlejdCloudRoom(
+        room_id="r1", name="Kok", address=14, member_addresses=[39], dimmable=True, dimmable_addresses=[39]
+    )
+    initial_site = _site(
+        devices=[_device(room_id="r1", address=39)],
+        device_addresses={"d1": 39},
+        all_rooms=all_rooms,
+        rooms=[r1],
+    )
+    monkeypatch.setattr("plejd.manage_device_room.async_login", AsyncMock(return_value="tok"))
+    monkeypatch.setattr("plejd.manage_device_room.async_get_site", AsyncMock(side_effect=[initial_site, initial_site]))
+    await async_move_device_to_room(hass, entry, device_id="d1", room_id="r2")
+
+    # Membership converged for the first move (r2 now lists 39) but roomId didn't (the
+    # device's own cloud record still says "r1").
+    r2_converged = PlejdCloudRoom(
+        room_id="r2", name="Stora badrummet", address=34, member_addresses=[39], dimmable=True, dimmable_addresses=[39]
+    )
+    partially_converged_site = _site(
+        devices=[_device(room_id="r1", address=39)],
+        device_addresses={"d1": 39},
+        all_rooms=all_rooms,
+        rooms=[r2_converged],  # r1 no longer lists it at all - only r2 does
+    )
+    monkeypatch.setattr(
+        "plejd.manage_device_room.async_get_site",
+        AsyncMock(side_effect=[partially_converged_site, partially_converged_site]),
+    )
+    await async_move_device_to_room(hass, entry, device_id="d1", room_id="r3")
+
+    rooms_by_id = {r["room_id"]: r for r in entry.data["rooms"]}
+    assert "r2" not in rooms_by_id  # correctly stripped from where the cloud NOW shows it
+
+
 async def test_move_device_keeps_pending_when_only_room_id_has_converged(monkeypatch):
     # A light move's room_id can converge slightly before its room-group membership does -
     # pruning the pending entry on room_id alone would stop re-patching a still-stale room.
@@ -656,6 +736,95 @@ async def test_move_device_keeps_pending_when_only_room_id_has_converged(monkeyp
     assert "d1" in hass.data[DATA_PENDING_ROOM_MOVES][entry.entry_id]  # membership still unconverged
     rooms_by_id = {r["room_id"]: r for r in entry.data["rooms"]}
     assert "r1" not in rooms_by_id  # patch still re-applied: 39 removed, emptying and dropping it
+
+
+async def test_move_device_keeps_pending_when_still_listed_in_another_room(monkeypatch):
+    # Membership converging means "added to the new room AND removed from every other
+    # one" - being added to r2 while still (also) listed in r1 is only half-converged and
+    # must not be pruned yet, or the r1 patch (dropping the now-stale member) would stop
+    # being re-applied.
+    hass = _hass()
+    entry = _entry()
+    all_rooms = [_room("r1", "Kok", address=14), _room("r2", "Stora badrummet", address=34)]
+    r1 = PlejdCloudRoom(
+        room_id="r1", name="Kok", address=14, member_addresses=[39], dimmable=True, dimmable_addresses=[39]
+    )
+    initial_site = _site(
+        devices=[_device(room_id="r1", address=39)],
+        device_addresses={"d1": 39},
+        all_rooms=all_rooms,
+        rooms=[r1],
+    )
+    monkeypatch.setattr("plejd.manage_device_room.async_login", AsyncMock(return_value="tok"))
+    monkeypatch.setattr("plejd.manage_device_room.async_get_site", AsyncMock(side_effect=[initial_site, initial_site]))
+    await async_move_device_to_room(hass, entry, device_id="d1", room_id="r2")
+
+    # A later, unrelated move: the cloud now shows 39 as a member of BOTH r1 and r2 - only
+    # half-converged, since a device only ever belongs to one room by the app's convention.
+    r1_still_listing_it = PlejdCloudRoom(
+        room_id="r1", name="Kok", address=14, member_addresses=[39], dimmable=True, dimmable_addresses=[39]
+    )
+    r2_now_listing_it = PlejdCloudRoom(
+        room_id="r2", name="Stora badrummet", address=34, member_addresses=[39], dimmable=True, dimmable_addresses=[39]
+    )
+    partially_converged_site = _site(
+        devices=[_device(device_id="d1", room_id="r2", address=39), _device(device_id="e", room_id="r1", address=99)],
+        device_addresses={"d1": 39, "e": 99},
+        all_rooms=all_rooms,
+        rooms=[r1_still_listing_it, r2_now_listing_it],
+    )
+    monkeypatch.setattr(
+        "plejd.manage_device_room.async_get_site",
+        AsyncMock(side_effect=[partially_converged_site, partially_converged_site]),
+    )
+    await async_move_device_to_room(hass, entry, device_id="e", room_id="r2")
+
+    assert "d1" in hass.data[DATA_PENDING_ROOM_MOVES][entry.entry_id]  # still listed elsewhere: not converged
+    rooms_by_id = {r["room_id"]: r for r in entry.data["rooms"]}
+    assert "r1" not in rooms_by_id  # patch still re-applied: 39 stripped from r1 again
+
+
+async def test_move_device_keeps_a_non_light_pending_move_while_destination_room_entity_exists(monkeypatch):
+    # A non-light move's patch only ever DROPS a stale room-light entity at the destination
+    # (never adds one) - so convergence means the cloud's own fresh fetch shows NO room
+    # entity there at all, not merely "our device isn't a member of it". A destination
+    # entity that still exists (e.g. with some other light member) means the cloud hasn't
+    # caught up yet, and pruning here would stop the drop from being re-applied.
+    hass = _hass()
+    entry = _entry()
+    site = _site(
+        devices=[_device(room_id="r1", category="switch", dimmable=False)],
+        device_addresses={"d1": 39},
+        all_rooms=[_room("r1", "Kok", address=14), _room("r2", "Stora badrummet", address=34)],
+    )
+    monkeypatch.setattr("plejd.manage_device_room.async_login", AsyncMock(return_value="tok"))
+    monkeypatch.setattr("plejd.manage_device_room.async_get_site", AsyncMock(side_effect=[site, site]))
+    await async_move_device_to_room(hass, entry, device_id="d1", room_id="r2")
+    assert "d1" in hass.data[DATA_PENDING_ROOM_MOVES][entry.entry_id]
+
+    # A later, unrelated move: room_id has converged, but r2's light-group entity (with some
+    # OTHER member, not d1's non-light output) still exists in the cloud's fresh fetch.
+    destination_room = PlejdCloudRoom(
+        room_id="r2", name="Stora badrummet", address=34, member_addresses=[50], dimmable=True, dimmable_addresses=[50]
+    )
+    partially_converged_site = _site(
+        devices=[
+            _device(device_id="d1", room_id="r2", category="switch", dimmable=False),
+            _device(device_id="e", room_id="r1", address=99),
+        ],
+        device_addresses={"d1": 39, "e": 99},
+        all_rooms=[_room("r1", "Kok", address=14), _room("r2", "Stora badrummet", address=34)],
+        rooms=[destination_room],
+    )
+    monkeypatch.setattr(
+        "plejd.manage_device_room.async_get_site",
+        AsyncMock(side_effect=[partially_converged_site, partially_converged_site]),
+    )
+    await async_move_device_to_room(hass, entry, device_id="e", room_id="r2")
+
+    assert "d1" in hass.data[DATA_PENDING_ROOM_MOVES][entry.entry_id]  # destination entity still exists: not converged
+    rooms_by_id = {r["room_id"]: r for r in entry.data["rooms"]}
+    assert "r2" not in rooms_by_id  # drop still re-applied: r2's stale light-group entity removed again
 
 
 async def test_move_device_skips_leave_when_device_has_no_current_room(monkeypatch):

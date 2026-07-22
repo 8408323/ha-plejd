@@ -769,6 +769,16 @@ def parse_site(site: dict) -> PlejdCloudSite:
         for r in raw_rooms
         if isinstance(r, dict) and isinstance(r.get("roomId"), str)
     ]
+    # roomAddress/outputGroups can carry a room_id absent from rooms[] itself (the same
+    # source `rooms` above already draws its own room_ids from) - all_rooms's whole
+    # purpose is "every room on the site", so it must include those too, not just ones
+    # with a matching rooms[] object.
+    known_room_ids = {r.room_id for r in all_rooms}
+    all_rooms += [
+        PlejdCloudRoomInfo(room_id=room_id, name="Room", has_devices=room_id in device_room_ids, address=addr)
+        for room_id, addr in room_group_address.items()
+        if room_id not in known_room_ids
+    ]
 
     meta = site.get("site") or site  # id/title are nested under "site" in the real payload
     device_addresses: dict[str, int] = {}

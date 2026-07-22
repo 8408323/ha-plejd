@@ -11,6 +11,19 @@ same as the cloud-mutation manage_*.py modules' own refresh cycle.
 This can't be fully atomic: if the join fails after the leave already
 succeeded (e.g. the mesh connection drops mid-operation), the device is left
 in no room until the operation is retried.
+
+Known, accepted limitation of the pending-moves cache below: it trusts "the room
+we ourselves last moved this device to" over the cloud for a device with a
+pending entry, so that a repeat move before the cloud converges doesn't
+re-derive "current room" from data already known to be stale. If the SAME
+device is ALSO moved via the Plejd app in that same narrow window (before this
+integration's own move converges), this cache has no way to detect that and
+would still act on its own (by then wrong) last-known room. Resolving this
+properly would need a way to read live mesh group membership directly, which
+isn't confirmed to exist - this integration only pushes mesh commands, it
+doesn't have a query path for them. Given the window is normally seconds (on a
+site with a gateway, the only setup this has been live-tested against), this is
+judged an acceptable tradeoff rather than something to chase further here.
 """
 
 from __future__ import annotations
@@ -41,19 +54,19 @@ from .const import (
 )
 
 # Our own not-yet-cloud-confirmed moves (hass.data[DATA_PENDING_ROOM_MOVES][entry_id] =
-# {device_id: {"room_id", "output_address", "is_light", "dimmable", "old_room_address",
-# "new_room_address"}}), scoped to this integration's own calls only - never populated
-# from a device's plain entry.data/cloud room_id. This is what lets a repeat move trust
-# "what we ourselves just did" without ALSO blindly trusting stale local data for a
-# device this integration never touched (which could have been moved by the app instead,
-# in which case the fresh cloud fetch is the authoritative one). Stores the full move,
-# not just the destination room_id, so a later refresh (for a still-different device's
-# move) can keep re-patching every pending device's own room-group membership too, not
-# just its roomId - otherwise an earlier still-unconverged move's membership patch would
-# get overwritten by the next refresh's fresh (stale) cloud snapshot. Deliberately
-# in-memory only: lost on an HA restart, which is fine - entry.data itself already holds
-# our last-written correction by then, this cache only informs the *next* call before
-# that happens.
+# {device_id: {"room_id", "output_address", "is_light", "dimmable", "new_room_address"}}),
+# scoped to this integration's own calls only - never populated from a device's plain
+# entry.data/cloud room_id. This is what lets a repeat move trust "what we ourselves just
+# did" without ALSO blindly trusting stale local data for a device this integration never
+# touched (which could have been moved by the app instead, in which case the fresh cloud
+# fetch is the authoritative one - see the module docstring's note on this cache's limits).
+# Stores the full move, not just the destination room_id, so a later refresh (for a
+# still-different device's move) can keep re-patching every pending device's own
+# room-group membership too, not just its roomId - otherwise an earlier still-unconverged
+# move's membership patch would get overwritten by the next refresh's fresh (stale) cloud
+# snapshot. Deliberately in-memory only: lost on an HA restart, which is fine - entry.data
+# itself already holds our last-written correction by then, this cache only informs the
+# *next* call before that happens.
 DATA_PENDING_ROOM_MOVES = f"{DOMAIN}_pending_room_moves"
 # Serializes concurrent move_device_to_room calls for the SAME device - two overlapping
 # calls could otherwise both read the same "current room" before either writes its own
@@ -95,7 +108,6 @@ def _patch_room_membership(
     output_address: int | None,
     is_light: bool,
     dimmable: bool,
-    old_room_address: int | None,
     new_room_address: int,
 ) -> list[PlejdCloudRoom]:
     """Locally correct the device's room-group membership for rooms already present.
@@ -106,6 +118,14 @@ def _patch_room_membership(
     member_addresses actually stores), not the device's own join/leave-command address -
     they can differ, since an output's address is preferred from outputAddress and only
     falls back to deviceAddress when missing.
+
+    Strips the output from EVERY room other than new_room_address - not a single tracked
+    "old" room - since a device only ever belongs to one room by the app's own convention;
+    whichever room this fresh cloud fetch currently (maybe only partially) lists it under
+    is exactly the stale membership to remove, whether that's the room it started in, an
+    intermediate hop in a chain of un-converged moves, or a room whose membership
+    converged before its roomId did. Tracking a single fixed "old room" address across
+    calls instead does NOT correctly handle either of those cases.
 
     PlejdCloudRoom is a light-only aggregate - parse_site() excludes a group entirely if
     it has any non-light member, since a group command would hit that member too. If the
@@ -128,7 +148,7 @@ def _patch_room_membership(
         return [r for r in rooms if r.address != new_room_address]
     patched = []
     for room in rooms:
-        if room.address == old_room_address and output_address in room.member_addresses:
+        if room.address != new_room_address and output_address in room.member_addresses:
             members = [m for m in room.member_addresses if m != output_address]
             if not members:
                 continue  # matches parse_site(): a room with no controllable outputs isn't kept
@@ -163,16 +183,24 @@ def _patch_room_membership(
 def _room_membership_converged(fresh_rooms: list[PlejdCloudRoom], move: dict) -> bool:
     """Whether the cloud's own rooms snapshot already reflects this move's membership.
 
-    A light move's room_id can converge slightly before its outputGroups membership
-    does (or vice versa) - pruning the pending entry on room_id alone could stop
-    re-patching membership for a still-stale room. Non-light moves have no membership
-    to converge (the patch only ever drops a stale entry for them), so room_id
-    convergence is the only signal available and is treated as sufficient.
+    For a light move: the output must be a member of new_room_address AND absent from
+    every OTHER room - a device only ever belongs to one room, so still being listed
+    anywhere else means membership hasn't fully caught up yet (it can converge slightly
+    before or after roomId does). A non-light move has no membership to add (only ever a
+    stale entry to defensively drop) - converged once the cloud's own view no longer has
+    ANY room entry at new_room_address either, matching what this module's own patch
+    already forces every round regardless of pending state.
     """
-    if not move["is_light"] or move["output_address"] is None:
+    if move["output_address"] is None:
         return True
-    room = next((r for r in fresh_rooms if r.address == move["new_room_address"]), None)
-    return room is not None and move["output_address"] in room.member_addresses
+    if not move["is_light"]:
+        return not any(r.address == move["new_room_address"] for r in fresh_rooms)
+    new_room = next((r for r in fresh_rooms if r.address == move["new_room_address"]), None)
+    if new_room is None or move["output_address"] not in new_room.member_addresses:
+        return False
+    return not any(
+        r.address != move["new_room_address"] and move["output_address"] in r.member_addresses for r in fresh_rooms
+    )
 
 
 async def _async_refresh_and_reload(
@@ -225,7 +253,6 @@ async def _async_refresh_and_reload(
                 output_address=move["output_address"],
                 is_light=move["is_light"],
                 dimmable=move["dimmable"],
-                old_room_address=move["old_room_address"],
                 new_room_address=move["new_room_address"],
             )
         hass.config_entries.async_update_entry(
@@ -324,18 +351,6 @@ async def async_move_device_to_room(hass: HomeAssistant, entry: ConfigEntry, *, 
             "output_address": output.address,
             "is_light": output.category == CATEGORY_LIGHT,
             "dimmable": output.dimmable,
-            # The ORIGINAL stale-cloud room, preserved across a chain of un-converged
-            # moves (e.g. r1->r2->r3) rather than overwritten with the latest hop - the
-            # cloud's rooms snapshot may still show the device in r1 (never having
-            # converged even the first move), and the membership patch needs r1, not r2,
-            # to correctly strip it back out. This is unrelated to the mesh commands
-            # above, which correctly target current_room_id (the latest known truth) -
-            # a different concept from "what the stale cloud still says".
-            "old_room_address": (
-                existing_pending["old_room_address"]
-                if existing_pending is not None
-                else (old_room.address if old_room is not None else None)
-            ),
             "new_room_address": new_room.address,
         }
 
