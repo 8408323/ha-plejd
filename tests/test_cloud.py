@@ -25,6 +25,7 @@ from plejd.cloud import (
     async_set_input_setting,
     async_update_room,
     async_update_scene,
+    async_update_time_event,
     parse_site,
 )
 from plejd.const import (
@@ -38,6 +39,7 @@ from plejd.const import (
     PLEJD_FN_SET_INPUT,
     PLEJD_FN_UPDATE_ROOM,
     PLEJD_FN_UPDATE_SCENE,
+    PLEJD_FN_UPDATE_TIME_EVENT,
     PLEJD_PARSE_URL,
 )
 
@@ -54,6 +56,7 @@ _UPDATE_SCENE = PLEJD_PARSE_URL + PLEJD_FN_UPDATE_SCENE
 _REMOVE_SCENE = PLEJD_PARSE_URL + PLEJD_FN_REMOVE_SCENE
 _REMOVE_DEVICE = PLEJD_PARSE_URL + PLEJD_FN_REMOVE_DEVICE
 _SET_INPUT = PLEJD_PARSE_URL + PLEJD_FN_SET_INPUT
+_UPDATE_TIME_EVENT = PLEJD_PARSE_URL + PLEJD_FN_UPDATE_TIME_EVENT
 
 _SITE = {
     "siteId": "S1",
@@ -1117,3 +1120,142 @@ def test_parse_site_room_dimmable_addresses_excludes_on_off_only_members():
     room = rooms[0]
     assert set(room.member_addresses) == {11, 61}
     assert room.dimmable_addresses == [11]  # d1 is dimmable; d6 (traits=0) is on/off only
+
+
+async def test_update_time_event_sends_minimal_payload_without_night_reduction():
+    from aioresponses import CallbackResult
+
+    captured: dict = {}
+
+    def _capture(url, **kwargs):
+        captured.update(kwargs.get("json", {}))
+        return CallbackResult(payload={"result": {"targetDevices": [{"deviceId": "d1", "index": 0}], "eventId": "te1"}})
+
+    with aioresponses() as m:
+        m.post(_UPDATE_TIME_EVENT, callback=_capture)
+        async with aiohttp.ClientSession() as s:
+            result = await async_update_time_event(
+                s,
+                "tok",
+                "site1",
+                "te1",
+                "scene1",
+                scheduled_days=[0, 1, 2, 3, 4, 5, 6],
+                fade_time=0,
+                activated=True,
+                start_event="sunset",
+                start_offset=15,
+                end_event="sunrise",
+                end_offset=0,
+            )
+    assert result == {"targetDevices": [{"deviceId": "d1", "index": 0}], "eventId": "te1"}
+    assert captured == {
+        "siteId": "site1",
+        "timeEventId": "te1",
+        "sceneId": "scene1",
+        "scheduledDays": [0, 1, 2, 3, 4, 5, 6],
+        "fadeTime": 0,
+        "activated": True,
+        "dirtyDevices": [],
+        "dirtyRemovedDevices": [],
+        "dirtyRemove": False,
+        "mode": "astro",
+        "version": 3,
+        "start": {"event": "sunset", "offset": 15},
+        "end": {"event": "sunrise", "offset": 0},
+    }
+
+
+async def test_update_time_event_sends_dirty_devices_and_night_reduction():
+    from aioresponses import CallbackResult
+
+    captured: dict = {}
+
+    def _capture(url, **kwargs):
+        captured.update(kwargs.get("json", {}))
+        return CallbackResult(payload={"result": {"targetDevices": [], "eventId": "te1"}})
+
+    with aioresponses() as m:
+        m.post(_UPDATE_TIME_EVENT, callback=_capture)
+        async with aiohttp.ClientSession() as s:
+            await async_update_time_event(
+                s,
+                "tok",
+                "site1",
+                "te1",
+                "scene1",
+                scheduled_days=[0],
+                fade_time=2,
+                activated=False,
+                start_event="sunset",
+                start_offset=15,
+                end_event="sunrise",
+                end_offset=0,
+                dirty_devices=["d1"],
+                night_reduction={
+                    "scene_id": "night1",
+                    "start_time": "23:15",
+                    "end_time": "05:30",
+                    "weekend_start_time": "23:59",
+                    "weekend_end_time": "06:50",
+                },
+            )
+    assert captured["dirtyDevices"] == ["d1"]
+    assert captured["nightReduction"] == {
+        "startTime": "23:15",
+        "endTime": "05:30",
+        "sceneId": "night1",
+        "weekendDeviation": {"startTime": "23:59", "endTime": "06:50"},
+    }
+
+
+async def test_update_time_event_night_reduction_without_weekend_deviation():
+    from aioresponses import CallbackResult
+
+    captured: dict = {}
+
+    def _capture(url, **kwargs):
+        captured.update(kwargs.get("json", {}))
+        return CallbackResult(payload={"result": {"targetDevices": [], "eventId": "te1"}})
+
+    with aioresponses() as m:
+        m.post(_UPDATE_TIME_EVENT, callback=_capture)
+        async with aiohttp.ClientSession() as s:
+            await async_update_time_event(
+                s,
+                "tok",
+                "site1",
+                "te1",
+                "scene1",
+                scheduled_days=[0],
+                fade_time=0,
+                activated=True,
+                start_event="sunset",
+                start_offset=15,
+                end_event="sunrise",
+                end_offset=0,
+                night_reduction={"scene_id": "night1", "start_time": "23:15", "end_time": "05:30"},
+            )
+    assert captured["nightReduction"] == {"startTime": "23:15", "endTime": "05:30", "sceneId": "night1"}
+    assert "weekendDeviation" not in captured["nightReduction"]
+
+
+async def test_update_time_event_rejects_malformed_result():
+    with aioresponses() as m:
+        m.post(_UPDATE_TIME_EVENT, payload={"result": True})
+        async with aiohttp.ClientSession() as s:
+            result = await async_update_time_event(
+                s,
+                "tok",
+                "site1",
+                "te1",
+                "scene1",
+                scheduled_days=[0],
+                fade_time=0,
+                activated=True,
+                start_event="sunset",
+                start_offset=15,
+                end_event="sunrise",
+                end_offset=0,
+            )
+    assert result is None

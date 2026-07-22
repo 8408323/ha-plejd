@@ -133,6 +133,17 @@ WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 CONF_SCHEDULES = "schedules"  # entry.options: list of time-event schedule dicts
 CONF_SHOW_PANEL = "show_panel"  # entry.options: show the Plejd dashboard in the sidebar (default True)
 
+# Plejd-cloud schedules (the app's "Schemaläggning": astro-relative sunset/sunrise triggers
+# plus an optional night-reduction quiet-hours window) — a separate, cloud-only feature from
+# the on-device weekly time-events above (CONF_SCHEDULES, CMD_TIME_EVENT_*): confirmed via a
+# live capture to never touch the BLE mesh, instead updating one TimeEvent Parse object plus
+# one or two ordinary (hidden) scenes it runs. Only "astro" mode was captured; a fixed-clock
+# trigger mode's wire shape is unconfirmed and not implemented.
+CONF_CLOUD_SCHEDULES = "cloud_schedules"  # entry.data: schedules created via this integration
+SCHEDULE_ASTRO_EVENTS = ("sunset", "sunrise")
+SCHEDULE_OFFSET_MIN = -120
+SCHEDULE_OFFSET_MAX = 120
+
 # Holiday mode (presence simulation, the Plejd app's "Semesterläge") — entry.options.
 CONF_HOLIDAY_LIGHTS = "holiday_lights"  # target light entity_ids; empty/absent = all Plejd lights
 CONF_HOLIDAY_WINDOW_START = "holiday_window_start"  # "HH:MM", start of the active window
@@ -204,6 +215,11 @@ PLEJD_FN_UPDATE_SCENE = (
 )
 PLEJD_FN_REMOVE_SCENE = "functions/removeScene"  # {siteId, sceneId} -> bool
 PLEJD_FN_REMOVE_DEVICE = "functions/removeDevice"  # {siteId, deviceId} -> bool
+PLEJD_FN_UPDATE_TIME_EVENT = (
+    "functions/updateTimeEvent_V3"  # {siteId, timeEventId, sceneId, scheduledDays, fadeTime,
+    # activated, dirtyDevices, dirtyRemovedDevices, dirtyRemove, mode, version, start, end,
+    # nightReduction?} -> {targetDevices, eventId}; whole-state call, resent in full each edit
+)
 
 # Room.RoomCategory enum values, sent to createRoom/updateRoom's "category" field as-is
 # (the app does `.ToString()` on the enum). Excludes KidsRoom - the app itself marks it

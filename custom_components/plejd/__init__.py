@@ -14,7 +14,14 @@ from homeassistant.helpers import device_registry
 from . import dim_binding_ws, panel, remote_profile_ws, schedule_ws
 from .add_device import async_add_device
 from .bindings import PlejdDimBindings
-from .const import CONF_SHOW_PANEL, DOMAIN, ROOM_CATEGORIES
+from .const import (
+    CONF_SHOW_PANEL,
+    DOMAIN,
+    ROOM_CATEGORIES,
+    SCHEDULE_ASTRO_EVENTS,
+    SCHEDULE_OFFSET_MAX,
+    SCHEDULE_OFFSET_MIN,
+)
 from .coordinator import PlejdCoordinator
 from .discovery import async_bluetooth_available, async_scan_unprovisioned
 from .holiday_mode import DATA_HOLIDAY_MODE, PlejdHolidayMode
@@ -22,6 +29,7 @@ from .manage_device import async_remove_device
 from .manage_device_room import async_move_device_to_room
 from .manage_room import async_remove_room, async_update_room
 from .manage_scene import async_create_scene, async_remove_scene, async_update_scene
+from .manage_schedule import async_create_schedule, async_update_schedule
 from .remote_profiles import PlejdRemoteProfiles
 
 _WS_REGISTERED = f"{DOMAIN}_ws_registered"
@@ -58,6 +66,8 @@ SERVICE_UPDATE_SCENE = "update_scene"
 SERVICE_REMOVE_SCENE = "remove_scene"
 SERVICE_REMOVE_DEVICE = "remove_device"
 SERVICE_MOVE_DEVICE_TO_ROOM = "move_device_to_room"
+SERVICE_CREATE_SCHEDULE = "create_schedule"
+SERVICE_UPDATE_SCHEDULE = "update_schedule"
 
 _INPUT_SETTING_SCHEMA = vol.Schema({vol.Required("input"): int, vol.Required("button_type"): str})
 
@@ -121,6 +131,48 @@ _REMOVE_SCENE_SCHEMA = vol.Schema({vol.Required("scene_id"): str})
 _REMOVE_DEVICE_SCHEMA = vol.Schema({vol.Required("device_id"): str})
 
 _MOVE_DEVICE_TO_ROOM_SCHEMA = vol.Schema({vol.Required("device_id"): str, vol.Required("room_id"): str})
+
+_SCHEDULE_OFFSET_VALIDATOR = vol.All(int, vol.Range(min=SCHEDULE_OFFSET_MIN, max=SCHEDULE_OFFSET_MAX))
+
+_NIGHT_REDUCTION_SCHEMA = vol.Schema(
+    {
+        vol.Required("scene_steps"): [_SCENE_STEP_SCHEMA],
+        vol.Required("start_time"): str,
+        vol.Required("end_time"): str,
+        vol.Optional("weekend_start_time"): str,
+        vol.Optional("weekend_end_time"): str,
+    }
+)
+
+_CREATE_SCHEDULE_SCHEMA = vol.Schema(
+    {
+        vol.Required("title"): str,
+        vol.Required("scene_steps"): [_SCENE_STEP_SCHEMA],
+        vol.Required("start_event"): vol.In(SCHEDULE_ASTRO_EVENTS),
+        vol.Required("start_offset"): _SCHEDULE_OFFSET_VALIDATOR,
+        vol.Required("end_event"): vol.In(SCHEDULE_ASTRO_EVENTS),
+        vol.Required("end_offset"): _SCHEDULE_OFFSET_VALIDATOR,
+        vol.Optional("scheduled_days"): [vol.All(int, vol.Range(min=0, max=6))],
+        vol.Optional("fade_time", default=0): vol.All(int, vol.Range(min=0)),
+        vol.Optional("night_reduction"): _NIGHT_REDUCTION_SCHEMA,
+    }
+)
+
+_UPDATE_SCHEDULE_SCHEMA = vol.Schema(
+    {
+        vol.Required("schedule_id"): str,
+        vol.Optional("title"): str,
+        vol.Optional("scene_steps"): [_SCENE_STEP_SCHEMA],
+        vol.Optional("start_event"): vol.In(SCHEDULE_ASTRO_EVENTS),
+        vol.Optional("start_offset"): _SCHEDULE_OFFSET_VALIDATOR,
+        vol.Optional("end_event"): vol.In(SCHEDULE_ASTRO_EVENTS),
+        vol.Optional("end_offset"): _SCHEDULE_OFFSET_VALIDATOR,
+        vol.Optional("scheduled_days"): [vol.All(int, vol.Range(min=0, max=6))],
+        vol.Optional("fade_time"): vol.All(int, vol.Range(min=0)),
+        vol.Optional("activated"): bool,
+        vol.Optional("night_reduction"): _NIGHT_REDUCTION_SCHEMA,
+    }
+)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -217,6 +269,40 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             hass, current_entry, device_id=call.data["device_id"], room_id=call.data["room_id"]
         )
 
+    async def _async_handle_create_schedule(call) -> None:
+        current_entry = hass.data[_DATA_CURRENT_ENTRY]
+        await async_create_schedule(
+            hass,
+            current_entry,
+            title=call.data["title"],
+            scene_steps=call.data["scene_steps"],
+            start_event=call.data["start_event"],
+            start_offset=call.data["start_offset"],
+            end_event=call.data["end_event"],
+            end_offset=call.data["end_offset"],
+            scheduled_days=call.data.get("scheduled_days"),
+            fade_time=call.data["fade_time"],
+            night_reduction=call.data.get("night_reduction"),
+        )
+
+    async def _async_handle_update_schedule(call) -> None:
+        current_entry = hass.data[_DATA_CURRENT_ENTRY]
+        await async_update_schedule(
+            hass,
+            current_entry,
+            schedule_id=call.data["schedule_id"],
+            title=call.data.get("title"),
+            scene_steps=call.data.get("scene_steps"),
+            start_event=call.data.get("start_event"),
+            start_offset=call.data.get("start_offset"),
+            end_event=call.data.get("end_event"),
+            end_offset=call.data.get("end_offset"),
+            scheduled_days=call.data.get("scheduled_days"),
+            fade_time=call.data.get("fade_time"),
+            activated=call.data.get("activated"),
+            night_reduction=call.data.get("night_reduction"),
+        )
+
     # Registered once per hass lifetime, before coordinator.async_start(), and NOT torn
     # down by entry.async_on_unload: HA runs every already-registered on_unload callback
     # as cleanup when async_setup_entry raises ConfigEntryNotReady (same path a failed
@@ -245,6 +331,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _register_once(SERVICE_REMOVE_SCENE, _async_handle_remove_scene, _REMOVE_SCENE_SCHEMA)
     _register_once(SERVICE_REMOVE_DEVICE, _async_handle_remove_device, _REMOVE_DEVICE_SCHEMA)
     _register_once(SERVICE_MOVE_DEVICE_TO_ROOM, _async_handle_move_device_to_room, _MOVE_DEVICE_TO_ROOM_SCHEMA)
+    _register_once(SERVICE_CREATE_SCHEDULE, _async_handle_create_schedule, _CREATE_SCHEDULE_SCHEMA)
+    _register_once(SERVICE_UPDATE_SCHEDULE, _async_handle_update_schedule, _UPDATE_SCHEDULE_SCHEMA)
 
     # Register the sidebar dashboard before starting the coordinator. It's optional, so a
     # failure (e.g. another panel already owns the `plejd` url path) must not abort setup —

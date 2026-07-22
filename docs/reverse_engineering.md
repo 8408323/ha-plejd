@@ -173,6 +173,31 @@ This gateway/mesh-relay channel is a **different host** than the pinned
 `cloud.plejd.com` above and is not pinned — WireGuard mode was enough to capture
 it cleanly.
 
+> **2026-07-22 update — the `cloud.plejd.com` pinning wall above is now bypassable.**
+> Live-confirmed cause: the app's HttpClient on Android routes through the
+> platform's legacy `com.android.okhttp`/Conscrypt stack (not modern OkHttp3),
+> and certificate validation ultimately goes through the app's own .NET-on-Android
+> trust manager binding, `net.dot.android.crypto.DotnetProxyTrustManager`
+> (`checkServerTrusted`/`checkClientTrusted`). A Frida script hooking that class's
+> methods (plus `com.android.okhttp.CertificatePinner.check`/`check$okhttp` and
+> `com.android.org.conscrypt.TrustManagerImpl.checkTrustedRecursive`/`verifyChain`
+> defensively, since which one actually gates a given call wasn't worth narrowing
+> down further) to no-op/pass-through made the app accept mitmproxy's certificate
+> for `cloud.plejd.com`, decrypting the Parse `functions/*` calls cleanly.
+>
+> Setup: push a matching `frida-server` build to `/data/local/tmp/`, run it as
+> root (`su -c '/data/local/tmp/frida-server &'`), then either spawn the app fresh
+> (`frida -U -f com.plejd.plejdapp -l bypass.js`) or attach to an already-running
+> instance (`frida -U -n Plejd -l bypass.js`) — spawning hit an unexplained
+> "timed out while waiting for app to launch" a couple of times on this device/OS
+> combo (Android 10, SDK 29) even though the process came up fine per `ps`;
+> attaching to the already-running app worked reliably instead. Enumerate
+> `Java.enumerateLoadedClassesSync()` filtered on TLS-related names first to
+> confirm which trust-manager classes are actually loaded before writing hooks -
+> this app has no `okhttp3.*` classes loaded at all, so hooking only the modern
+> OkHttp3 API (the usual first guess for "Android SSL pinning bypass" scripts)
+> silently does nothing.
+
 ## Secrets
 
 The crypto key, account credentials, session tokens, BLE addresses, and all

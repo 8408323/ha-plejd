@@ -34,6 +34,7 @@ from .const import (
     PLEJD_FN_UPDATE_DEVICE,
     PLEJD_FN_UPDATE_ROOM,
     PLEJD_FN_UPDATE_SCENE,
+    PLEJD_FN_UPDATE_TIME_EVENT,
     PLEJD_PARSE_APP_ID,
     PLEJD_PARSE_LOGIN,
     PLEJD_PARSE_URL,
@@ -519,6 +520,64 @@ async def async_remove_scene(session: ClientSession, token: str, site_id: str, s
     """Remove a scene."""
     result = await _call_function(session, token, PLEJD_FN_REMOVE_SCENE, {"siteId": site_id, "sceneId": scene_id})
     return result is True
+
+
+async def async_update_time_event(
+    session: ClientSession,
+    token: str,
+    site_id: str,
+    schedule_id: str,
+    scene_id: str,
+    *,
+    scheduled_days: list[int],
+    fade_time: int,
+    activated: bool,
+    start_event: str,
+    start_offset: int,
+    end_event: str,
+    end_offset: int,
+    dirty_devices: list[str] | None = None,
+    night_reduction: dict | None = None,
+) -> dict | None:
+    """Create or update a cloud schedule's astro trigger (updateTimeEvent_V3).
+
+    Confirmed to be a whole-state call: the caller must resend every field on each edit,
+    not just what changed. night_reduction, if given: {"scene_id", "start_time", "end_time",
+    "weekend_start_time"?, "weekend_end_time"?}. Returns the cloud's {targetDevices, eventId}
+    result, or None if rejected.
+    """
+    params: dict[str, object] = {
+        "siteId": site_id,
+        "timeEventId": schedule_id,
+        "sceneId": scene_id,
+        "scheduledDays": scheduled_days,
+        "fadeTime": fade_time,
+        "activated": activated,
+        "dirtyDevices": dirty_devices or [],
+        "dirtyRemovedDevices": [],
+        "dirtyRemove": False,
+        "mode": "astro",
+        "version": 3,
+        "start": {"event": start_event, "offset": start_offset},
+        "end": {"event": end_event, "offset": end_offset},
+    }
+    if night_reduction is not None:
+        night_reduction_payload: dict[str, object] = {
+            "startTime": night_reduction["start_time"],
+            "endTime": night_reduction["end_time"],
+            "sceneId": night_reduction["scene_id"],
+        }
+        if (
+            night_reduction.get("weekend_start_time") is not None
+            and night_reduction.get("weekend_end_time") is not None
+        ):
+            night_reduction_payload["weekendDeviation"] = {
+                "startTime": night_reduction["weekend_start_time"],
+                "endTime": night_reduction["weekend_end_time"],
+            }
+        params["nightReduction"] = night_reduction_payload
+    result = await _call_function(session, token, PLEJD_FN_UPDATE_TIME_EVENT, params)
+    return result if isinstance(result, dict) else None
 
 
 async def async_set_input_setting(

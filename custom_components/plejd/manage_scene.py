@@ -33,6 +33,7 @@ from .cloud import async_create_scene as async_cloud_create_scene
 from .cloud import async_remove_scene as async_cloud_remove_scene
 from .cloud import async_update_scene as async_cloud_update_scene
 from .const import (
+    CONF_CLOUD_SCHEDULES,
     CONF_DEVICE_ADDRESSES,
     CONF_DEVICES,
     CONF_GATEWAYS,
@@ -172,9 +173,10 @@ async def async_remove_scene(hass: HomeAssistant, entry: ConfigEntry, *, scene_i
     """Remove a scene, then refresh + reload the config entry.
 
     Refuses to remove a scene that's still referenced by an on-device schedule
-    (entry.options[CONF_SCHEDULES], keyed by mesh index) - once the cloud frees
-    the index, a later scene could silently reuse it and the schedule would run
-    the wrong thing instead of erroring.
+    (entry.options[CONF_SCHEDULES], keyed by mesh index) or by a cloud schedule
+    (entry.data[CONF_CLOUD_SCHEDULES], as its on-scene or night-reduction scene) -
+    in both cases, freeing the id would leave the schedule silently pointing at
+    nothing (or a later scene reusing the freed cloud id) instead of erroring.
     """
     http_session, token, site = await _async_login_and_get_site(hass, entry)
     scene = next((s for s in site.all_scenes if s.scene_id == scene_id), None)
@@ -188,6 +190,19 @@ async def async_remove_scene(hass: HomeAssistant, entry: ConfigEntry, *, scene_i
                 f"Plejd scene '{scene.name}' is used by schedule(s) {', '.join(referencing)}; "
                 "remove or update them first"
             )
+    cloud_schedule = next(
+        (
+            s
+            for s in entry.data.get(CONF_CLOUD_SCHEDULES, [])
+            if s["scene_id"] == scene_id or (s["night_reduction"] or {}).get("scene_id") == scene_id
+        ),
+        None,
+    )
+    if cloud_schedule is not None:
+        raise HomeAssistantError(
+            f"Plejd scene '{scene.name}' is used by cloud schedule '{cloud_schedule['title']}'; "
+            "remove or update it first"
+        )
     try:
         ok = await async_cloud_remove_scene(http_session, token, site.site_id, scene_id)
     except PlejdCloudError as err:

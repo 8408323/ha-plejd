@@ -286,6 +286,178 @@ move_device_to_room:
       selector:
         text:
 
+create_schedule:
+  name: Create schedule
+  description: >-
+    Create a cloud schedule: an on-scene run at a sunset/sunrise-relative time,
+    plus an optional night-reduction quiet-hours window, then reload the
+    config entry. Cloud-only, like create_scene - open the Plejd app once
+    before relying on local/BLE-only execution. Only astro (sunset/sunrise)
+    triggers are supported; a fixed clock-time trigger isn't yet.
+  fields:
+    title:
+      name: Title
+      description: Name for the schedule's on-scene.
+      required: true
+      selector:
+        text:
+    scene_steps:
+      name: Scene steps
+      description: Steps to run when the schedule triggers (see create_scene for the shape).
+      required: true
+      selector:
+        object:
+    start_event:
+      name: Start event
+      description: Astro event that turns the scene on.
+      required: true
+      selector:
+        select:
+          options:
+            - sunset
+            - sunrise
+    start_offset:
+      name: Start offset
+      description: Minutes to offset from start_event (-120 to 120).
+      required: true
+      selector:
+        number:
+          mode: box
+          min: -120
+          max: 120
+    end_event:
+      name: End event
+      description: Astro event that turns the scene off.
+      required: true
+      selector:
+        select:
+          options:
+            - sunset
+            - sunrise
+    end_offset:
+      name: End offset
+      description: Minutes to offset from end_event (-120 to 120).
+      required: true
+      selector:
+        number:
+          mode: box
+          min: -120
+          max: 120
+    scheduled_days:
+      name: Scheduled days
+      description: Days the schedule is active, 0=Monday..6=Sunday. Defaults to every day.
+      required: false
+      selector:
+        object:
+    fade_time:
+      name: Fade time
+      description: Fade time in seconds for the scene transition.
+      required: false
+      selector:
+        number:
+          mode: box
+          min: 0
+    night_reduction:
+      name: Night reduction
+      description: >-
+        Optional quiet-hours override: scene_steps, start_time ("HH:MM"),
+        end_time, and optionally weekend_start_time/weekend_end_time for a
+        separate weekend window.
+      required: false
+      selector:
+        object:
+
+update_schedule:
+  name: Update schedule
+  description: >-
+    Update a cloud schedule previously created via create_schedule, then
+    reload the config entry. Only the fields you provide are changed. Only
+    schedules this integration created can be targeted - one created through
+    the Plejd app directly isn't trackable yet.
+  fields:
+    schedule_id:
+      name: Schedule ID
+      description: ID of the schedule to update, as returned/tracked by create_schedule.
+      required: true
+      selector:
+        text:
+    title:
+      name: Title
+      description: New name for the schedule's on-scene.
+      required: false
+      selector:
+        text:
+    scene_steps:
+      name: Scene steps
+      description: Full replacement list of on-scene steps. Replaces every existing step.
+      required: false
+      selector:
+        object:
+    start_event:
+      name: Start event
+      description: Astro event that turns the scene on.
+      required: false
+      selector:
+        select:
+          options:
+            - sunset
+            - sunrise
+    start_offset:
+      name: Start offset
+      description: Minutes to offset from start_event (-120 to 120).
+      required: false
+      selector:
+        number:
+          mode: box
+          min: -120
+          max: 120
+    end_event:
+      name: End event
+      description: Astro event that turns the scene off.
+      required: false
+      selector:
+        select:
+          options:
+            - sunset
+            - sunrise
+    end_offset:
+      name: End offset
+      description: Minutes to offset from end_event (-120 to 120).
+      required: false
+      selector:
+        number:
+          mode: box
+          min: -120
+          max: 120
+    scheduled_days:
+      name: Scheduled days
+      description: Full replacement list of active days, 0=Monday..6=Sunday.
+      required: false
+      selector:
+        object:
+    fade_time:
+      name: Fade time
+      description: Fade time in seconds for the scene transition.
+      required: false
+      selector:
+        number:
+          mode: box
+          min: 0
+    activated:
+      name: Activated
+      description: Enable or pause the schedule without removing it.
+      required: false
+      selector:
+        boolean:
+    night_reduction:
+      name: Night reduction
+      description: >-
+        Full replacement quiet-hours override (see create_schedule for the
+        shape) - creates its scene on first use, otherwise updates it in place.
+      required: false
+      selector:
+        object:
+
 start_dim:
   name: Start dimming
   description: >-

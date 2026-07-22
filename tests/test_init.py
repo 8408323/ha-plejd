@@ -12,6 +12,7 @@ from plejd import (
     SERVICE_ADD_DEVICE,
     SERVICE_ALL_OFF,
     SERVICE_CREATE_SCENE,
+    SERVICE_CREATE_SCHEDULE,
     SERVICE_MOVE_DEVICE_TO_ROOM,
     SERVICE_REMOVE_DEVICE,
     SERVICE_REMOVE_ROOM,
@@ -19,6 +20,7 @@ from plejd import (
     SERVICE_SCAN_DEVICES,
     SERVICE_UPDATE_ROOM,
     SERVICE_UPDATE_SCENE,
+    SERVICE_UPDATE_SCHEDULE,
     async_setup_entry,
     async_unload_entry,
 )
@@ -983,6 +985,169 @@ async def test_move_device_to_room_service_forwards_call_data(monkeypatch):
     await handler(types.SimpleNamespace(data={"device_id": "d1", "room_id": "r2"}))
 
     move_device_to_room.assert_awaited_once_with(hass, entry, device_id="d1", room_id="r2")
+
+
+# ── Services: create_schedule / update_schedule ────────────────────────────────
+#
+# async_create_schedule() / async_update_schedule() themselves are unit-tested in
+# test_manage_schedule.py. These tests only cover that the services are
+# registered and forward call.data correctly.
+
+
+async def test_create_schedule_service_is_registered_on_setup(monkeypatch):
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    _FakeCoordinator.instances.clear()
+    hass, entry = _hass(), _entry()
+    await async_setup_entry(hass, entry)
+    assert f"plejd.{SERVICE_CREATE_SCHEDULE}" in hass.services._handlers
+
+
+async def test_create_schedule_service_survives_entry_unload_cleanup(monkeypatch):
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    _FakeCoordinator.instances.clear()
+    hass, entry = _hass(), _entry()
+    unloads: list = []
+    entry.async_on_unload = unloads.append
+    await async_setup_entry(hass, entry)
+    assert f"plejd.{SERVICE_CREATE_SCHEDULE}" in hass.services._handlers
+    for unload in unloads:
+        unload()
+    assert f"plejd.{SERVICE_CREATE_SCHEDULE}" in hass.services._handlers
+
+
+async def test_create_schedule_service_forwards_call_data(monkeypatch):
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    _FakeCoordinator.instances.clear()
+    hass, entry = _hass(), _entry()
+
+    create_schedule = AsyncMock()
+    monkeypatch.setattr(plejd, "async_create_schedule", create_schedule)
+
+    await async_setup_entry(hass, entry)
+    handler = hass.services._handlers[f"plejd.{SERVICE_CREATE_SCHEDULE}"]
+    night_reduction = {"scene_steps": [_STEP], "start_time": "23:15", "end_time": "05:30"}
+    call = types.SimpleNamespace(
+        data={
+            "title": "Garage",
+            "scene_steps": [_STEP],
+            "start_event": "sunset",
+            "start_offset": 15,
+            "end_event": "sunrise",
+            "end_offset": 0,
+            "scheduled_days": [0, 1],
+            "fade_time": 2,
+            "night_reduction": night_reduction,
+        }
+    )
+    await handler(call)
+
+    create_schedule.assert_awaited_once_with(
+        hass,
+        entry,
+        title="Garage",
+        scene_steps=[_STEP],
+        start_event="sunset",
+        start_offset=15,
+        end_event="sunrise",
+        end_offset=0,
+        scheduled_days=[0, 1],
+        fade_time=2,
+        night_reduction=night_reduction,
+    )
+
+
+async def test_update_schedule_service_is_registered_on_setup(monkeypatch):
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    _FakeCoordinator.instances.clear()
+    hass, entry = _hass(), _entry()
+    await async_setup_entry(hass, entry)
+    assert f"plejd.{SERVICE_UPDATE_SCHEDULE}" in hass.services._handlers
+
+
+async def test_update_schedule_service_survives_entry_unload_cleanup(monkeypatch):
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    _FakeCoordinator.instances.clear()
+    hass, entry = _hass(), _entry()
+    unloads: list = []
+    entry.async_on_unload = unloads.append
+    await async_setup_entry(hass, entry)
+    assert f"plejd.{SERVICE_UPDATE_SCHEDULE}" in hass.services._handlers
+    for unload in unloads:
+        unload()
+    assert f"plejd.{SERVICE_UPDATE_SCHEDULE}" in hass.services._handlers
+
+
+async def test_update_schedule_service_forwards_call_data(monkeypatch):
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    _FakeCoordinator.instances.clear()
+    hass, entry = _hass(), _entry()
+
+    update_schedule = AsyncMock()
+    monkeypatch.setattr(plejd, "async_update_schedule", update_schedule)
+
+    await async_setup_entry(hass, entry)
+    handler = hass.services._handlers[f"plejd.{SERVICE_UPDATE_SCHEDULE}"]
+    call = types.SimpleNamespace(
+        data={
+            "schedule_id": "te1",
+            "title": "Renamed",
+            "scene_steps": [_STEP],
+            "start_event": "sunrise",
+            "start_offset": -30,
+            "end_event": "sunset",
+            "end_offset": 30,
+            "scheduled_days": [5, 6],
+            "fade_time": 1,
+            "activated": False,
+            "night_reduction": None,
+        }
+    )
+    await handler(call)
+
+    update_schedule.assert_awaited_once_with(
+        hass,
+        entry,
+        schedule_id="te1",
+        title="Renamed",
+        scene_steps=[_STEP],
+        start_event="sunrise",
+        start_offset=-30,
+        end_event="sunset",
+        end_offset=30,
+        scheduled_days=[5, 6],
+        fade_time=1,
+        activated=False,
+        night_reduction=None,
+    )
+
+
+async def test_update_schedule_service_forwards_defaults(monkeypatch):
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    _FakeCoordinator.instances.clear()
+    hass, entry = _hass(), _entry()
+
+    update_schedule = AsyncMock()
+    monkeypatch.setattr(plejd, "async_update_schedule", update_schedule)
+
+    await async_setup_entry(hass, entry)
+    handler = hass.services._handlers[f"plejd.{SERVICE_UPDATE_SCHEDULE}"]
+    await handler(types.SimpleNamespace(data={"schedule_id": "te1"}))
+
+    update_schedule.assert_awaited_once_with(
+        hass,
+        entry,
+        schedule_id="te1",
+        title=None,
+        scene_steps=None,
+        start_event=None,
+        start_offset=None,
+        end_event=None,
+        end_offset=None,
+        scheduled_days=None,
+        fade_time=None,
+        activated=None,
+        night_reduction=None,
+    )
 
 
 # ── Dashboard panel ───────────────────────────────────────────────────────────
