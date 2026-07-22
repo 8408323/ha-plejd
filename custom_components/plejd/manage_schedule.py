@@ -131,6 +131,8 @@ async def _async_cleanup_orphaned_scenes(http_session, token: str, site_id: str,
         try:
             await async_cloud_remove_scene(http_session, token, site_id, scene_id)
         except PlejdCloudError:
+            # Best-effort: the caller is already raising the real failure: don't let a
+            # failed cleanup attempt replace or mask it.
             pass
 
 
