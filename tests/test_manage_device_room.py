@@ -20,7 +20,9 @@ from plejd.manage_device_room import async_move_device_to_room
 _KEY = bytes(range(16))
 
 
-def _device(device_id="d1", room_id="r1", address=39, outputs=None, dimmable=True) -> PlejdCloudDevice:
+def _device(
+    device_id="d1", room_id="r1", address=39, outputs=None, dimmable=True, category="light"
+) -> PlejdCloudDevice:
     return PlejdCloudDevice(
         device_id=device_id,
         name="Diskbank",
@@ -29,7 +31,7 @@ def _device(device_id="d1", room_id="r1", address=39, outputs=None, dimmable=Tru
         outputs=outputs if outputs is not None else [address],
         hardware_id=1,
         model="DIM-02",
-        category="light",
+        category=category,
         dimmable=dimmable,
         traits=9,
         room_id=room_id,
@@ -235,6 +237,31 @@ async def test_move_device_patches_room_membership_when_both_rooms_already_exist
     assert rooms_by_id["r3"]["member_addresses"] == [60]  # unrelated room passed through unchanged
 
 
+async def test_move_device_leaves_room_membership_untouched_for_a_non_light_device(monkeypatch):
+    # PlejdCloudRoom/PlejdRoomLight is a light-only aggregate - parse_site() excludes a
+    # group entirely if it has any non-light member, since a group command would hit it
+    # too. Adding a non-light device's output to member_addresses here would recreate
+    # exactly that unsafe case on reload.
+    hass = _hass()
+    entry = _entry()
+    old_room = PlejdCloudRoom(
+        room_id="r1", name="Kok", address=14, member_addresses=[39, 41], dimmable=True, dimmable_addresses=[41]
+    )
+    site = _site(
+        devices=[_device(room_id="r1", category="switch", dimmable=False)],
+        device_addresses={"d1": 39},
+        all_rooms=[_room("r1", "Kok", address=14), _room("r2", "Stora badrummet", address=34)],
+        rooms=[old_room],
+    )
+    monkeypatch.setattr("plejd.manage_device_room.async_login", AsyncMock(return_value="tok"))
+    monkeypatch.setattr("plejd.manage_device_room.async_get_site", AsyncMock(side_effect=[site, site]))
+
+    await async_move_device_to_room(hass, entry, device_id="d1", room_id="r2")
+
+    rooms_by_id = {r["room_id"]: r for r in entry.data["rooms"]}
+    assert rooms_by_id == {"r1": {**vars(old_room)}}  # untouched: still lists 39, no r2 entry added
+
+
 async def test_move_device_does_not_synthesize_a_room_not_already_present(monkeypatch):
     # parse_site() can exclude a room from `rooms` for a real reason (no other light
     # member, or a non-light member sharing its group address) that this function has no
@@ -256,8 +283,9 @@ async def test_move_device_does_not_synthesize_a_room_not_already_present(monkey
     await async_move_device_to_room(hass, entry, device_id="d1", room_id="r2")
 
     room_ids = {r["room_id"] for r in entry.data["rooms"]}
-    assert room_ids == {"r1"}  # unchanged count - no synthesized r2 entry
-    assert entry.data["rooms"][0]["member_addresses"] == []  # 39 removed from r1, nowhere to add it
+    # r1 is dropped too (its last member just left - matches parse_site()'s own "no
+    # controllable outputs" exclusion), and no r2 entry is synthesized in its place.
+    assert room_ids == set()
 
 
 async def test_move_device_forces_local_room_id_when_cloud_has_not_converged(monkeypatch):
@@ -305,7 +333,9 @@ async def test_move_device_skips_leave_when_device_has_no_current_room(monkeypat
     coordinator.async_join_mesh_group.assert_awaited_once_with(39, 34)
 
 
-async def test_move_device_skips_leave_when_old_room_has_no_address(monkeypatch):
+async def test_move_device_raises_when_old_room_has_no_address(monkeypatch):
+    # Silently skipping the leave and only joining would leave the device subscribed to
+    # BOTH the old and new room's mesh groups - must fail before sending any mesh command.
     hass = _hass()
     coordinator = _coordinator()
     entry = _entry(runtime_data=coordinator)
@@ -315,12 +345,13 @@ async def test_move_device_skips_leave_when_old_room_has_no_address(monkeypatch)
         all_rooms=[_room("r1", "Kok", address=None), _room("r2", "Stora badrummet", address=34)],
     )
     monkeypatch.setattr("plejd.manage_device_room.async_login", AsyncMock(return_value="tok"))
-    monkeypatch.setattr("plejd.manage_device_room.async_get_site", AsyncMock(side_effect=[site, site]))
+    monkeypatch.setattr("plejd.manage_device_room.async_get_site", AsyncMock(return_value=site))
 
-    await async_move_device_to_room(hass, entry, device_id="d1", room_id="r2")
+    with pytest.raises(HomeAssistantError, match="no resolvable mesh group address"):
+        await async_move_device_to_room(hass, entry, device_id="d1", room_id="r2")
 
     coordinator.async_leave_mesh_group.assert_not_awaited()
-    coordinator.async_join_mesh_group.assert_awaited_once_with(39, 34)
+    coordinator.async_join_mesh_group.assert_not_awaited()
 
 
 async def test_move_device_raises_on_cloud_error_during_refresh(monkeypatch):

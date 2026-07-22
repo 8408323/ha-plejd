@@ -26,6 +26,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from . import schedule_ws
 from .cloud import PlejdAuthError, PlejdCloudError, PlejdCloudRoom, async_get_site, async_login
 from .const import (
+    CATEGORY_LIGHT,
     CONF_DEVICE_ADDRESSES,
     CONF_DEVICES,
     CONF_GATEWAYS,
@@ -36,6 +37,8 @@ from .const import (
     CONF_SCENES,
     CONF_SITE_ID,
 )
+
+_MISSING = object()
 
 
 async def _async_login_and_get_site(hass: HomeAssistant, entry: ConfigEntry):
@@ -59,7 +62,8 @@ async def _async_login_and_get_site(hass: HomeAssistant, entry: ConfigEntry):
 def _patch_room_membership(
     rooms: list[PlejdCloudRoom],
     *,
-    own_address: int,
+    output_address: int | None,
+    is_light: bool,
     dimmable: bool,
     old_room_address: int | None,
     new_room_address: int,
@@ -68,34 +72,49 @@ def _patch_room_membership(
 
     Needed for the same reason as the roomId override above: on a BLE-only site the
     cloud's outputGroups (what `rooms`/PlejdRoomLight's aggregate membership is built
-    from) may never reflect a mesh-only move. Deliberately does NOT synthesize a new
-    room entry when new_room_address isn't found here - parse_site() can have excluded
-    it for a real reason (no other light member, or a non-light member sharing the same
-    group address), which this function has no way to distinguish from "just empty";
-    a genuinely new light-group entity for it will appear once the cloud does converge.
+    from) may never reflect a mesh-only move. Uses the output's own mesh address (what
+    member_addresses actually stores), not the device's own join/leave-command address -
+    they can differ, since an output's address is preferred from outputAddress and only
+    falls back to deviceAddress when missing.
+
+    PlejdCloudRoom is a light-only aggregate - parse_site() excludes a group entirely if
+    it has any non-light member, since a group command would hit that member too. For a
+    non-light move, or if the output has no resolvable address, this leaves `rooms`
+    untouched rather than risk adding an unsafe member.
+
+    Deliberately does NOT synthesize a new room entry when new_room_address isn't found
+    here - parse_site() can have excluded it for a real reason (no other light member, or
+    a non-light member sharing the same group address), which this function has no way
+    to distinguish from "just empty"; a genuinely new light-group entity for it will
+    appear once the cloud does converge.
     """
+    if output_address is None or not is_light:
+        return list(rooms)
     patched = []
     for room in rooms:
-        if room.address == old_room_address and own_address in room.member_addresses:
-            dimmable_addresses = [m for m in room.dimmable_addresses if m != own_address]
+        if room.address == old_room_address and output_address in room.member_addresses:
+            members = [m for m in room.member_addresses if m != output_address]
+            if not members:
+                continue  # matches parse_site(): a room with no controllable outputs isn't kept
+            dimmable_addresses = [m for m in room.dimmable_addresses if m != output_address]
             patched.append(
                 PlejdCloudRoom(
                     room_id=room.room_id,
                     name=room.name,
                     address=room.address,
-                    member_addresses=[m for m in room.member_addresses if m != own_address],
+                    member_addresses=members,
                     dimmable=bool(dimmable_addresses),
                     dimmable_addresses=dimmable_addresses,
                 )
             )
         elif room.address == new_room_address:
-            dimmable_addresses = sorted(set(room.dimmable_addresses) | ({own_address} if dimmable else set()))
+            dimmable_addresses = sorted(set(room.dimmable_addresses) | ({output_address} if dimmable else set()))
             patched.append(
                 PlejdCloudRoom(
                     room_id=room.room_id,
                     name=room.name,
                     address=room.address,
-                    member_addresses=sorted(set(room.member_addresses) | {own_address}),
+                    member_addresses=sorted(set(room.member_addresses) | {output_address}),
                     dimmable=room.dimmable or dimmable,
                     dimmable_addresses=dimmable_addresses,
                 )
@@ -113,7 +132,8 @@ async def _async_refresh_and_reload(
     *,
     moved_device_id: str,
     moved_room_id: str,
-    own_address: int,
+    output_address: int | None,
+    is_light: bool,
     dimmable: bool,
     old_room_address: int | None,
     new_room_address: int,
@@ -139,7 +159,8 @@ async def _async_refresh_and_reload(
         ]
         rooms = _patch_room_membership(
             fresh_site.rooms,
-            own_address=own_address,
+            output_address=output_address,
+            is_light=is_light,
             dimmable=dimmable,
             old_room_address=old_room_address,
             new_room_address=new_room_address,
@@ -202,16 +223,31 @@ async def async_move_device_to_room(hass: HomeAssistant, entry: ConfigEntry, *, 
         raise HomeAssistantError(f"Plejd room {room_id} not found on this site")
     if new_room.address is None:
         raise HomeAssistantError(f"Plejd room '{new_room.name}' has no mesh group address")
-    current_room_id = outputs[0].room_id
+
+    # Prefer our own most recently corrected room_id over this fresh cloud fetch's - the
+    # cloud may still report a prior mesh-only move's OLD room if it hasn't converged yet
+    # (see below), and a second move before that convergence must not re-derive "current
+    # room" from data we already know is stale, or it can reject a legitimate "move back",
+    # or leave the wrong (still-actually-current) room's mesh group.
+    local_devices = entry.data.get(CONF_DEVICES) or []
+    local_room_id = next((d.get("room_id") for d in local_devices if d.get("device_id") == device_id), _MISSING)
+    current_room_id = outputs[0].room_id if local_room_id is _MISSING else local_room_id
     if current_room_id == room_id:
         raise HomeAssistantError(f"Device is already in room '{new_room.name}'")
 
-    coordinator = entry.runtime_data
     old_room = next((r for r in site.all_rooms if r.room_id == current_room_id), None) if current_room_id else None
-    if old_room is not None and old_room.address is not None:
+    if current_room_id is not None and (old_room is None or old_room.address is None):
+        # Silently skipping the leave and only joining would leave the device subscribed
+        # to BOTH the old and new room's mesh groups - fail before sending any mesh
+        # command rather than risk a partial move.
+        raise HomeAssistantError(f"Plejd device {device_id}'s current room has no resolvable mesh group address")
+
+    coordinator = entry.runtime_data
+    if old_room is not None:
         await coordinator.async_leave_mesh_group(own_address, old_room.address)
     await coordinator.async_join_mesh_group(own_address, new_room.address)
 
+    output = outputs[0]
     await _async_refresh_and_reload(
         hass,
         entry,
@@ -219,8 +255,9 @@ async def async_move_device_to_room(hass: HomeAssistant, entry: ConfigEntry, *, 
         token,
         moved_device_id=device_id,
         moved_room_id=room_id,
-        own_address=own_address,
-        dimmable=outputs[0].dimmable,
+        output_address=output.address,
+        is_light=output.category == CATEGORY_LIGHT,
+        dimmable=output.dimmable,
         old_room_address=old_room.address if old_room is not None else None,
         new_room_address=new_room.address,
     )
