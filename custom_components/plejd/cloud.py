@@ -604,7 +604,8 @@ async def async_create_time_event(
     Confirmed via a live capture to be a SEPARATE function from async_update_time_event -
     timeEventId is always null here (the server assigns the real id, returned as eventId);
     targetDevices is only present on create. Returns the cloud's {targetDevices, eventId}
-    result, or None if rejected.
+    result, or None if rejected or missing a usable eventId (callers key everything else -
+    updates, removal - off that id, so a malformed response must not be mistaken for success).
     """
     device_ids = dirty_devices or []
     params: dict[str, object] = {
@@ -627,7 +628,9 @@ async def async_create_time_event(
         "targetDevices": device_ids,
     }
     result = await _call_function(session, token, PLEJD_FN_CREATE_TIME_EVENT, params)
-    return result if isinstance(result, dict) else None
+    if not isinstance(result, dict) or not result.get("eventId"):
+        return None
+    return result
 
 
 async def async_update_time_event(
@@ -656,7 +659,9 @@ async def async_update_time_event(
     "weekend_start_time"?, "weekend_end_time"?}. dirty_remove=True is the confirmed first
     step of removing a schedule (see async_remove_schedule), sent before the dedicated
     removeTimeEvent_V3 call. Returns the cloud's {targetDevices, eventId} result, or None
-    if rejected.
+    if rejected, missing an eventId, or the returned eventId doesn't match schedule_id -
+    a mismatched id would mean the cloud updated (or created) a different TimeEvent than
+    the one asked for, which callers must not treat as their own update having landed.
     """
     params: dict[str, object] = {
         "siteId": site_id,
@@ -677,7 +682,9 @@ async def async_update_time_event(
         ),
     }
     result = await _call_function(session, token, PLEJD_FN_UPDATE_TIME_EVENT, params)
-    return result if isinstance(result, dict) else None
+    if not isinstance(result, dict) or result.get("eventId") != schedule_id:
+        return None
+    return result
 
 
 async def async_remove_time_event(

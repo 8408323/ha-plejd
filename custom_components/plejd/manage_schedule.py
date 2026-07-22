@@ -133,6 +133,24 @@ async def _async_refresh_and_reload(
             await hass.config_entries.async_reload(entry.entry_id)
 
 
+def _sync_cloud_schedules_cache(hass: HomeAssistant, entry: ConfigEntry, cloud_schedules: list[dict]) -> None:
+    """Write entry.data[CONF_CLOUD_SCHEDULES] immediately, without triggering a reload.
+
+    Called right before firing plejd_schedule_created: a listener reacting to that event
+    synchronously (e.g. calling update_schedule right away) would otherwise race the much
+    later entry.data write inside _async_refresh_and_reload and see the new schedule as
+    "not tracked". The full refresh (fresh devices/scenes/etc, and the real reload) still
+    follows immediately after this.
+    """
+    hass.data[schedule_ws.DATA_MANUAL_RELOAD] = entry.entry_id
+    try:
+        hass.config_entries.async_update_entry(entry, data={**entry.data, CONF_CLOUD_SCHEDULES: cloud_schedules})
+    finally:
+        hass.data.pop(schedule_ws.DATA_MANUAL_RELOAD, None)
+        hass.data.pop(schedule_ws.DATA_MANUAL_RELOAD_SEEN, None)
+        hass.data.pop(schedule_ws.DATA_RELOAD_PENDING, None)
+
+
 async def _async_cleanup_orphaned_scenes(http_session, token: str, site_id: str, scene_ids: list[str]) -> None:
     """Best-effort removal of scene(s) already created before a later step in the same call failed.
 
@@ -181,7 +199,10 @@ def _validate_days(scheduled_days: list[int] | None) -> list[int]:
     days = sorted(set(scheduled_days))
     if not days:
         raise HomeAssistantError("scheduled_days must include at least one day (0-6); use activated=False to pause")
-    if not all(isinstance(d, int) and 0 <= d <= 6 for d in days):
+    # bool is a subclass of int in Python (True == 1), so an explicit isinstance(d, bool)
+    # exclusion is needed or a caller passing [True, False] would silently serialize as
+    # JSON true/false instead of being rejected as not a weekday number.
+    if not all(isinstance(d, int) and not isinstance(d, bool) and 0 <= d <= 6 for d in days):
         raise HomeAssistantError("scheduled_days must be integers 0-6 (Monday=0)")
     return days
 
@@ -368,9 +389,11 @@ async def async_create_schedule(
             "night_reduction": night_reduction_result,
         }
         cloud_schedules = [*entry.data.get(CONF_CLOUD_SCHEDULES, []), schedule]
-        # Fire before the refresh, not after: the schedule is already created and persisted
-        # at this point, so a later refresh failure must not also swallow the only way the
-        # user can learn its id (this integration can't rediscover it from getSiteById).
+        # Sync entry.data before firing the event, and fire before the full refresh: a
+        # listener reacting to the event synchronously must already see the schedule as
+        # tracked, and a later refresh failure must not also swallow the only way the user
+        # can learn its id (this integration can't rediscover it from getSiteById).
+        _sync_cloud_schedules_cache(hass, entry, cloud_schedules)
         hass.bus.async_fire(f"{DOMAIN}_schedule_created", {"schedule_id": schedule_id})
         await _async_refresh_and_reload(hass, entry, http_session, token, cloud_schedules=cloud_schedules)
         return schedule_id
@@ -462,6 +485,7 @@ async def async_update_schedule(
         updated = dict(cached)
         created_scene_ids: list[str] = []
         new_device_ids: list[str] | None = None
+        pending_error: HomeAssistantError | None = None
         try:
             if title is not None or scene_steps is not None:
                 ok = await async_cloud_update_scene(
@@ -532,15 +556,28 @@ async def async_update_schedule(
             updated["end_offset"] = effective_end_offset
         except PlejdCloudError as err:
             await _async_cleanup_orphaned_scenes(http_session, token, site.site_id, created_scene_ids)
-            raise HomeAssistantError(f"Plejd cloud error updating schedule: {err}") from err
-        except HomeAssistantError:
+            pending_error = HomeAssistantError(f"Plejd cloud error updating schedule: {err}")
+        except HomeAssistantError as err:
             await _async_cleanup_orphaned_scenes(http_session, token, site.site_id, created_scene_ids)
-            raise
-        finally:
-            cloud_schedules = [
-                updated if s["schedule_id"] == schedule_id else s for s in entry.data.get(CONF_CLOUD_SCHEDULES, [])
-            ]
+            pending_error = err
+
+        cloud_schedules = [
+            updated if s["schedule_id"] == schedule_id else s for s in entry.data.get(CONF_CLOUD_SCHEDULES, [])
+        ]
+        try:
             await _async_refresh_and_reload(hass, entry, http_session, token, cloud_schedules=cloud_schedules)
+        except HomeAssistantError as refresh_err:
+            # Don't let a refresh failure replace an already-pending update failure - the
+            # update error is what the user actually needs to see and act on.
+            if pending_error is not None:
+                _LOGGER.warning(
+                    "Plejd: also failed to refresh after a schedule update error: %s", refresh_err, exc_info=True
+                )
+            else:
+                pending_error = refresh_err
+
+        if pending_error is not None:
+            raise pending_error
 
 
 async def async_remove_schedule(hass: HomeAssistant, entry: ConfigEntry, *, schedule_id: str) -> None:

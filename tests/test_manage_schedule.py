@@ -357,6 +357,44 @@ async def test_create_schedule_raises_when_cloud_rejects_time_event(monkeypatch)
     remove_mock.assert_awaited_once_with(None, "tok", "S1", "new-scene-id")
 
 
+async def test_create_schedule_persists_cache_before_firing_event(monkeypatch):
+    # A listener reacting to plejd_schedule_created synchronously must already see the new
+    # schedule as tracked - entry.data has to be written before the event fires, not after
+    # (the full refresh, which writes it again, only follows afterward).
+    hass = _hass()
+    entry = _entry()
+    monkeypatch.setattr("plejd.manage_schedule.async_login", AsyncMock(return_value="tok"))
+    monkeypatch.setattr("plejd.manage_schedule.async_get_site", AsyncMock(return_value=_site()))
+    monkeypatch.setattr("plejd.manage_schedule.async_cloud_create_scene", AsyncMock(return_value="new-scene-id"))
+    monkeypatch.setattr(
+        "plejd.manage_schedule.async_cloud_create_time_event", AsyncMock(return_value={"eventId": "te1"})
+    )
+    monkeypatch.setattr("plejd.manage_schedule.async_cloud_update_scene", AsyncMock(return_value=True))
+
+    seen_at_fire_time = {}
+    original_fire = hass.bus.async_fire
+
+    def _capture_fire(event_type, data):
+        seen_at_fire_time["cloud_schedules"] = list(entry.data.get("cloud_schedules", []))
+        original_fire(event_type, data)
+
+    hass.bus.async_fire = _capture_fire
+
+    await async_create_schedule(
+        hass,
+        entry,
+        title="X",
+        scene_steps=[_STEP],
+        start_event="sunset",
+        start_offset=0,
+        end_event="sunrise",
+        end_offset=0,
+    )
+
+    assert len(seen_at_fire_time["cloud_schedules"]) == 1
+    assert seen_at_fire_time["cloud_schedules"][0]["schedule_id"] == "te1"
+
+
 async def test_create_schedule_succeeds_and_caches_it(monkeypatch):
     hass = _hass()
     entry = _entry()
@@ -1316,6 +1354,26 @@ async def test_update_schedule_raises_on_cloud_error_during_refresh(monkeypatch)
     # The trigger update already succeeded on the cloud before the refresh failed - the local
     # cache must still reflect it, not silently revert to the pre-update state.
     assert entry.data["cloud_schedules"][0]["start_offset"] == 30
+
+
+async def test_update_schedule_preserves_the_original_error_when_refresh_also_fails(monkeypatch, caplog):
+    # A refresh failure occurring while an earlier update failure is already pending must not
+    # replace it - the user needs to see why the update itself failed, not a later, unrelated
+    # refresh outage.
+    entry = _entry(
+        data={"email": "u@x.com", "password": "pw", "site_id": "S1", "cloud_schedules": [_cached_schedule()]}
+    )
+    monkeypatch.setattr("plejd.manage_schedule.async_login", AsyncMock(return_value="tok"))
+    monkeypatch.setattr(
+        "plejd.manage_schedule.async_get_site",
+        AsyncMock(side_effect=[_site([_scene()]), PlejdCloudError("refresh down")]),
+    )
+    monkeypatch.setattr("plejd.manage_schedule.async_cloud_update_time_event", AsyncMock(return_value=None))
+
+    with pytest.raises(HomeAssistantError, match="rejected the schedule update"):
+        await async_update_schedule(_hass(), entry, schedule_id="te1", start_offset=30)
+
+    assert "refresh" in caplog.text
 
 
 async def test_update_schedule_serializes_concurrent_calls_to_the_same_schedule(monkeypatch):
