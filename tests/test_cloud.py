@@ -12,24 +12,30 @@ from plejd.cloud import (
     _parse_new_device_addresses,
     async_create_device,
     async_create_room,
+    async_create_scene,
     async_get_available_firmware,
     async_get_needed_output_count,
     async_get_site,
     async_get_sites,
     async_login,
     async_remove_room,
+    async_remove_scene,
     async_set_device_title,
     async_set_input_setting,
     async_update_room,
+    async_update_scene,
     parse_site,
 )
 from plejd.const import (
     PLEJD_FN_COMPATIBLE_DEVICES,
     PLEJD_FN_CREATE_DEVICE,
     PLEJD_FN_CREATE_ROOM,
+    PLEJD_FN_CREATE_SCENE,
     PLEJD_FN_REMOVE_ROOM,
+    PLEJD_FN_REMOVE_SCENE,
     PLEJD_FN_SET_INPUT,
     PLEJD_FN_UPDATE_ROOM,
+    PLEJD_FN_UPDATE_SCENE,
     PLEJD_PARSE_URL,
 )
 
@@ -41,6 +47,9 @@ _CREATE_DEVICE = PLEJD_PARSE_URL + PLEJD_FN_CREATE_DEVICE
 _CREATE_ROOM = PLEJD_PARSE_URL + PLEJD_FN_CREATE_ROOM
 _UPDATE_ROOM = PLEJD_PARSE_URL + PLEJD_FN_UPDATE_ROOM
 _REMOVE_ROOM = PLEJD_PARSE_URL + PLEJD_FN_REMOVE_ROOM
+_CREATE_SCENE = PLEJD_PARSE_URL + PLEJD_FN_CREATE_SCENE
+_UPDATE_SCENE = PLEJD_PARSE_URL + PLEJD_FN_UPDATE_SCENE
+_REMOVE_SCENE = PLEJD_PARSE_URL + PLEJD_FN_REMOVE_SCENE
 _SET_INPUT = PLEJD_PARSE_URL + PLEJD_FN_SET_INPUT
 
 _SITE = {
@@ -640,6 +649,141 @@ async def test_remove_room_rejects_malformed_truthy_result():
     assert ok is False
 
 
+_STEP = {"device_id": "d1", "output": 0, "state": "On", "value": 255}
+
+
+async def test_create_scene_posts_correct_payload_and_returns_uuid():
+    from aioresponses import CallbackResult
+
+    captured: dict = {}
+
+    def _capture(url, **kwargs):
+        captured.update(kwargs.get("json", {}))
+        return CallbackResult(payload={"result": 1})
+
+    with aioresponses() as m:
+        m.post(_CREATE_SCENE, callback=_capture)
+        async with aiohttp.ClientSession() as s:
+            scene_id = await async_create_scene(s, "tok", "site1", "Movie Night", [_STEP])
+    import uuid as _uuid
+
+    _uuid.UUID(scene_id)  # raises if not a valid UUID
+    assert captured == {
+        "siteId": "site1",
+        "sceneId": scene_id,
+        "title": "Movie Night",
+        "order": 0,
+        "sceneSteps": [
+            {"deviceId": "d1", "output": 0, "dirty": True, "dirtyRemoved": False, "state": "On", "value": 255}
+        ],
+        "hiddenFromSceneList": False,
+        "settings": "",
+    }
+
+
+async def test_create_scene_forwards_optional_step_fields():
+    from aioresponses import CallbackResult
+
+    captured: dict = {}
+
+    def _capture(url, **kwargs):
+        captured.update(kwargs.get("json", {}))
+        return CallbackResult(payload={"result": 1})
+
+    step = {**_STEP, "color_temperature": 3000, "coverable_tilt": 50, "climate_boost_time": 30}
+    with aioresponses() as m:
+        m.post(_CREATE_SCENE, callback=_capture)
+        async with aiohttp.ClientSession() as s:
+            await async_create_scene(s, "tok", "site1", "X", [step], order=2, hidden_from_scene_list=True)
+    assert captured["order"] == 2
+    assert captured["hiddenFromSceneList"] is True
+    assert captured["sceneSteps"][0]["colorTemperature"] == 3000
+    assert captured["sceneSteps"][0]["coverableTilt"] == 50
+    assert captured["sceneSteps"][0]["climateBoostTime"] == 30
+
+
+async def test_update_scene_sends_only_provided_fields():
+    from aioresponses import CallbackResult
+
+    captured: dict = {}
+
+    def _capture(url, **kwargs):
+        captured.update(kwargs.get("json", {}))
+        return CallbackResult(payload={"result": True})
+
+    with aioresponses() as m:
+        m.post(_UPDATE_SCENE, callback=_capture)
+        async with aiohttp.ClientSession() as s:
+            ok = await async_update_scene(s, "tok", "site1", "scene1", title="Renamed")
+    assert ok is True
+    assert captured == {"siteId": "site1", "sceneId": "scene1", "title": "Renamed"}
+
+
+async def test_update_scene_sends_all_provided_fields():
+    from aioresponses import CallbackResult
+
+    captured: dict = {}
+
+    def _capture(url, **kwargs):
+        captured.update(kwargs.get("json", {}))
+        return CallbackResult(payload={"result": True})
+
+    with aioresponses() as m:
+        m.post(_UPDATE_SCENE, callback=_capture)
+        async with aiohttp.ClientSession() as s:
+            await async_update_scene(
+                s,
+                "tok",
+                "site1",
+                "scene1",
+                title="X",
+                order=3,
+                scene_steps=[_STEP],
+                hidden_from_scene_list=True,
+                settings="{}",
+            )
+    assert captured["title"] == "X"
+    assert captured["order"] == 3
+    assert captured["hiddenFromSceneList"] is True
+    assert captured["settings"] == "{}"
+    assert captured["sceneSteps"] == [
+        {"deviceId": "d1", "output": 0, "dirty": True, "dirtyRemoved": False, "state": "On", "value": 255}
+    ]
+
+
+async def test_update_scene_rejects_malformed_truthy_result():
+    with aioresponses() as m:
+        m.post(_UPDATE_SCENE, payload={"result": "yes"})
+        async with aiohttp.ClientSession() as s:
+            ok = await async_update_scene(s, "tok", "site1", "scene1", title="X")
+    assert ok is False
+
+
+async def test_remove_scene_posts_correct_payload():
+    from aioresponses import CallbackResult
+
+    captured: dict = {}
+
+    def _capture(url, **kwargs):
+        captured.update(kwargs.get("json", {}))
+        return CallbackResult(payload={"result": True})
+
+    with aioresponses() as m:
+        m.post(_REMOVE_SCENE, callback=_capture)
+        async with aiohttp.ClientSession() as s:
+            ok = await async_remove_scene(s, "tok", "site1", "scene1")
+    assert ok is True
+    assert captured == {"siteId": "site1", "sceneId": "scene1"}
+
+
+async def test_remove_scene_rejects_malformed_truthy_result():
+    with aioresponses() as m:
+        m.post(_REMOVE_SCENE, payload={"result": {}})
+        async with aiohttp.ClientSession() as s:
+            ok = await async_remove_scene(s, "tok", "site1", "scene1")
+    assert ok is False
+
+
 async def test_set_input_setting_posts_toggle():
     from aioresponses import CallbackResult
 
@@ -709,6 +853,25 @@ def test_parse_site_all_rooms_skips_malformed_room_entries():
     site = {**_SITE, "rooms": [{"roomId": "r1", "title": "Kitchen"}, "not-a-dict", {"title": "no id"}, None]}
     all_rooms = parse_site(site).all_rooms
     assert [r.room_id for r in all_rooms] == ["r1"]
+
+
+def test_parse_site_all_scenes_includes_scenes_missing_from_scene_index():
+    # all_scenes (for scene management) must not share `scenes`'s mesh-index filtering:
+    # _SITE's sc2 has no sceneIndex entry, so it's excluded from `scenes` (used for
+    # execution - a broadcast needs a real index), which is exactly wrong for "does this
+    # scene exist" (same issue as PlejdCloudRoom vs all_rooms, #114).
+    parsed = parse_site(_SITE)
+    assert [s.scene_id for s in parsed.scenes] == ["sc1"]  # sc2 still excluded (no index)
+    by_id = {s.scene_id: s for s in parsed.all_scenes}
+    assert set(by_id) == {"sc1", "sc2"}
+    assert by_id["sc1"].name == "Movie"
+    assert by_id["sc2"].name == "NoIndex"
+
+
+def test_parse_site_all_scenes_skips_malformed_scene_entries():
+    site = {**_SITE, "scenes": [{"sceneId": "sc1", "title": "Movie"}, "not-a-dict", {"title": "no id"}, None]}
+    all_scenes = parse_site(site).all_scenes
+    assert [s.scene_id for s in all_scenes] == ["sc1"]
 
 
 def test_parse_site_excludes_room_with_non_light_member():

@@ -150,6 +150,94 @@ remove_room:
       selector:
         text:
 
+create_scene:
+  name: Create scene
+  description: >-
+    Create a new scene from a list of steps, then reload the config entry.
+  fields:
+    title:
+      name: Title
+      description: Name for the new scene.
+      required: true
+      selector:
+        text:
+    scene_steps:
+      name: Scene steps
+      description: >-
+        Each step: device_id, output, state (On/Off/Temperature/PWM/Boost/Frost),
+        value, and optionally color_temperature, coverable_tilt, or
+        climate_boost_time depending on the output's capability.
+      required: true
+      selector:
+        object:
+    order:
+      name: Order
+      description: Position of the scene in the scene list (0-based).
+      required: false
+      selector:
+        number:
+          mode: box
+          min: 0
+    hidden_from_scene_list:
+      name: Hidden from scene list
+      description: Hide this scene from the app's main scene list.
+      required: false
+      selector:
+        boolean:
+
+update_scene:
+  name: Update scene
+  description: >-
+    Rename, reorder, and/or replace a scene's steps, then reload the config
+    entry. Only the fields you provide are changed.
+  fields:
+    scene_id:
+      name: Scene ID
+      description: Plejd cloud ID of the scene to update.
+      required: true
+      selector:
+        text:
+    title:
+      name: Title
+      description: New scene name.
+      required: false
+      selector:
+        text:
+    scene_steps:
+      name: Scene steps
+      description: >-
+        Full replacement list of steps (see create_scene for the shape). Replaces
+        every existing step, not a partial update.
+      required: false
+      selector:
+        object:
+    order:
+      name: Order
+      description: New position of the scene in the scene list (0-based).
+      required: false
+      selector:
+        number:
+          mode: box
+          min: 0
+    hidden_from_scene_list:
+      name: Hidden from scene list
+      description: Hide this scene from the app's main scene list.
+      required: false
+      selector:
+        boolean:
+
+remove_scene:
+  name: Remove scene
+  description: >-
+    Remove a scene, then reload the config entry.
+  fields:
+    scene_id:
+      name: Scene ID
+      description: Plejd cloud ID of the scene to remove.
+      required: true
+      selector:
+        text:
+
 start_dim:
   name: Start dimming
   description: >-
