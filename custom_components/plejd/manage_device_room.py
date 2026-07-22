@@ -24,6 +24,20 @@ isn't confirmed to exist - this integration only pushes mesh commands, it
 doesn't have a query path for them. Given the window is normally seconds (on a
 site with a gateway, the only setup this has been live-tested against), this is
 judged an acceptable tradeoff rather than something to chase further here.
+
+A second, related, and equally accepted limitation: the pending-moves cache is
+only ever consulted from THIS module's own refresh cycle. Every other
+manage_*.py module (rooms, scenes, devices, add_device, ...) refreshes the site
+and writes entry.data independently, with no shared choke point this module
+could hook into short of a cross-cutting refactor of every management module's
+own refresh path. If one of those unrelated actions runs after a move but
+before the cloud converges, it can overwrite the locally-corrected room_id and
+membership with the still-stale cloud snapshot - the same class of "we can only
+protect what we ourselves touch" tradeoff as the one above, just triggered by a
+different actor (another feature's refresh instead of the Plejd app). Given how
+narrow the convergence window normally is, this is accepted rather than solved
+by plumbing pending-move awareness through every other feature in the
+integration.
 """
 
 from __future__ import annotations
@@ -46,6 +60,7 @@ from .const import (
     CONF_GATEWAYS,
     CONF_INPUTS,
     CONF_MOTION,
+    CONF_PENDING_ROOM_MOVES,
     CONF_RESOURCE_SET_ID,
     CONF_ROOMS,
     CONF_SCENES,
@@ -64,24 +79,32 @@ from .const import (
 # still-different device's move) can keep re-patching every pending device's own
 # room-group membership too, not just its roomId - otherwise an earlier still-unconverged
 # move's membership patch would get overwritten by the next refresh's fresh (stale) cloud
-# snapshot. Deliberately in-memory only: lost on an HA restart, which is fine - entry.data
-# itself already holds our last-written correction by then, this cache only informs the
-# *next* call before that happens.
+# snapshot. Also mirrored into entry.data[CONF_PENDING_ROOM_MOVES] so it survives an HA
+# restart - hass.data alone would lose an in-flight (not-yet-converged) move, silently
+# falling back to a fresh (still-stale) cloud fetch for "current room" on the very next
+# call for that device.
 DATA_PENDING_ROOM_MOVES = f"{DOMAIN}_pending_room_moves"
-# Serializes concurrent move_device_to_room calls for the SAME device - two overlapping
-# calls could otherwise both read the same "current room" before either writes its own
-# move back, ending with the device joined to both destinations and left from neither's
-# actual current room. Different devices still move fully concurrently.
+# Serializes move_device_to_room calls for the whole entry, not just per-device: every
+# successful move ends in an async_reload of the config entry, which tears down and
+# rebuilds entry.runtime_data (the coordinator) - two DIFFERENT devices moved concurrently
+# could otherwise have one call's reload swap out the coordinator out from under the
+# other's still-in-flight leave/join mesh writes. Reload already serializes the *effect* of
+# concurrent moves, so a per-entry lock doesn't cost any real concurrency.
 DATA_MOVE_LOCKS = f"{DOMAIN}_move_locks"
 
 
 def _pending_moves(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, dict]:
-    return hass.data.setdefault(DATA_PENDING_ROOM_MOVES, {}).setdefault(entry.entry_id, {})
+    all_pending = hass.data.setdefault(DATA_PENDING_ROOM_MOVES, {})
+    if entry.entry_id not in all_pending:
+        # First access since an HA (re)start: hass.data has nothing yet, but entry.data may
+        # already hold moves this integration made and persisted before the restart.
+        all_pending[entry.entry_id] = dict(entry.data.get(CONF_PENDING_ROOM_MOVES, {}))
+    return all_pending[entry.entry_id]
 
 
-def _move_lock(hass: HomeAssistant, entry: ConfigEntry, device_id: str) -> asyncio.Lock:
-    locks = hass.data.setdefault(DATA_MOVE_LOCKS, {}).setdefault(entry.entry_id, {})
-    return locks.setdefault(device_id, asyncio.Lock())
+def _move_lock(hass: HomeAssistant, entry: ConfigEntry) -> asyncio.Lock:
+    locks = hass.data.setdefault(DATA_MOVE_LOCKS, {})
+    return locks.setdefault(entry.entry_id, asyncio.Lock())
 
 
 async def _async_login_and_get_site(hass: HomeAssistant, entry: ConfigEntry):
@@ -128,13 +151,19 @@ def _patch_room_membership(
     calls instead does NOT correctly handle either of those cases.
 
     PlejdCloudRoom is a light-only aggregate - parse_site() excludes a group entirely if
-    it has any non-light member, since a group command would hit that member too. If the
-    output has no resolvable address, this leaves `rooms` untouched (nothing to key off).
-    For a non-light move, the destination room's mesh group now genuinely has a non-light
-    member even though this function can't safely ADD it there (see below) - so instead
-    of just leaving a stale entry cached as "safe", drop any existing room entry at
-    new_room_address entirely; a device already joined to that mesh group broadcasts
-    would otherwise still hit it via a room light that no longer reflects reality.
+    it has any non-light member, since a group command would hit that member too. For a
+    non-light move, the destination room's mesh group now genuinely has a non-light member
+    - even when this move's own output_address couldn't be resolved (the mesh join command
+    still targets the device's own address, not a per-output one) - even though this
+    function can't safely ADD an unresolved output to member_addresses (see below). So
+    instead of just leaving a stale entry cached as "safe", drop any existing room entry at
+    new_room_address entirely; a device already joined to that mesh group broadcasts would
+    otherwise still hit it via a room light that no longer reflects reality. This drop must
+    happen BEFORE the output_address check below, since it doesn't need output_address at
+    all - only the light-only add/strip logic does.
+
+    If the output has no resolvable address, this leaves `rooms` untouched for a light
+    move (nothing to key off for the add/strip logic below).
 
     Deliberately does NOT synthesize a new room entry when new_room_address isn't found
     here - parse_site() can have excluded it for a real reason (no other light member, or
@@ -142,10 +171,10 @@ def _patch_room_membership(
     to distinguish from "just empty"; a genuinely new light-group entity for it will
     appear once the cloud does converge.
     """
-    if output_address is None:
-        return list(rooms)
     if not is_light:
         return [r for r in rooms if r.address != new_room_address]
+    if output_address is None:
+        return list(rooms)
     patched = []
     for room in rooms:
         if room.address != new_room_address and output_address in room.member_addresses:
@@ -180,7 +209,7 @@ def _patch_room_membership(
     return patched
 
 
-def _room_membership_converged(fresh_rooms: list[PlejdCloudRoom], move: dict) -> bool:
+def _room_membership_converged(fresh_rooms: list[PlejdCloudRoom], fresh_devices: list, move: dict) -> bool:
     """Whether the cloud's own rooms snapshot already reflects this move's membership.
 
     For a light move: the output must be a member of new_room_address AND absent from
@@ -190,17 +219,30 @@ def _room_membership_converged(fresh_rooms: list[PlejdCloudRoom], move: dict) ->
     stale entry to defensively drop) - converged once the cloud's own view no longer has
     ANY room entry at new_room_address either, matching what this module's own patch
     already forces every round regardless of pending state.
+
+    A light move into a room that ALSO has a non-light member is a permanent edge case,
+    not a "hasn't converged yet" one: parse_site() excludes any group with a non-light
+    member from `rooms` entirely, so new_room_address can never appear there, no matter how
+    long we wait - it must be told apart from the ordinary "hasn't appeared as its own
+    group yet" case (where treating absence as convergence would prune the pending entry,
+    and thus stop re-patching the destination's light-group membership, before the cloud's
+    own aggregate has actually caught up). fresh_devices settles it directly: if some OTHER
+    device is already reported in the destination room_id and isn't a light, the exclusion
+    is permanent and absence from every other room is the strongest signal available;
+    otherwise it's ordinary non-convergence and this must keep waiting.
     """
     if move["output_address"] is None:
         return True
     if not move["is_light"]:
         return not any(r.address == move["new_room_address"] for r in fresh_rooms)
     new_room = next((r for r in fresh_rooms if r.address == move["new_room_address"]), None)
-    if new_room is None or move["output_address"] not in new_room.member_addresses:
-        return False
-    return not any(
+    absent_elsewhere = not any(
         r.address != move["new_room_address"] and move["output_address"] in r.member_addresses for r in fresh_rooms
     )
+    if new_room is None:
+        permanently_excluded = any(d.room_id == move["room_id"] and d.category != CATEGORY_LIGHT for d in fresh_devices)
+        return permanently_excluded and absent_elsewhere
+    return move["output_address"] in new_room.member_addresses and absent_elsewhere
 
 
 async def _async_refresh_and_reload(
@@ -236,7 +278,9 @@ async def _async_refresh_and_reload(
         for d in fresh_site.devices:
             move = pending.get(d.device_id)
             if move is not None:
-                if move["room_id"] == d.room_id and _room_membership_converged(fresh_site.rooms, move):
+                if move["room_id"] == d.room_id and _room_membership_converged(
+                    fresh_site.rooms, fresh_site.devices, move
+                ):
                     del pending[d.device_id]
                 else:
                     device_dicts.append({**asdict(d), "room_id": move["room_id"]})
@@ -267,6 +311,9 @@ async def _async_refresh_and_reload(
                 CONF_GATEWAYS: fresh_site.gateways,
                 CONF_RESOURCE_SET_ID: fresh_site.resource_set_id,
                 CONF_DEVICE_ADDRESSES: fresh_site.device_addresses,
+                # Mirrors the in-memory pending cache so a restart doesn't lose an
+                # in-flight (not-yet-converged) move - see _pending_moves().
+                CONF_PENDING_ROOM_MOVES: dict(pending),
             },
         )
         if not await hass.config_entries.async_reload(entry.entry_id):
@@ -287,10 +334,13 @@ async def _async_refresh_and_reload(
 
 async def async_move_device_to_room(hass: HomeAssistant, entry: ConfigEntry, *, device_id: str, room_id: str) -> None:
     """Move a device to a different room by rejoining its mesh group, then refresh + reload."""
-    # Serializes calls for this SAME device: two overlapping moves could otherwise both
-    # read the same "current room" before either recorded its own, ending with the device
-    # joined to both destinations. Different devices still move fully concurrently.
-    async with _move_lock(hass, entry, device_id):
+    # Serializes every move for this entry (not just this device): every successful move
+    # ends in an async_reload that tears down and rebuilds entry.runtime_data (the
+    # coordinator) - without this, two DIFFERENT devices moved concurrently could have one
+    # call's reload swap the coordinator out from under the other's still-in-flight mesh
+    # writes. It also still covers the original same-device TOCTOU (two overlapping calls
+    # both reading the same stale "current room" before either records its own).
+    async with _move_lock(hass, entry):
         http_session, token, site = await _async_login_and_get_site(hass, entry)
         own_address = site.device_addresses.get(device_id)
         if own_address is None:
