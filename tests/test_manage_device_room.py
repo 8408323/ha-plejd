@@ -15,7 +15,7 @@ from plejd.cloud import (
     PlejdCloudRoomInfo,
     PlejdCloudSite,
 )
-from plejd.manage_device_room import async_move_device_to_room
+from plejd.manage_device_room import DATA_PENDING_ROOM_MOVES, async_move_device_to_room
 
 _KEY = bytes(range(16))
 
@@ -313,6 +313,107 @@ async def test_move_device_forces_local_room_id_when_cloud_has_not_converged(mon
 
     moved = next(d for d in entry.data["devices"] if d["device_id"] == "d1")
     assert moved["room_id"] == "r2"
+
+
+async def test_move_device_uses_cloud_room_for_a_device_it_has_never_moved(monkeypatch):
+    # A device this integration has no pending move for must trust the fresh cloud
+    # fetch's room_id directly, not whatever stale entry.data happens to already say -
+    # e.g. if the device was instead moved via the app itself since the last reload, the
+    # cloud (not our own state) is the authoritative source for its current room.
+    hass = _hass()
+    coordinator = _coordinator()
+    entry = _entry(
+        runtime_data=coordinator,
+        data={
+            "email": "u@x.com",
+            "password": "pw",
+            "site_id": "S1",
+            "devices": [{"device_id": "d1", "room_id": "r1"}],  # stale: app already moved it to r3
+        },
+    )
+    site = _site(
+        devices=[_device(room_id="r3")],  # the cloud correctly reports the device's real current room
+        device_addresses={"d1": 39},
+        all_rooms=[
+            _room("r1", "Kok", address=14),
+            _room("r2", "Stora badrummet", address=34),
+            _room("r3", "Sovrum", address=46),
+        ],
+    )
+    monkeypatch.setattr("plejd.manage_device_room.async_login", AsyncMock(return_value="tok"))
+    monkeypatch.setattr("plejd.manage_device_room.async_get_site", AsyncMock(side_effect=[site, site]))
+
+    await async_move_device_to_room(hass, entry, device_id="d1", room_id="r2")
+
+    coordinator.async_leave_mesh_group.assert_awaited_once_with(39, 46)  # r3's address, not stale r1's
+    coordinator.async_join_mesh_group.assert_awaited_once_with(39, 34)
+
+
+async def test_move_device_preserves_an_earlier_pending_move_for_another_device(monkeypatch):
+    # On a BLE-only site, refreshing for a second device's move must not revert an
+    # earlier, still-unconverged move's own correction back to the stale cloud value.
+    hass = _hass()
+    entry = _entry()
+    rooms_by_id = {
+        "r1": _room("r1", "Kok", address=14),
+        "r2": _room("r2", "Stora badrummet", address=34),
+        "r3": _room("r3", "Sovrum", address=46),
+    }
+
+    device_a_site = _site(
+        devices=[_device(device_id="a", room_id="r1", address=39)],
+        device_addresses={"a": 39},
+        all_rooms=list(rooms_by_id.values()),
+    )
+    monkeypatch.setattr("plejd.manage_device_room.async_login", AsyncMock(return_value="tok"))
+    monkeypatch.setattr(
+        "plejd.manage_device_room.async_get_site", AsyncMock(side_effect=[device_a_site, device_a_site])
+    )
+    await async_move_device_to_room(hass, entry, device_id="a", room_id="r2")
+    moved_a = next(d for d in entry.data["devices"] if d["device_id"] == "a")
+    assert moved_a["room_id"] == "r2"
+
+    # Now move a second device ("b") - the cloud fetch still (stale) reports "a" in "r1".
+    both_devices_stale_site = _site(
+        devices=[
+            _device(device_id="a", room_id="r1", address=39),  # still stale from the cloud's perspective
+            _device(device_id="b", room_id="r1", address=51),
+        ],
+        device_addresses={"a": 39, "b": 51},
+        all_rooms=list(rooms_by_id.values()),
+    )
+    monkeypatch.setattr(
+        "plejd.manage_device_room.async_get_site",
+        AsyncMock(side_effect=[both_devices_stale_site, both_devices_stale_site]),
+    )
+    await async_move_device_to_room(hass, entry, device_id="b", room_id="r3")
+
+    devices_by_id = {d["device_id"]: d for d in entry.data["devices"]}
+    assert devices_by_id["a"]["room_id"] == "r2"  # not reverted to the stale cloud's "r1"
+    assert devices_by_id["b"]["room_id"] == "r3"
+    assert "a" in hass.data[DATA_PENDING_ROOM_MOVES][entry.entry_id]  # still unconverged
+
+    # A third move, of an untouched device "d" - the cloud has now finally converged for
+    # "a" (matches its pending override) and correctly reports an unrelated device "d"
+    # that was never moved at all.
+    converged_site = _site(
+        devices=[
+            _device(device_id="a", room_id="r2", address=39),  # now matches pending - converged
+            _device(device_id="b", room_id="r1", address=51),
+            _device(device_id="d", room_id="r1", address=42),  # never moved; no pending entry
+        ],
+        device_addresses={"a": 39, "b": 51, "d": 42},
+        all_rooms=list(rooms_by_id.values()),
+    )
+    monkeypatch.setattr(
+        "plejd.manage_device_room.async_get_site", AsyncMock(side_effect=[converged_site, converged_site])
+    )
+    await async_move_device_to_room(hass, entry, device_id="b", room_id="r1")
+
+    assert "a" not in hass.data[DATA_PENDING_ROOM_MOVES][entry.entry_id]  # pruned: cloud converged
+    devices_by_id = {d["device_id"]: d for d in entry.data["devices"]}
+    assert devices_by_id["a"]["room_id"] == "r2"
+    assert devices_by_id["d"]["room_id"] == "r1"  # passed through untouched, no override existed
 
 
 async def test_move_device_skips_leave_when_device_has_no_current_room(monkeypatch):

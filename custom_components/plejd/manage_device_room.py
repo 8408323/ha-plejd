@@ -36,9 +36,23 @@ from .const import (
     CONF_ROOMS,
     CONF_SCENES,
     CONF_SITE_ID,
+    DOMAIN,
 )
 
-_MISSING = object()
+# Our own not-yet-cloud-confirmed moves (hass.data[DATA_PENDING_ROOM_MOVES][entry_id] =
+# {device_id: intended_room_id}), scoped to this integration's own calls only - never
+# populated from a device's plain entry.data/cloud room_id. This is what lets a repeat
+# move trust "what we ourselves just did" without ALSO blindly trusting stale local data
+# for a device this integration never touched (which could have been moved by the app
+# instead, in which case the fresh cloud fetch is the authoritative one). Deliberately
+# in-memory only: lost on an HA restart, which is fine - entry.data itself already holds
+# our last-written correction by then, this cache only informs the *next* call before
+# that happens.
+DATA_PENDING_ROOM_MOVES = f"{DOMAIN}_pending_room_moves"
+
+
+def _pending_moves(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, str]:
+    return hass.data.setdefault(DATA_PENDING_ROOM_MOVES, {}).setdefault(entry.entry_id, {})
 
 
 async def _async_login_and_get_site(hass: HomeAssistant, entry: ConfigEntry):
@@ -130,8 +144,7 @@ async def _async_refresh_and_reload(
     http_session,
     token,
     *,
-    moved_device_id: str,
-    moved_room_id: str,
+    pending: dict[str, str],
     output_address: int | None,
     is_light: bool,
     dimmable: bool,
@@ -147,16 +160,21 @@ async def _async_refresh_and_reload(
     # own _async_persist uses for the identical async_update_entry -> listener race.
     hass.data[schedule_ws.DATA_MANUAL_RELOAD] = entry.entry_id
     try:
-        # The moved device's roomId is forced to the intended destination regardless of
-        # what this fresh cloud fetch says: the cloud's own roomId/outputGroups records
-        # are only known to converge automatically when a gateway is online (confirmed
-        # live) - on a BLE-only site there's no such convergence path, so trusting the
-        # cloud fetch here could silently persist/reload the device's OLD room even
-        # though the mesh write already moved it.
-        device_dicts = [
-            {**asdict(d), "room_id": moved_room_id} if d.device_id == moved_device_id else asdict(d)
-            for d in fresh_site.devices
-        ]
+        # Every device with a pending (not-yet-cloud-confirmed) move keeps its intended
+        # room_id regardless of what this fresh cloud fetch says - not just the device
+        # this particular call just moved - or an earlier move's own correction would get
+        # reverted the next time any device is moved before the cloud converges. A pending
+        # entry is dropped once the fresh fetch actually agrees with it (converged).
+        device_dicts = []
+        for d in fresh_site.devices:
+            override = pending.get(d.device_id)
+            if override is not None:
+                if override == d.room_id:
+                    del pending[d.device_id]
+                else:
+                    device_dicts.append({**asdict(d), "room_id": override})
+                    continue
+            device_dicts.append(asdict(d))
         rooms = _patch_room_membership(
             fresh_site.rooms,
             output_address=output_address,
@@ -224,14 +242,17 @@ async def async_move_device_to_room(hass: HomeAssistant, entry: ConfigEntry, *, 
     if new_room.address is None:
         raise HomeAssistantError(f"Plejd room '{new_room.name}' has no mesh group address")
 
-    # Prefer our own most recently corrected room_id over this fresh cloud fetch's - the
-    # cloud may still report a prior mesh-only move's OLD room if it hasn't converged yet
-    # (see below), and a second move before that convergence must not re-derive "current
-    # room" from data we already know is stale, or it can reject a legitimate "move back",
-    # or leave the wrong (still-actually-current) room's mesh group.
-    local_devices = entry.data.get(CONF_DEVICES) or []
-    local_room_id = next((d.get("room_id") for d in local_devices if d.get("device_id") == device_id), _MISSING)
-    current_room_id = outputs[0].room_id if local_room_id is _MISSING else local_room_id
+    # Prefer our own pending (not-yet-cloud-confirmed) move over this fresh cloud fetch's
+    # room_id - the cloud may still report a prior mesh-only move's OLD room if it hasn't
+    # converged yet (see _async_refresh_and_reload), and a second move before that
+    # convergence must not re-derive "current room" from data already known to be stale,
+    # or it can reject a legitimate "move back", or leave the wrong (still-actually-
+    # current) room's mesh group. A device this integration has never moved has no
+    # pending entry, so it correctly falls back to trusting the cloud directly - e.g. if
+    # it was instead moved via the app itself, the cloud (not any of our own state) is the
+    # authoritative source for that.
+    pending = _pending_moves(hass, entry)
+    current_room_id = pending.get(device_id, outputs[0].room_id)
     if current_room_id == room_id:
         raise HomeAssistantError(f"Device is already in room '{new_room.name}'")
 
@@ -246,6 +267,7 @@ async def async_move_device_to_room(hass: HomeAssistant, entry: ConfigEntry, *, 
     if old_room is not None:
         await coordinator.async_leave_mesh_group(own_address, old_room.address)
     await coordinator.async_join_mesh_group(own_address, new_room.address)
+    pending[device_id] = room_id
 
     output = outputs[0]
     await _async_refresh_and_reload(
@@ -253,8 +275,7 @@ async def async_move_device_to_room(hass: HomeAssistant, entry: ConfigEntry, *, 
         entry,
         http_session,
         token,
-        moved_device_id=device_id,
-        moved_room_id=room_id,
+        pending=pending,
         output_address=output.address,
         is_light=output.category == CATEGORY_LIGHT,
         dimmable=output.dimmable,
