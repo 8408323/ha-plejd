@@ -14,8 +14,8 @@ from plejd.manage_room import async_remove_room, async_update_room
 _KEY = bytes(range(16))
 
 
-def _room(room_id="r1", name="Vardagsrum", has_devices=False) -> PlejdCloudRoomInfo:
-    return PlejdCloudRoomInfo(room_id=room_id, name=name, has_devices=has_devices)
+def _room(room_id="r1", name="Vardagsrum", has_devices=False, address=None) -> PlejdCloudRoomInfo:
+    return PlejdCloudRoomInfo(room_id=room_id, name=name, has_devices=has_devices, address=address)
 
 
 def _site(all_rooms=None) -> PlejdCloudSite:

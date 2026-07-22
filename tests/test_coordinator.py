@@ -373,6 +373,46 @@ async def test_execute_scene_without_connection_raises():
         await c.async_execute_scene(1)
 
 
+async def test_leave_mesh_group_writes_expected_vector(monkeypatch):
+    client = _FakeClient()
+    _patch_connect(monkeypatch, client)
+    ble = types.SimpleNamespace(address="01:02:03:04:05:a0")
+    hass = _hass([_info("01:02:03:04:05:a0")], {"01:02:03:04:05:a0": ble})
+    c = PlejdCoordinator(hass, _entry(discovered=None))
+    await c.async_start()
+    await c.async_leave_mesh_group(0x27, 0x0E)
+
+    from plejd.protocol import CMD_MESH_GROUP_MEMBERSHIP, decode_command
+
+    cmd = decode_command(c._connection.mesh.decrypt(client.writes[-1][1]))
+    assert cmd.address == 0x27 and cmd.command == CMD_MESH_GROUP_MEMBERSHIP
+    assert cmd.data == bytes([0x01, 0x0E])
+
+
+async def test_join_mesh_group_writes_expected_vector(monkeypatch):
+    client = _FakeClient()
+    _patch_connect(monkeypatch, client)
+    ble = types.SimpleNamespace(address="01:02:03:04:05:a0")
+    hass = _hass([_info("01:02:03:04:05:a0")], {"01:02:03:04:05:a0": ble})
+    c = PlejdCoordinator(hass, _entry(discovered=None))
+    await c.async_start()
+    await c.async_join_mesh_group(0x27, 0x22)
+
+    from plejd.protocol import CMD_MESH_GROUP_MEMBERSHIP, decode_command
+
+    cmd = decode_command(c._connection.mesh.decrypt(client.writes[-1][1]))
+    assert cmd.address == 0x27 and cmd.command == CMD_MESH_GROUP_MEMBERSHIP
+    assert cmd.data == bytes([0x01, 0x22, 0x01])
+
+
+async def test_join_mesh_group_without_connection_raises():
+    from homeassistant.exceptions import HomeAssistantError
+
+    c = PlejdCoordinator(_hass(), _entry())
+    with pytest.raises(HomeAssistantError, match="not connected"):
+        await c.async_join_mesh_group(0x27, 0x22)
+
+
 def test_pick_device_handles_missing_rssi():
     hass = _hass([_info("X", rssi=None), _info("Y", rssi=-40)])
     c = PlejdCoordinator(hass, _entry(discovered=None))

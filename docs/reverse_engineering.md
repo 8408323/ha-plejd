@@ -109,6 +109,7 @@ Key opcodes (from the app's mesh command schema, 194 commands total):
 | `0x0195` | Input state and level | `channel(1)`, `state(1)`, `level(2)` — state notification |
 | `0x001B` | System time | `type(1)`, … |
 | `0x0000` / `0x0003` / `0x0004` | Device type / MAC / firmware | query/response |
+| `0x0008` | Mesh group membership (join/leave a room) | `0x01`, `room_group_address(1)`, optional trailing `0x01` = join (absent = leave). Confirmed via a live BLE capture of the app's own "move device to room" action, decrypted and cross-checked against the room's real cloud group address (`roomAddress`) — room membership is mesh-group membership, not a Parse cloud field; `address` targets the device's own mesh address (`deviceAddress`), not its output's cloud address. |
 
 ## Cloud
 

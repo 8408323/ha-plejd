@@ -19,12 +19,12 @@ from .coordinator import PlejdCoordinator
 from .discovery import async_bluetooth_available, async_scan_unprovisioned
 from .holiday_mode import DATA_HOLIDAY_MODE, PlejdHolidayMode
 from .manage_device import async_remove_device
+from .manage_device_room import async_move_device_to_room
 from .manage_room import async_remove_room, async_update_room
 from .manage_scene import async_create_scene, async_remove_scene, async_update_scene
 from .remote_profiles import PlejdRemoteProfiles
 
 _WS_REGISTERED = f"{DOMAIN}_ws_registered"
-_SERVICES_REGISTERED = f"{DOMAIN}_services_registered"
 # The config entry the permanently-registered service handlers below should act on -
 # refreshed on every async_setup_entry call (including a retry or a later reinstall), so
 # the handlers stay bound to whichever entry is actually current instead of the first one
@@ -57,6 +57,7 @@ SERVICE_CREATE_SCENE = "create_scene"
 SERVICE_UPDATE_SCENE = "update_scene"
 SERVICE_REMOVE_SCENE = "remove_scene"
 SERVICE_REMOVE_DEVICE = "remove_device"
+SERVICE_MOVE_DEVICE_TO_ROOM = "move_device_to_room"
 
 _INPUT_SETTING_SCHEMA = vol.Schema({vol.Required("input"): int, vol.Required("button_type"): str})
 
@@ -118,6 +119,8 @@ _UPDATE_SCENE_SCHEMA = vol.Schema(
 _REMOVE_SCENE_SCHEMA = vol.Schema({vol.Required("scene_id"): str})
 
 _REMOVE_DEVICE_SCHEMA = vol.Schema({vol.Required("device_id"): str})
+
+_MOVE_DEVICE_TO_ROOM_SCHEMA = vol.Schema({vol.Required("device_id"): str, vol.Required("room_id"): str})
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -208,6 +211,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         current_entry = hass.data[_DATA_CURRENT_ENTRY]
         await async_remove_device(hass, current_entry, device_id=call.data["device_id"])
 
+    async def _async_handle_move_device_to_room(call) -> None:
+        current_entry = hass.data[_DATA_CURRENT_ENTRY]
+        await async_move_device_to_room(
+            hass, current_entry, device_id=call.data["device_id"], room_id=call.data["room_id"]
+        )
+
     # Registered once per hass lifetime, before coordinator.async_start(), and NOT torn
     # down by entry.async_on_unload: HA runs every already-registered on_unload callback
     # as cleanup when async_setup_entry raises ConfigEntryNotReady (same path a failed
@@ -219,25 +228,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # and every handler above reads hass.data[_DATA_CURRENT_ENTRY] fresh rather than
     # closing over this specific attempt's entry, so they rebind correctly even after a
     # full remove+reinstall (not just a setup retry) without needing to re-register.
-    if not hass.data.get(_SERVICES_REGISTERED):
-        hass.services.async_register(DOMAIN, SERVICE_ADD_DEVICE, _async_handle_add_device, schema=_ADD_DEVICE_SCHEMA)
-        hass.services.async_register(DOMAIN, SERVICE_SCAN_DEVICES, _async_handle_scan_devices)
-        hass.services.async_register(DOMAIN, SERVICE_ALL_OFF, _async_handle_all_off)
-        hass.services.async_register(DOMAIN, SERVICE_UPDATE_ROOM, _async_handle_update_room, schema=_UPDATE_ROOM_SCHEMA)
-        hass.services.async_register(DOMAIN, SERVICE_REMOVE_ROOM, _async_handle_remove_room, schema=_REMOVE_ROOM_SCHEMA)
-        hass.services.async_register(
-            DOMAIN, SERVICE_CREATE_SCENE, _async_handle_create_scene, schema=_CREATE_SCENE_SCHEMA
-        )
-        hass.services.async_register(
-            DOMAIN, SERVICE_UPDATE_SCENE, _async_handle_update_scene, schema=_UPDATE_SCENE_SCHEMA
-        )
-        hass.services.async_register(
-            DOMAIN, SERVICE_REMOVE_SCENE, _async_handle_remove_scene, schema=_REMOVE_SCENE_SCHEMA
-        )
-        hass.services.async_register(
-            DOMAIN, SERVICE_REMOVE_DEVICE, _async_handle_remove_device, schema=_REMOVE_DEVICE_SCHEMA
-        )
-        hass.data[_SERVICES_REGISTERED] = True
+    # Checked per-service (not one all-or-nothing flag): a service added by a later
+    # integration update would otherwise stay unregistered on a reload of an already-
+    # loaded HA process, needing a full HA restart just to appear.
+    def _register_once(service: str, handler, schema=None) -> None:
+        if not hass.services.has_service(DOMAIN, service):
+            hass.services.async_register(DOMAIN, service, handler, schema=schema)
+
+    _register_once(SERVICE_ADD_DEVICE, _async_handle_add_device, _ADD_DEVICE_SCHEMA)
+    _register_once(SERVICE_SCAN_DEVICES, _async_handle_scan_devices)
+    _register_once(SERVICE_ALL_OFF, _async_handle_all_off)
+    _register_once(SERVICE_UPDATE_ROOM, _async_handle_update_room, _UPDATE_ROOM_SCHEMA)
+    _register_once(SERVICE_REMOVE_ROOM, _async_handle_remove_room, _REMOVE_ROOM_SCHEMA)
+    _register_once(SERVICE_CREATE_SCENE, _async_handle_create_scene, _CREATE_SCENE_SCHEMA)
+    _register_once(SERVICE_UPDATE_SCENE, _async_handle_update_scene, _UPDATE_SCENE_SCHEMA)
+    _register_once(SERVICE_REMOVE_SCENE, _async_handle_remove_scene, _REMOVE_SCENE_SCHEMA)
+    _register_once(SERVICE_REMOVE_DEVICE, _async_handle_remove_device, _REMOVE_DEVICE_SCHEMA)
+    _register_once(SERVICE_MOVE_DEVICE_TO_ROOM, _async_handle_move_device_to_room, _MOVE_DEVICE_TO_ROOM_SCHEMA)
 
     # Register the sidebar dashboard before starting the coordinator. It's optional, so a
     # failure (e.g. another panel already owns the `plejd` url path) must not abort setup —
