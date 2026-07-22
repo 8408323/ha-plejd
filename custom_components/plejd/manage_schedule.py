@@ -525,35 +525,47 @@ async def async_update_schedule(
             after_primary = set(new_device_ids) if new_device_ids is not None else set(cached.get("device_ids") or [])
             after_devices = after_primary | set((night_reduction_result or {}).get("device_ids") or [])
 
-            result = await async_cloud_update_time_event(
-                http_session,
-                token,
-                site.site_id,
-                schedule_id,
-                cached["scene_id"],
-                scheduled_days=days,
-                fade_time=fade_time if fade_time is not None else cached["fade_time"],
-                activated=activated if activated is not None else cached["activated"],
-                start_event=effective_start_event,
-                start_offset=effective_start_offset,
-                end_event=effective_end_event,
-                end_offset=effective_end_offset,
-                dirty_devices=sorted(after_devices),
-                dirty_removed_devices=sorted(before_devices - after_devices),
-                night_reduction=night_reduction_result,
+            needs_time_event_update = (
+                scheduled_days is not None
+                or fade_time is not None
+                or activated is not None
+                or start_event is not None
+                or start_offset is not None
+                or end_event is not None
+                or end_offset is not None
+                or night_reduction is not None
+                or after_devices != before_devices
             )
-            if result is None:
-                raise HomeAssistantError(f"Plejd cloud rejected the schedule update for {schedule_id}")
-            if new_device_ids is not None:
-                updated["device_ids"] = new_device_ids
-            updated["night_reduction"] = night_reduction_result
-            updated["scheduled_days"] = days
-            updated["fade_time"] = fade_time if fade_time is not None else cached["fade_time"]
-            updated["activated"] = activated if activated is not None else cached["activated"]
-            updated["start_event"] = effective_start_event
-            updated["start_offset"] = effective_start_offset
-            updated["end_event"] = effective_end_event
-            updated["end_offset"] = effective_end_offset
+            if needs_time_event_update:
+                result = await async_cloud_update_time_event(
+                    http_session,
+                    token,
+                    site.site_id,
+                    schedule_id,
+                    cached["scene_id"],
+                    scheduled_days=days,
+                    fade_time=fade_time if fade_time is not None else cached["fade_time"],
+                    activated=activated if activated is not None else cached["activated"],
+                    start_event=effective_start_event,
+                    start_offset=effective_start_offset,
+                    end_event=effective_end_event,
+                    end_offset=effective_end_offset,
+                    dirty_devices=sorted(after_devices),
+                    dirty_removed_devices=sorted(before_devices - after_devices),
+                    night_reduction=night_reduction_result,
+                )
+                if result is None:
+                    raise HomeAssistantError(f"Plejd cloud rejected the schedule update for {schedule_id}")
+                if new_device_ids is not None:
+                    updated["device_ids"] = new_device_ids
+                updated["night_reduction"] = night_reduction_result
+                updated["scheduled_days"] = days
+                updated["fade_time"] = fade_time if fade_time is not None else cached["fade_time"]
+                updated["activated"] = activated if activated is not None else cached["activated"]
+                updated["start_event"] = effective_start_event
+                updated["start_offset"] = effective_start_offset
+                updated["end_event"] = effective_end_event
+                updated["end_offset"] = effective_end_offset
         except PlejdCloudError as err:
             await _async_cleanup_orphaned_scenes(http_session, token, site.site_id, created_scene_ids)
             pending_error = HomeAssistantError(f"Plejd cloud error updating schedule: {err}")

@@ -1463,6 +1463,26 @@ async def test_create_time_event_rejects_missing_event_id():
     assert result is None
 
 
+async def test_create_time_event_rejects_non_string_event_id():
+    with aioresponses() as m:
+        m.post(_CREATE_TIME_EVENT, payload={"result": {"targetDevices": [], "eventId": 12345}})
+        async with aiohttp.ClientSession() as s:
+            result = await async_create_time_event(
+                s,
+                "tok",
+                "site1",
+                "scene1",
+                scheduled_days=[0],
+                fade_time=0,
+                activated=True,
+                start_event="sunset",
+                start_offset=15,
+                end_event="sunrise",
+                end_offset=0,
+            )
+    assert result is None
+
+
 async def test_remove_time_event_posts_correct_payload():
     from aioresponses import CallbackResult
 

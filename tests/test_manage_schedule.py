@@ -1099,13 +1099,34 @@ async def test_update_schedule_persists_a_succeeded_scene_rename_even_if_the_tri
     monkeypatch.setattr("plejd.manage_schedule.async_cloud_update_time_event", AsyncMock(return_value=None))
 
     with pytest.raises(HomeAssistantError, match="rejected the schedule update"):
-        await async_update_schedule(hass, entry, schedule_id="te1", title="Renamed")
+        await async_update_schedule(hass, entry, schedule_id="te1", title="Renamed", start_offset=30)
 
     # The rename already succeeded on the cloud before the trigger update was rejected -
     # entry.data must reflect that, not silently keep showing the pre-rename title.
     assert entry.data["cloud_schedules"][0]["title"] == "Renamed"
     # But fields that only take effect via the (rejected) trigger update stay unchanged.
     assert entry.data["cloud_schedules"][0]["start_offset"] == 15
+    hass.config_entries.async_reload.assert_awaited_once_with("e1")
+
+
+async def test_update_schedule_title_only_does_not_resend_the_time_event(monkeypatch):
+    # A title-only rename must not resend the cached whole-state TimeEvent payload - doing so
+    # would silently overwrite trigger/night-reduction data if the schedule was since edited
+    # in the Plejd app (this integration has no way to detect that).
+    hass = _hass()
+    entry = _entry(
+        data={"email": "u@x.com", "password": "pw", "site_id": "S1", "cloud_schedules": [_cached_schedule()]}
+    )
+    monkeypatch.setattr("plejd.manage_schedule.async_login", AsyncMock(return_value="tok"))
+    monkeypatch.setattr("plejd.manage_schedule.async_get_site", AsyncMock(return_value=_site([_scene()])))
+    monkeypatch.setattr("plejd.manage_schedule.async_cloud_update_scene", AsyncMock(return_value=True))
+    time_event_mock = AsyncMock(return_value={"eventId": "te1"})
+    monkeypatch.setattr("plejd.manage_schedule.async_cloud_update_time_event", time_event_mock)
+
+    await async_update_schedule(hass, entry, schedule_id="te1", title="Renamed")
+
+    time_event_mock.assert_not_awaited()
+    assert entry.data["cloud_schedules"][0]["title"] == "Renamed"
     hass.config_entries.async_reload.assert_awaited_once_with("e1")
 
 

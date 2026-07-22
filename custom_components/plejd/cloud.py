@@ -628,7 +628,7 @@ async def async_create_time_event(
         "targetDevices": device_ids,
     }
     result = await _call_function(session, token, PLEJD_FN_CREATE_TIME_EVENT, params)
-    if not isinstance(result, dict) or not result.get("eventId"):
+    if not isinstance(result, dict) or not isinstance(result.get("eventId"), str) or not result["eventId"]:
         return None
     return result
 
