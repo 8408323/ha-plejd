@@ -24,7 +24,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from . import schedule_ws
-from .cloud import PlejdAuthError, PlejdCloudError, async_get_site, async_login
+from .cloud import PlejdAuthError, PlejdCloudError, PlejdCloudRoom, async_get_site, async_login
 from .const import (
     CONF_DEVICE_ADDRESSES,
     CONF_DEVICES,
@@ -56,8 +56,67 @@ async def _async_login_and_get_site(hass: HomeAssistant, entry: ConfigEntry):
     return http_session, token, site
 
 
+def _patch_room_membership(
+    rooms: list[PlejdCloudRoom],
+    *,
+    own_address: int,
+    dimmable: bool,
+    old_room_address: int | None,
+    new_room_address: int,
+) -> list[PlejdCloudRoom]:
+    """Locally correct the device's room-group membership for rooms already present.
+
+    Needed for the same reason as the roomId override above: on a BLE-only site the
+    cloud's outputGroups (what `rooms`/PlejdRoomLight's aggregate membership is built
+    from) may never reflect a mesh-only move. Deliberately does NOT synthesize a new
+    room entry when new_room_address isn't found here - parse_site() can have excluded
+    it for a real reason (no other light member, or a non-light member sharing the same
+    group address), which this function has no way to distinguish from "just empty";
+    a genuinely new light-group entity for it will appear once the cloud does converge.
+    """
+    patched = []
+    for room in rooms:
+        if room.address == old_room_address and own_address in room.member_addresses:
+            dimmable_addresses = [m for m in room.dimmable_addresses if m != own_address]
+            patched.append(
+                PlejdCloudRoom(
+                    room_id=room.room_id,
+                    name=room.name,
+                    address=room.address,
+                    member_addresses=[m for m in room.member_addresses if m != own_address],
+                    dimmable=bool(dimmable_addresses),
+                    dimmable_addresses=dimmable_addresses,
+                )
+            )
+        elif room.address == new_room_address:
+            dimmable_addresses = sorted(set(room.dimmable_addresses) | ({own_address} if dimmable else set()))
+            patched.append(
+                PlejdCloudRoom(
+                    room_id=room.room_id,
+                    name=room.name,
+                    address=room.address,
+                    member_addresses=sorted(set(room.member_addresses) | {own_address}),
+                    dimmable=room.dimmable or dimmable,
+                    dimmable_addresses=dimmable_addresses,
+                )
+            )
+        else:
+            patched.append(room)
+    return patched
+
+
 async def _async_refresh_and_reload(
-    hass: HomeAssistant, entry: ConfigEntry, http_session, token, *, moved_device_id: str, moved_room_id: str
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    http_session,
+    token,
+    *,
+    moved_device_id: str,
+    moved_room_id: str,
+    own_address: int,
+    dimmable: bool,
+    old_room_address: int | None,
+    new_room_address: int,
 ) -> None:
     try:
         fresh_site = await async_get_site(http_session, token, entry.data[CONF_SITE_ID])
@@ -78,6 +137,13 @@ async def _async_refresh_and_reload(
             {**asdict(d), "room_id": moved_room_id} if d.device_id == moved_device_id else asdict(d)
             for d in fresh_site.devices
         ]
+        rooms = _patch_room_membership(
+            fresh_site.rooms,
+            own_address=own_address,
+            dimmable=dimmable,
+            old_room_address=old_room_address,
+            new_room_address=new_room_address,
+        )
         hass.config_entries.async_update_entry(
             entry,
             data={
@@ -86,7 +152,7 @@ async def _async_refresh_and_reload(
                 CONF_INPUTS: [asdict(i) for i in fresh_site.inputs],
                 CONF_MOTION: [asdict(m) for m in fresh_site.motion],
                 CONF_SCENES: [asdict(s) for s in fresh_site.scenes],
-                CONF_ROOMS: [asdict(r) for r in fresh_site.rooms],
+                CONF_ROOMS: [asdict(r) for r in rooms],
                 CONF_GATEWAYS: fresh_site.gateways,
                 CONF_RESOURCE_SET_ID: fresh_site.resource_set_id,
                 CONF_DEVICE_ADDRESSES: fresh_site.device_addresses,
@@ -115,12 +181,19 @@ async def async_move_device_to_room(hass: HomeAssistant, entry: ConfigEntry, *, 
     if own_address is None:
         raise HomeAssistantError(f"Plejd device {device_id} not found on this site")
     outputs = [d for d in site.devices if d.device_id == device_id]
-    if len(outputs) > 1:
+    if not outputs:
+        # A real physical device with no controllable output (a motion sensor, an
+        # input-only device, a gateway) - has an entry in device_addresses but none in
+        # site.devices.
+        raise HomeAssistantError(f"Plejd device {device_id} has no controllable output to move")
+    if len(outputs) > 1 or len(outputs[0].outputs) > 1:
         # The mesh command targets the device's own (shared) address, not a per-output
         # one, but a live capture confirmed a multi-output device's outputs can have
         # independently different rooms - without a capture of moving a second output to
         # confirm how (or whether) the command disambiguates between them, moving a
-        # multi-output device risks silently moving the wrong output, or both.
+        # multi-output device risks silently moving the wrong output, or both. Checked
+        # both ways since a single site.devices record can itself list every output
+        # address for the device (built from outputAddress), not just len(outputs).
         raise HomeAssistantError(
             f"Plejd device {device_id} has multiple outputs; move_device_to_room isn't safe for it yet"
         )
@@ -139,4 +212,15 @@ async def async_move_device_to_room(hass: HomeAssistant, entry: ConfigEntry, *, 
         await coordinator.async_leave_mesh_group(own_address, old_room.address)
     await coordinator.async_join_mesh_group(own_address, new_room.address)
 
-    await _async_refresh_and_reload(hass, entry, http_session, token, moved_device_id=device_id, moved_room_id=room_id)
+    await _async_refresh_and_reload(
+        hass,
+        entry,
+        http_session,
+        token,
+        moved_device_id=device_id,
+        moved_room_id=room_id,
+        own_address=own_address,
+        dimmable=outputs[0].dimmable,
+        old_room_address=old_room.address if old_room is not None else None,
+        new_room_address=new_room.address,
+    )

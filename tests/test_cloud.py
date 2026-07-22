@@ -350,7 +350,7 @@ def test_parse_site_device_addresses_drops_garbage_values():
     site = parse_site(
         {
             "plejdMesh": {"cryptoKey": "00" * 16},
-            "deviceAddress": {"d1": 5, "d2": "not-a-number", "d3": None, "d4": 300, "d5": -1, "d6": 0},
+            "deviceAddress": {"d1": 5, "d2": "not-a-number", "d3": None, "d4": 300, "d5": -1, "d6": 0, "d7": True},
             "devices": [],
         }
     )
@@ -838,8 +838,9 @@ def test_parse_site_parses_rooms_with_group_addresses():
             {"roomId": "r1", "title": "Kitchen"},
             {"roomId": "r3", "title": "Empty room"},
         ],
-        # r2 is absent from rooms[] -> name falls back to "Room"; r4's address is non-int -> skipped
-        "roomAddress": {"r1": 14, "r2": 16, "r3": 99, "r4": "bad"},
+        # r2 is absent from rooms[] -> name falls back to "Room"; r4's address is non-int
+        # -> skipped; r5's is a bool (int subclass) -> also skipped, not silently coerced.
+        "roomAddress": {"r1": 14, "r2": 16, "r3": 99, "r4": "bad", "r5": True},
         # d1 (a LIGHT) belongs to both groups; both groups have only light members.
         "outputGroups": {"d1": {"0": [14, 16]}},
     }

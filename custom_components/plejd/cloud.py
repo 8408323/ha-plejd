@@ -730,6 +730,8 @@ def parse_site(site: dict) -> PlejdCloudSite:
     # needs a target address for a room even when it has no light-group entity).
     room_group_address: dict[str, int] = {}
     for room_id, addr in room_address.items():
+        if isinstance(addr, bool):
+            continue  # bool is an int subclass - int(True) == 1 would silently pass as a real address
         try:
             group_addr = int(addr)
         except (TypeError, ValueError):
@@ -771,6 +773,8 @@ def parse_site(site: dict) -> PlejdCloudSite:
     meta = site.get("site") or site  # id/title are nested under "site" in the real payload
     device_addresses: dict[str, int] = {}
     for device_id, addr in device_address.items():
+        if isinstance(addr, bool):
+            continue  # bool is an int subclass - int(True) == 1 would silently pass as a real address
         try:
             addr_int = int(addr)
         except (TypeError, ValueError):
