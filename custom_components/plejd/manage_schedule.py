@@ -19,6 +19,7 @@ the activated flag on async_update_schedule to pause one instead.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from dataclasses import asdict
@@ -51,6 +52,20 @@ from .const import (
     SCHEDULE_OFFSET_MIN,
 )
 
+_DATA_LOCKS = "plejd_cloud_schedule_locks"
+
+
+def _async_get_lock(hass: HomeAssistant, entry: ConfigEntry) -> asyncio.Lock:
+    """One lock per config entry, so concurrent create/update calls can't race on CONF_CLOUD_SCHEDULES.
+
+    Unlike CONF_DEVICES/CONF_SCENES/etc, always rebuilt wholesale from a fresh getSiteById,
+    this list is the only place a cloud schedule's ids live (getSiteById's own response for
+    existing schedules isn't confirmed) - a lost update here permanently orphans the schedule
+    from this integration's point of view, not just until the next refresh.
+    """
+    locks: dict[str, asyncio.Lock] = hass.data.setdefault(_DATA_LOCKS, {})
+    return locks.setdefault(entry.entry_id, asyncio.Lock())
+
 
 async def _async_login_and_get_site(hass: HomeAssistant, entry: ConfigEntry):
     http_session = async_get_clientsession(hass)
@@ -74,6 +89,11 @@ async def _async_refresh_and_reload(
     try:
         fresh_site = await async_get_site(http_session, token, entry.data[CONF_SITE_ID])
     except PlejdCloudError as err:
+        # Even if refreshing the rest of the site fails, don't lose track of a cloud schedule
+        # that was already created/updated on the cloud - entry.data[CONF_CLOUD_SCHEDULES] is
+        # the only place this integration remembers it (getSiteById's own listing of existing
+        # schedules isn't confirmed), so losing this write would orphan it permanently.
+        hass.config_entries.async_update_entry(entry, data={**entry.data, CONF_CLOUD_SCHEDULES: cloud_schedules})
         raise HomeAssistantError(f"Plejd cloud error refreshing site: {err}") from err
     hass.data[schedule_ws.DATA_MANUAL_RELOAD] = entry.entry_id
     try:
@@ -102,7 +122,7 @@ async def _async_refresh_and_reload(
 
 
 async def _async_cleanup_orphaned_scenes(http_session, token: str, site_id: str, scene_ids: list[str]) -> None:
-    """Best-effort removal of scene(s) already created before a later step in the same create failed.
+    """Best-effort removal of scene(s) already created before a later step in the same call failed.
 
     Deliberately swallows PlejdCloudError: the caller is already raising the real failure, and an
     orphaned hidden scene (worst case) is a lesser problem than masking that failure with this one.
@@ -159,11 +179,22 @@ def _night_reduction_settings(schedule_id: str) -> str:
 def _night_reduction_result(scene_id: str, night_reduction: dict) -> dict:
     return {
         "scene_id": scene_id,
+        "device_ids": sorted({s["device_id"] for s in night_reduction["scene_steps"]}),
         "start_time": night_reduction["start_time"],
         "end_time": night_reduction["end_time"],
         "weekend_start_time": night_reduction.get("weekend_start_time"),
         "weekend_end_time": night_reduction.get("weekend_end_time"),
     }
+
+
+def _all_device_ids(schedule: dict) -> set[str]:
+    """The union of devices a schedule's on-scene and (if any) night-reduction scene target.
+
+    Used for dirtyDevices/dirtyRemovedDevices - a device referenced only by the night-reduction
+    scene still needs its local cache marked dirty on the cloud, same as an on-scene device.
+    """
+    night_reduction = schedule.get("night_reduction") or {}
+    return set(schedule.get("device_ids") or []) | set(night_reduction.get("device_ids") or [])
 
 
 async def async_create_schedule(
@@ -218,6 +249,9 @@ async def async_create_schedule(
             )
             created_scene_ids.append(night_scene_id)
             night_reduction_result = _night_reduction_result(night_scene_id, night_reduction)
+        dirty_devices = sorted(
+            set(device_ids) | (set(night_reduction_result["device_ids"]) if night_reduction_result else set())
+        )
         result = await async_cloud_update_time_event(
             http_session,
             token,
@@ -231,7 +265,7 @@ async def async_create_schedule(
             start_offset=start_offset,
             end_event=end_event,
             end_offset=end_offset,
-            dirty_devices=device_ids,
+            dirty_devices=dirty_devices,
             night_reduction=night_reduction_result,
         )
     except PlejdCloudError as err:
@@ -241,24 +275,23 @@ async def async_create_schedule(
         await _async_cleanup_orphaned_scenes(http_session, token, site.site_id, created_scene_ids)
         raise HomeAssistantError("Plejd cloud rejected the schedule creation")
 
-    cloud_schedules = [*entry.data.get(CONF_CLOUD_SCHEDULES, [])]
-    cloud_schedules.append(
-        {
-            "schedule_id": schedule_id,
-            "scene_id": on_scene_id,
-            "title": title,
-            "device_ids": device_ids,
-            "scheduled_days": days,
-            "fade_time": fade_time,
-            "activated": True,
-            "start_event": start_event,
-            "start_offset": start_offset,
-            "end_event": end_event,
-            "end_offset": end_offset,
-            "night_reduction": night_reduction_result,
-        }
-    )
-    await _async_refresh_and_reload(hass, entry, http_session, token, cloud_schedules=cloud_schedules)
+    schedule = {
+        "schedule_id": schedule_id,
+        "scene_id": on_scene_id,
+        "title": title,
+        "device_ids": device_ids,
+        "scheduled_days": days,
+        "fade_time": fade_time,
+        "activated": True,
+        "start_event": start_event,
+        "start_offset": start_offset,
+        "end_event": end_event,
+        "end_offset": end_offset,
+        "night_reduction": night_reduction_result,
+    }
+    async with _async_get_lock(hass, entry):
+        cloud_schedules = [*entry.data.get(CONF_CLOUD_SCHEDULES, []), schedule]
+        await _async_refresh_and_reload(hass, entry, http_session, token, cloud_schedules=cloud_schedules)
 
 
 async def async_update_schedule(
@@ -319,6 +352,7 @@ async def async_update_schedule(
         raise HomeAssistantError(f"Plejd scene {cached_night_reduction['scene_id']} not found on this site")
 
     updated = dict(cached)
+    created_scene_ids: list[str] = []
     try:
         if title is not None or scene_steps is not None:
             ok = await async_cloud_update_scene(
@@ -331,6 +365,7 @@ async def async_update_schedule(
             if scene_steps is not None:
                 updated["device_ids"] = sorted({s["device_id"] for s in scene_steps})
 
+        night_reduction_result = cached_night_reduction
         if night_reduction is not None:
             effective_title = updated["title"]
             if cached_night_reduction is None:
@@ -343,6 +378,7 @@ async def async_update_schedule(
                     hidden_from_scene_list=True,
                     settings=_night_reduction_settings(schedule_id),
                 )
+                created_scene_ids.append(night_scene_id)
             else:
                 night_scene_id = cached_night_reduction["scene_id"]
                 ok = await async_cloud_update_scene(
@@ -350,7 +386,12 @@ async def async_update_schedule(
                 )
                 if not ok:
                     raise HomeAssistantError("Plejd cloud rejected the night-reduction scene update")
-            updated["night_reduction"] = _night_reduction_result(night_scene_id, night_reduction)
+            night_reduction_result = _night_reduction_result(night_scene_id, night_reduction)
+
+        before_devices = _all_device_ids(cached)
+        after_devices = set(updated.get("device_ids") or []) | set(
+            (night_reduction_result or {}).get("device_ids") or []
+        )
 
         result = await async_cloud_update_time_event(
             http_session,
@@ -365,11 +406,13 @@ async def async_update_schedule(
             start_offset=effective_start_offset,
             end_event=effective_end_event,
             end_offset=effective_end_offset,
-            dirty_devices=updated.get("device_ids") or [],
-            night_reduction=updated["night_reduction"],
+            dirty_devices=sorted(after_devices),
+            dirty_removed_devices=sorted(before_devices - after_devices),
+            night_reduction=night_reduction_result,
         )
         if result is None:
             raise HomeAssistantError(f"Plejd cloud rejected the schedule update for {schedule_id}")
+        updated["night_reduction"] = night_reduction_result
         updated["scheduled_days"] = days
         updated["fade_time"] = fade_time if fade_time is not None else cached["fade_time"]
         updated["activated"] = activated if activated is not None else cached["activated"]
@@ -378,9 +421,14 @@ async def async_update_schedule(
         updated["end_event"] = effective_end_event
         updated["end_offset"] = effective_end_offset
     except PlejdCloudError as err:
+        await _async_cleanup_orphaned_scenes(http_session, token, site.site_id, created_scene_ids)
         raise HomeAssistantError(f"Plejd cloud error updating schedule: {err}") from err
+    except HomeAssistantError:
+        await _async_cleanup_orphaned_scenes(http_session, token, site.site_id, created_scene_ids)
+        raise
     finally:
-        cloud_schedules = [
-            updated if s["schedule_id"] == schedule_id else s for s in entry.data.get(CONF_CLOUD_SCHEDULES, [])
-        ]
-        await _async_refresh_and_reload(hass, entry, http_session, token, cloud_schedules=cloud_schedules)
+        async with _async_get_lock(hass, entry):
+            cloud_schedules = [
+                updated if s["schedule_id"] == schedule_id else s for s in entry.data.get(CONF_CLOUD_SCHEDULES, [])
+            ]
+            await _async_refresh_and_reload(hass, entry, http_session, token, cloud_schedules=cloud_schedules)

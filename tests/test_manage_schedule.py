@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import types
 from unittest.mock import AsyncMock, MagicMock
 
@@ -382,6 +383,84 @@ async def test_create_schedule_appends_to_an_existing_non_empty_cache(monkeypatc
     assert cached[1]["scene_id"] == "new-scene-id"
 
 
+async def test_create_schedule_serializes_concurrent_calls_via_a_lock(monkeypatch):
+    # Two concurrent create_schedule calls against the same entry must not race on
+    # reading+writing entry.data[CONF_CLOUD_SCHEDULES] - without the lock, both could read
+    # the same pre-update list and the second write would silently drop the first schedule.
+    hass = _hass()
+    entry = _entry()
+    monkeypatch.setattr("plejd.manage_schedule.async_login", AsyncMock(return_value="tok"))
+
+    async def _get_site(*args, **kwargs):
+        await asyncio.sleep(0)  # yield control so both calls get a chance to interleave
+        return _site()
+
+    monkeypatch.setattr("plejd.manage_schedule.async_get_site", _get_site)
+    scene_ids = iter(["scene-a", "scene-b"])
+    monkeypatch.setattr(
+        "plejd.manage_schedule.async_cloud_create_scene", AsyncMock(side_effect=lambda *a, **k: next(scene_ids))
+    )
+    monkeypatch.setattr(
+        "plejd.manage_schedule.async_cloud_update_time_event", AsyncMock(return_value={"eventId": "te1"})
+    )
+
+    await asyncio.gather(
+        async_create_schedule(
+            hass,
+            entry,
+            title="A",
+            scene_steps=[_STEP],
+            start_event="sunset",
+            start_offset=0,
+            end_event="sunrise",
+            end_offset=0,
+        ),
+        async_create_schedule(
+            hass,
+            entry,
+            title="B",
+            scene_steps=[_STEP],
+            start_event="sunset",
+            start_offset=0,
+            end_event="sunrise",
+            end_offset=0,
+        ),
+    )
+
+    assert len(entry.data["cloud_schedules"]) == 2
+
+
+async def test_create_schedule_with_night_reduction_on_a_different_device_marks_both_dirty(monkeypatch):
+    # dirtyDevices must cover devices touched by EITHER scene, not just the primary on-scene -
+    # a device that's only in the night-reduction scene still needs its cloud cache synced.
+    hass = _hass()
+    entry = _entry()
+    monkeypatch.setattr("plejd.manage_schedule.async_login", AsyncMock(return_value="tok"))
+    monkeypatch.setattr("plejd.manage_schedule.async_get_site", AsyncMock(return_value=_site()))
+    monkeypatch.setattr(
+        "plejd.manage_schedule.async_cloud_create_scene", AsyncMock(side_effect=["on-scene-id", "night-scene-id"])
+    )
+    time_event_mock = AsyncMock(return_value={"eventId": "te1"})
+    monkeypatch.setattr("plejd.manage_schedule.async_cloud_update_time_event", time_event_mock)
+    night_step = {"device_id": "d2", "output": 0, "state": "Off", "value": 0}
+
+    await async_create_schedule(
+        hass,
+        entry,
+        title="Garage",
+        scene_steps=[_STEP],  # device d1
+        start_event="sunset",
+        start_offset=15,
+        end_event="sunrise",
+        end_offset=0,
+        night_reduction={"scene_steps": [night_step], "start_time": "23:00", "end_time": "05:00"},  # device d2
+    )
+
+    assert time_event_mock.await_args.kwargs["dirty_devices"] == ["d1", "d2"]
+    assert entry.data["cloud_schedules"][0]["device_ids"] == ["d1"]
+    assert entry.data["cloud_schedules"][0]["night_reduction"]["device_ids"] == ["d2"]
+
+
 async def test_create_schedule_deduplicates_and_sorts_scheduled_days(monkeypatch):
     hass = _hass()
     entry = _entry()
@@ -464,6 +543,8 @@ async def test_create_schedule_with_night_reduction_creates_both_scenes(monkeypa
 
 
 async def test_create_schedule_raises_on_cloud_error_during_refresh(monkeypatch):
+    hass = _hass()
+    entry = _entry()
     monkeypatch.setattr("plejd.manage_schedule.async_login", AsyncMock(return_value="tok"))
     monkeypatch.setattr(
         "plejd.manage_schedule.async_get_site", AsyncMock(side_effect=[_site(), PlejdCloudError("down")])
@@ -474,8 +555,8 @@ async def test_create_schedule_raises_on_cloud_error_during_refresh(monkeypatch)
     )
     with pytest.raises(HomeAssistantError, match="Plejd cloud error refreshing site"):
         await async_create_schedule(
-            _hass(),
-            _entry(),
+            hass,
+            entry,
             title="X",
             scene_steps=[_STEP],
             start_event="sunset",
@@ -483,6 +564,9 @@ async def test_create_schedule_raises_on_cloud_error_during_refresh(monkeypatch)
             end_event="sunrise",
             end_offset=0,
         )
+    # The schedule was already created on the cloud before the refresh failed - losing this
+    # write would leave it untracked forever, since it can't be rediscovered from getSiteById.
+    assert entry.data["cloud_schedules"][0]["scene_id"] == "new-id"
 
 
 async def test_create_schedule_runs_a_follow_up_reload_for_a_concurrent_change(monkeypatch):
@@ -659,6 +743,7 @@ async def test_update_schedule_partial_update_resends_full_state(monkeypatch):
         end_event="sunrise",
         end_offset=0,
         dirty_devices=[],
+        dirty_removed_devices=[],
         night_reduction=None,
     )
     cached = entry.data["cloud_schedules"][0]
@@ -772,6 +857,29 @@ async def test_update_schedule_renames_scene_and_updates_days(monkeypatch):
     assert entry.data["cloud_schedules"][0]["device_ids"] == ["d1"]
 
 
+async def test_update_schedule_marks_a_dropped_device_as_dirty_removed(monkeypatch):
+    hass = _hass()
+    entry = _entry(
+        data={
+            "email": "u@x.com",
+            "password": "pw",
+            "site_id": "S1",
+            "cloud_schedules": [_cached_schedule(device_ids=["d1", "d2"])],
+        }
+    )
+    monkeypatch.setattr("plejd.manage_schedule.async_login", AsyncMock(return_value="tok"))
+    monkeypatch.setattr("plejd.manage_schedule.async_get_site", AsyncMock(return_value=_site([_scene()])))
+    monkeypatch.setattr("plejd.manage_schedule.async_cloud_update_scene", AsyncMock(return_value=True))
+    time_event_mock = AsyncMock(return_value={"eventId": "te1"})
+    monkeypatch.setattr("plejd.manage_schedule.async_cloud_update_time_event", time_event_mock)
+
+    # Replacing scene_steps with only d1 drops d2 - the cloud must be told d2 is no longer dirty.
+    await async_update_schedule(hass, entry, schedule_id="te1", scene_steps=[_STEP])
+
+    assert time_event_mock.await_args.kwargs["dirty_devices"] == ["d1"]
+    assert time_event_mock.await_args.kwargs["dirty_removed_devices"] == ["d2"]
+
+
 async def test_update_schedule_adds_night_reduction_creating_its_scene(monkeypatch):
     hass = _hass()
     entry = _entry(
@@ -805,6 +913,34 @@ async def test_update_schedule_adds_night_reduction_creating_its_scene(monkeypat
     assert sent_nr["scene_id"] == "night-scene-id"
     cached_nr = entry.data["cloud_schedules"][0]["night_reduction"]
     assert cached_nr["scene_id"] == "night-scene-id"
+
+
+async def test_update_schedule_cleans_up_a_new_night_reduction_scene_if_the_trigger_update_is_rejected(monkeypatch):
+    # The night-reduction scene is created before the trailing updateTimeEvent_V3 call - if
+    # that call is then rejected, the freshly-created scene must not become a silently
+    # orphaned/untracked object: it should be removed, and the cache must not claim the
+    # (never actually applied) night reduction is now active.
+    hass = _hass()
+    entry = _entry(
+        data={"email": "u@x.com", "password": "pw", "site_id": "S1", "cloud_schedules": [_cached_schedule()]}
+    )
+    monkeypatch.setattr("plejd.manage_schedule.async_login", AsyncMock(return_value="tok"))
+    monkeypatch.setattr("plejd.manage_schedule.async_get_site", AsyncMock(return_value=_site([_scene()])))
+    monkeypatch.setattr("plejd.manage_schedule.async_cloud_create_scene", AsyncMock(return_value="night-scene-id"))
+    monkeypatch.setattr("plejd.manage_schedule.async_cloud_update_time_event", AsyncMock(return_value=None))
+    remove_mock = AsyncMock(return_value=True)
+    monkeypatch.setattr("plejd.manage_schedule.async_cloud_remove_scene", remove_mock)
+
+    with pytest.raises(HomeAssistantError, match="rejected the schedule update"):
+        await async_update_schedule(
+            hass,
+            entry,
+            schedule_id="te1",
+            night_reduction={"scene_steps": [_NIGHT_STEP], "start_time": "23:15", "end_time": "05:30"},
+        )
+
+    remove_mock.assert_awaited_once_with(None, "tok", "S1", "night-scene-id")
+    assert entry.data["cloud_schedules"][0]["night_reduction"] is None
 
 
 async def test_update_schedule_updates_existing_night_reduction_scene(monkeypatch):
@@ -843,6 +979,7 @@ async def test_update_schedule_updates_existing_night_reduction_scene(monkeypatc
     sent_nr = time_event_mock.await_args.kwargs["night_reduction"]
     assert sent_nr == {
         "scene_id": "night1",
+        "device_ids": ["d1"],
         "start_time": "23:30",
         "end_time": "05:15",
         "weekend_start_time": None,
@@ -913,3 +1050,6 @@ async def test_update_schedule_raises_on_cloud_error_during_refresh(monkeypatch)
     )
     with pytest.raises(HomeAssistantError, match="Plejd cloud error refreshing site"):
         await async_update_schedule(_hass(), entry, schedule_id="te1", start_offset=30)
+    # The trigger update already succeeded on the cloud before the refresh failed - the local
+    # cache must still reflect it, not silently revert to the pre-update state.
+    assert entry.data["cloud_schedules"][0]["start_offset"] == 30

@@ -537,6 +537,7 @@ async def async_update_time_event(
     end_event: str,
     end_offset: int,
     dirty_devices: list[str] | None = None,
+    dirty_removed_devices: list[str] | None = None,
     night_reduction: dict | None = None,
 ) -> dict | None:
     """Create or update a cloud schedule's astro trigger (updateTimeEvent_V3).
@@ -554,7 +555,7 @@ async def async_update_time_event(
         "fadeTime": fade_time,
         "activated": activated,
         "dirtyDevices": dirty_devices or [],
-        "dirtyRemovedDevices": [],
+        "dirtyRemovedDevices": dirty_removed_devices or [],
         "dirtyRemove": False,
         "mode": "astro",
         "version": 3,
