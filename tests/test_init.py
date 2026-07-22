@@ -12,6 +12,7 @@ from plejd import (
     SERVICE_ADD_DEVICE,
     SERVICE_ALL_OFF,
     SERVICE_CREATE_SCENE,
+    SERVICE_REMOVE_DEVICE,
     SERVICE_REMOVE_ROOM,
     SERVICE_REMOVE_SCENE,
     SERVICE_SCAN_DEVICES,
@@ -826,6 +827,48 @@ async def test_remove_scene_service_forwards_call_data(monkeypatch):
     await handler(types.SimpleNamespace(data={"scene_id": "s1"}))
 
     remove_scene.assert_awaited_once_with(hass, entry, scene_id="s1")
+
+
+# ── Service: remove_device ─────────────────────────────────────────────────────
+#
+# async_remove_device() itself is unit-tested in test_manage_device.py. These
+# tests only cover that the service is registered and forwards call.data.
+
+
+async def test_remove_device_service_is_registered_on_setup(monkeypatch):
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    _FakeCoordinator.instances.clear()
+    hass, entry = _hass(), _entry()
+    await async_setup_entry(hass, entry)
+    assert f"plejd.{SERVICE_REMOVE_DEVICE}" in hass.services._handlers
+
+
+async def test_remove_device_service_unregistered_on_unload(monkeypatch):
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    _FakeCoordinator.instances.clear()
+    hass, entry = _hass(), _entry()
+    unloads: list = []
+    entry.async_on_unload = unloads.append
+    await async_setup_entry(hass, entry)
+    assert f"plejd.{SERVICE_REMOVE_DEVICE}" in hass.services._handlers
+    for unload in unloads:
+        unload()
+    assert f"plejd.{SERVICE_REMOVE_DEVICE}" not in hass.services._handlers
+
+
+async def test_remove_device_service_forwards_call_data(monkeypatch):
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    _FakeCoordinator.instances.clear()
+    hass, entry = _hass(), _entry()
+
+    remove_device = AsyncMock()
+    monkeypatch.setattr(plejd, "async_remove_device", remove_device)
+
+    await async_setup_entry(hass, entry)
+    handler = hass.services._handlers[f"plejd.{SERVICE_REMOVE_DEVICE}"]
+    await handler(types.SimpleNamespace(data={"device_id": "d1"}))
+
+    remove_device.assert_awaited_once_with(hass, entry, device_id="d1")
 
 
 # ── Dashboard panel ───────────────────────────────────────────────────────────

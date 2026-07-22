@@ -18,6 +18,7 @@ from .const import CONF_SHOW_PANEL, DOMAIN, ROOM_CATEGORIES
 from .coordinator import PlejdCoordinator
 from .discovery import async_bluetooth_available, async_scan_unprovisioned
 from .holiday_mode import DATA_HOLIDAY_MODE, PlejdHolidayMode
+from .manage_device import async_remove_device
 from .manage_room import async_remove_room, async_update_room
 from .manage_scene import async_create_scene, async_remove_scene, async_update_scene
 from .remote_profiles import PlejdRemoteProfiles
@@ -49,6 +50,7 @@ SERVICE_REMOVE_ROOM = "remove_room"
 SERVICE_CREATE_SCENE = "create_scene"
 SERVICE_UPDATE_SCENE = "update_scene"
 SERVICE_REMOVE_SCENE = "remove_scene"
+SERVICE_REMOVE_DEVICE = "remove_device"
 
 _INPUT_SETTING_SCHEMA = vol.Schema({vol.Required("input"): int, vol.Required("button_type"): str})
 
@@ -108,6 +110,8 @@ _UPDATE_SCENE_SCHEMA = vol.Schema(
 )
 
 _REMOVE_SCENE_SCHEMA = vol.Schema({vol.Required("scene_id"): str})
+
+_REMOVE_DEVICE_SCHEMA = vol.Schema({vol.Required("device_id"): str})
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -219,6 +223,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     async def _async_handle_remove_scene(call) -> None:
         await async_remove_scene(hass, entry, scene_id=call.data["scene_id"])
 
+    async def _async_handle_remove_device(call) -> None:
+        await async_remove_device(hass, entry, device_id=call.data["device_id"])
+
     hass.services.async_register(DOMAIN, SERVICE_ADD_DEVICE, _async_handle_add_device, schema=_ADD_DEVICE_SCHEMA)
     entry.async_on_unload(lambda: hass.services.async_remove(DOMAIN, SERVICE_ADD_DEVICE))
     hass.services.async_register(DOMAIN, SERVICE_SCAN_DEVICES, _async_handle_scan_devices)
@@ -235,6 +242,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     entry.async_on_unload(lambda: hass.services.async_remove(DOMAIN, SERVICE_UPDATE_SCENE))
     hass.services.async_register(DOMAIN, SERVICE_REMOVE_SCENE, _async_handle_remove_scene, schema=_REMOVE_SCENE_SCHEMA)
     entry.async_on_unload(lambda: hass.services.async_remove(DOMAIN, SERVICE_REMOVE_SCENE))
+    hass.services.async_register(
+        DOMAIN, SERVICE_REMOVE_DEVICE, _async_handle_remove_device, schema=_REMOVE_DEVICE_SCHEMA
+    )
+    entry.async_on_unload(lambda: hass.services.async_remove(DOMAIN, SERVICE_REMOVE_DEVICE))
 
     # Remote → light dim bindings (managed from the dashboard via the WebSocket API).
     # Optional, like the panel: a storage error must not stop the mesh/lights loading.
