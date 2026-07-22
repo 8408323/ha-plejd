@@ -158,6 +158,10 @@ CMD_HARDFAULT_REASON = 0x001D  # struct: code(u32 le), line(u16 le), message(asc
 CMD_TRM_SETPOINT = 0x045C  # thermostat target temperature: u16le = round(C*10)
 CMD_TRM_MODE = 0x045F  # thermostat operating mode (OperatingMode enum)
 CMD_TRM_TEMP_READING = 0x045B  # temperature reading [sensor] -> u16le C*10
+# Join/leave a room's mesh group (confirmed via a live capture of the app's own "move
+# device to room" action - the device's own address, not its output address, is the
+# command's target). data=[0x01, room_group_address] to leave, +[0x01] appended to join.
+CMD_MESH_GROUP_MEMBERSHIP = 0x0008
 
 # Thermostat operating modes (Plejd OperatingMode enum) -> HA presets.
 TRM_MODE_VACATION = 2

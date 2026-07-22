@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from plejd.const import CMD_GROUP_STATE_AND_LEVEL, CMD_OUTPUT_STATE_AND_LEVEL, CMD_SCENE
+from plejd.const import CMD_GROUP_STATE_AND_LEVEL, CMD_MESH_GROUP_MEMBERSHIP, CMD_OUTPUT_STATE_AND_LEVEL, CMD_SCENE
 from plejd.protocol import (
     TYPE_DONT_RESPOND,
     TYPE_READ,
@@ -13,6 +13,8 @@ from plejd.protocol import (
     decode_output_state,
     encode_command,
     execute_scene,
+    join_mesh_group,
+    leave_mesh_group,
     request_output_state_and_level,
     set_group_state_and_level,
     set_output_state_and_level,
@@ -68,6 +70,30 @@ def test_execute_scene_opcode():
     assert (v[3] << 8) | v[4] == CMD_SCENE
     assert v[2] == TYPE_DONT_RESPOND  # app sends ExecuteScene with DontRespond
     assert v[5:] == bytes([9])
+
+
+def test_leave_mesh_group_bytes():
+    # Confirmed via a live BLE capture of the app's own "move device to room" action:
+    # decrypting the captured write for a device at address 0x27 (39) leaving room
+    # group 0x0e (14, "Kok / Matplats" on the real site) yielded exactly this vector.
+    v = leave_mesh_group(0x27, 0x0E)
+    assert v == bytes([0x27, 0x01, TYPE_WRITE, 0x00, 0x08, 0x01, 0x0E])
+
+
+def test_join_mesh_group_bytes():
+    # Same capture, joining room group 0x22 (34, "Stora badrummet") - identical shape
+    # to leave_mesh_group plus a trailing join-flag byte.
+    v = join_mesh_group(0x27, 0x22)
+    assert v == bytes([0x27, 0x01, TYPE_WRITE, 0x00, 0x08, 0x01, 0x22, 0x01])
+
+
+def test_mesh_group_commands_share_the_same_opcode():
+    leave = decode_command(leave_mesh_group(0x27, 0x0E))
+    join = decode_command(join_mesh_group(0x27, 0x22))
+    assert leave.command == CMD_MESH_GROUP_MEMBERSHIP
+    assert join.command == CMD_MESH_GROUP_MEMBERSHIP
+    assert leave.data == bytes([0x01, 0x0E])
+    assert join.data == bytes([0x01, 0x22, 0x01])
 
 
 def test_decode_command_rejects_bad_marker():

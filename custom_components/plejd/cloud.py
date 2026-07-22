@@ -154,6 +154,7 @@ class PlejdCloudRoomInfo:
     room_id: str
     name: str
     has_devices: bool  # any device's roomId matches this room, regardless of category
+    address: int | None  # the room's mesh group address, for move_device_to_room (may be absent)
 
 
 @dataclass
@@ -724,7 +725,10 @@ def parse_site(site: dict) -> PlejdCloudSite:
                     members_by_group.setdefault(group_addr, []).append(addr)
                 else:
                     non_light_groups.add(group_addr)
-    rooms: list[PlejdCloudRoom] = []
+    # Every room's own mesh group address, validated once and reused below by both the
+    # light-group-filtered `rooms` and the unfiltered `all_rooms` (move_device_to_room
+    # needs a target address for a room even when it has no light-group entity).
+    room_group_address: dict[str, int] = {}
     for room_id, addr in room_address.items():
         try:
             group_addr = int(addr)
@@ -732,6 +736,10 @@ def parse_site(site: dict) -> PlejdCloudSite:
             continue
         if not 1 <= group_addr <= 255:
             continue  # mesh addresses are single-byte (encode_command masks with & 0xFF); 0 is broadcast-like
+        room_group_address[room_id] = group_addr
+
+    rooms: list[PlejdCloudRoom] = []
+    for room_id, group_addr in room_group_address.items():
         if group_addr in non_light_groups:
             continue  # a group command would also hit a non-light member sharing this address
         members = sorted(set(members_by_group.get(group_addr, [])))
@@ -754,6 +762,7 @@ def parse_site(site: dict) -> PlejdCloudSite:
             room_id=r["roomId"],
             name=(r.get("title") if isinstance(r.get("title"), str) else "").strip() or "Room",
             has_devices=r["roomId"] in device_room_ids,
+            address=room_group_address.get(r["roomId"]),
         )
         for r in raw_rooms
         if isinstance(r, dict) and isinstance(r.get("roomId"), str)

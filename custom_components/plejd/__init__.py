@@ -19,6 +19,7 @@ from .coordinator import PlejdCoordinator
 from .discovery import async_bluetooth_available, async_scan_unprovisioned
 from .holiday_mode import DATA_HOLIDAY_MODE, PlejdHolidayMode
 from .manage_device import async_remove_device
+from .manage_device_room import async_move_device_to_room
 from .manage_room import async_remove_room, async_update_room
 from .manage_scene import async_create_scene, async_remove_scene, async_update_scene
 from .remote_profiles import PlejdRemoteProfiles
@@ -57,6 +58,7 @@ SERVICE_CREATE_SCENE = "create_scene"
 SERVICE_UPDATE_SCENE = "update_scene"
 SERVICE_REMOVE_SCENE = "remove_scene"
 SERVICE_REMOVE_DEVICE = "remove_device"
+SERVICE_MOVE_DEVICE_TO_ROOM = "move_device_to_room"
 
 _INPUT_SETTING_SCHEMA = vol.Schema({vol.Required("input"): int, vol.Required("button_type"): str})
 
@@ -118,6 +120,8 @@ _UPDATE_SCENE_SCHEMA = vol.Schema(
 _REMOVE_SCENE_SCHEMA = vol.Schema({vol.Required("scene_id"): str})
 
 _REMOVE_DEVICE_SCHEMA = vol.Schema({vol.Required("device_id"): str})
+
+_MOVE_DEVICE_TO_ROOM_SCHEMA = vol.Schema({vol.Required("device_id"): str, vol.Required("room_id"): str})
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -208,6 +212,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         current_entry = hass.data[_DATA_CURRENT_ENTRY]
         await async_remove_device(hass, current_entry, device_id=call.data["device_id"])
 
+    async def _async_handle_move_device_to_room(call) -> None:
+        current_entry = hass.data[_DATA_CURRENT_ENTRY]
+        await async_move_device_to_room(
+            hass, current_entry, device_id=call.data["device_id"], room_id=call.data["room_id"]
+        )
+
     # Registered once per hass lifetime, before coordinator.async_start(), and NOT torn
     # down by entry.async_on_unload: HA runs every already-registered on_unload callback
     # as cleanup when async_setup_entry raises ConfigEntryNotReady (same path a failed
@@ -236,6 +246,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         )
         hass.services.async_register(
             DOMAIN, SERVICE_REMOVE_DEVICE, _async_handle_remove_device, schema=_REMOVE_DEVICE_SCHEMA
+        )
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_MOVE_DEVICE_TO_ROOM,
+            _async_handle_move_device_to_room,
+            schema=_MOVE_DEVICE_TO_ROOM_SCHEMA,
         )
         hass.data[_SERVICES_REGISTERED] = True
 

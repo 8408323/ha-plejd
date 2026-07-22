@@ -873,8 +873,22 @@ def test_parse_site_all_rooms_includes_empty_and_non_light_rooms():
     assert set(by_id) == {"r1", "r3"}
     assert by_id["r1"].name == "Kitchen"
     assert by_id["r1"].has_devices is True  # d1/d2 (from _SITE's devices[]) have roomId "r1"
+    assert by_id["r1"].address == 14
     assert by_id["r3"].name == "Empty room"
     assert by_id["r3"].has_devices is False
+    # r3 has no light-group members so it's excluded from `rooms`, but move_device_to_room
+    # still needs its address to target the room even though it has no light entity.
+    assert by_id["r3"].address == 99
+
+
+def test_parse_site_all_rooms_address_is_none_for_a_malformed_room_address():
+    site = {
+        **_SITE,
+        "rooms": [{"roomId": "r1", "title": "Kitchen"}],
+        "roomAddress": {"r1": "not-a-number"},
+    }
+    all_rooms = parse_site(site).all_rooms
+    assert all_rooms[0].address is None
 
 
 def test_parse_site_all_rooms_skips_malformed_room_entries():

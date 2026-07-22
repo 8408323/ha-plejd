@@ -12,6 +12,7 @@ from plejd import (
     SERVICE_ADD_DEVICE,
     SERVICE_ALL_OFF,
     SERVICE_CREATE_SCENE,
+    SERVICE_MOVE_DEVICE_TO_ROOM,
     SERVICE_REMOVE_DEVICE,
     SERVICE_REMOVE_ROOM,
     SERVICE_REMOVE_SCENE,
@@ -937,6 +938,48 @@ async def test_remove_device_service_forwards_call_data(monkeypatch):
     await handler(types.SimpleNamespace(data={"device_id": "d1"}))
 
     remove_device.assert_awaited_once_with(hass, entry, device_id="d1")
+
+
+# ── Service: move_device_to_room ───────────────────────────────────────────────
+#
+# async_move_device_to_room() itself is unit-tested in test_manage_device_room.py.
+# These tests only cover that the service is registered and forwards call.data.
+
+
+async def test_move_device_to_room_service_is_registered_on_setup(monkeypatch):
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    _FakeCoordinator.instances.clear()
+    hass, entry = _hass(), _entry()
+    await async_setup_entry(hass, entry)
+    assert f"plejd.{SERVICE_MOVE_DEVICE_TO_ROOM}" in hass.services._handlers
+
+
+async def test_move_device_to_room_service_survives_entry_unload_cleanup(monkeypatch):
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    _FakeCoordinator.instances.clear()
+    hass, entry = _hass(), _entry()
+    unloads: list = []
+    entry.async_on_unload = unloads.append
+    await async_setup_entry(hass, entry)
+    assert f"plejd.{SERVICE_MOVE_DEVICE_TO_ROOM}" in hass.services._handlers
+    for unload in unloads:
+        unload()
+    assert f"plejd.{SERVICE_MOVE_DEVICE_TO_ROOM}" in hass.services._handlers
+
+
+async def test_move_device_to_room_service_forwards_call_data(monkeypatch):
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    _FakeCoordinator.instances.clear()
+    hass, entry = _hass(), _entry()
+
+    move_device_to_room = AsyncMock()
+    monkeypatch.setattr(plejd, "async_move_device_to_room", move_device_to_room)
+
+    await async_setup_entry(hass, entry)
+    handler = hass.services._handlers[f"plejd.{SERVICE_MOVE_DEVICE_TO_ROOM}"]
+    await handler(types.SimpleNamespace(data={"device_id": "d1", "room_id": "r2"}))
+
+    move_device_to_room.assert_awaited_once_with(hass, entry, device_id="d1", room_id="r2")
 
 
 # ── Dashboard panel ───────────────────────────────────────────────────────────
