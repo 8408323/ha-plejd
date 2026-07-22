@@ -105,11 +105,10 @@ async def test_diagnostics_redacts_secrets_and_pii():
     assert room["dimmable"] is True  # not sensitive and is kept
     # schedules (occupancy/routine) are redacted wholesale, transport pref kept
     assert diag["options"]["schedules"] == "**REDACTED**" and diag["options"]["transport"] == "gateway"
-    # move_device_to_room's own not-yet-cloud-confirmed moves also carry mesh addresses
-    pending = data["pending_room_moves"]["d1"]
-    assert pending["output_address"] == "**REDACTED**"
-    assert pending["new_room_address"] == "**REDACTED**"
-    assert pending["room_id"] == "**REDACTED**"
+    # move_device_to_room's own not-yet-cloud-confirmed moves: redacted wholesale, since
+    # it's keyed BY device_id (a dict key, invisible to a by-value redactor) and its values
+    # carry mesh addresses too
+    assert data["pending_room_moves"] == "**REDACTED**"
 
 
 async def test_diagnostics_reports_transport_and_counts():

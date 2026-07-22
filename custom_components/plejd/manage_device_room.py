@@ -256,14 +256,18 @@ async def _async_refresh_and_reload(
     device_id: str,
     this_move: dict,
 ) -> None:
+    # Recorded as pending BEFORE this refresh, not after - the mesh writes that produced
+    # this_move have already physically happened by the time this function runs, so a
+    # refresh failure below must not erase the only record of that. Losing it here would
+    # mean a follow-up move (to a THIRD room) derives "current room" from the stale
+    # pre-move cloud data and never sends a leave for the room the device is actually
+    # already in - the safe failure mode is an "already in room" rejection on an exact
+    # retry of the same move (still true, physically), not a silently wrong leave target.
+    pending[device_id] = this_move
     try:
         fresh_site = await async_get_site(http_session, token, entry.data[CONF_SITE_ID])
     except PlejdCloudError as err:
         raise HomeAssistantError(f"Plejd cloud error refreshing site: {err}") from err
-    # Only recorded as pending now that the fetch above succeeded - if it raised instead,
-    # `pending` is untouched, so a retry of this same move isn't wrongly rejected as
-    # "already in room" for an attempt that never actually got this far.
-    pending[device_id] = this_move
     # Claim the manual-reload so the entry's update listener (_async_reload_entry) doesn't
     # also reload for this same data change, racing this one - same guard schedule_ws's
     # own _async_persist uses for the identical async_update_entry -> listener race.
@@ -394,12 +398,15 @@ async def async_move_device_to_room(hass: HomeAssistant, entry: ConfigEntry, *, 
                 # instead of continuing to treat this device as still "pending".
                 del pending[device_id]
                 existing_pending = None
-            elif fresh_room_id != existing_pending.get("from_room_id"):
+            elif fresh_room_id not in (existing_pending["room_id"], existing_pending.get("from_room_id")):
                 # Fresh cloud shows neither the room this pending move started from NOR its
                 # target - the only way that happens is if something else (almost certainly
                 # the app) moved this device again after our own move must have already
                 # converged. Our pending state is proven stale rather than merely
                 # unconfirmed; trust the fresh fetch instead of a value known to be wrong.
+                # (Matching the target alone, as opposed to the `if` above, means room_id
+                # converged before membership did - still ordinary non-convergence, not
+                # staleness, so it must NOT be treated as proof of an external change.)
                 del pending[device_id]
                 existing_pending = None
         current_room_id = existing_pending["room_id"] if existing_pending is not None else outputs[0].room_id

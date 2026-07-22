@@ -694,16 +694,23 @@ async def test_move_device_reapplies_room_membership_for_every_pending_device(mo
     assert "r3" not in rooms_by_id  # no pre-existing entry to patch - declined synthesis
 
 
-async def test_move_device_can_retry_after_a_refresh_failure(monkeypatch):
-    # If the mesh write succeeds but the following cloud refresh fails, the pending cache
-    # must not record the move as done - or a retry of the exact same move would be
-    # wrongly rejected as "already in room" for an attempt that never actually persisted.
+async def test_move_device_records_pending_before_a_refresh_can_fail(monkeypatch):
+    # The mesh writes (leave + join) have already physically happened by the time the
+    # refresh runs - if the refresh then fails, the pending cache must still reflect the
+    # move, or a follow-up move to a THIRD room would derive "current room" from the stale
+    # pre-move cloud data and never send a leave for the room the device is actually
+    # already in, leaving it joined to both that room and the new one.
     hass = _hass()
-    entry = _entry()
+    coordinator = _coordinator()
+    entry = _entry(runtime_data=coordinator)
     site = _site(
         devices=[_device(room_id="r1")],
         device_addresses={"d1": 39},
-        all_rooms=[_room("r1", "Room A", address=14), _room("r2", "Room B", address=34)],
+        all_rooms=[
+            _room("r1", "Room A", address=14),
+            _room("r2", "Room B", address=34),
+            _room("r3", "Sovrum", address=46),
+        ],
     )
     monkeypatch.setattr("plejd.manage_device_room.async_login", AsyncMock(return_value="tok"))
     monkeypatch.setattr(
@@ -712,14 +719,26 @@ async def test_move_device_can_retry_after_a_refresh_failure(monkeypatch):
     with pytest.raises(HomeAssistantError, match="Plejd cloud error refreshing site"):
         await async_move_device_to_room(hass, entry, device_id="d1", room_id="r2")
 
-    assert "d1" not in hass.data[DATA_PENDING_ROOM_MOVES][entry.entry_id]
+    # The mesh write already succeeded despite the refresh failing - pending must reflect it.
+    assert "d1" in hass.data[DATA_PENDING_ROOM_MOVES][entry.entry_id]
+    coordinator.async_leave_mesh_group.assert_awaited_once_with(39, 14)
+    coordinator.async_join_mesh_group.assert_awaited_once_with(39, 34)
 
-    # Retry the exact same move - this time the refresh succeeds.
+    # An exact retry of the same move now correctly reports "already in room" - the device
+    # really is already there, physically, even though entry.data's own cached view (never
+    # updated, since the refresh failed) still shows it in r1.
     monkeypatch.setattr("plejd.manage_device_room.async_get_site", AsyncMock(side_effect=[site, site]))
-    await async_move_device_to_room(hass, entry, device_id="d1", room_id="r2")
+    with pytest.raises(HomeAssistantError, match="already in room"):
+        await async_move_device_to_room(hass, entry, device_id="d1", room_id="r2")
 
-    moved = next(d for d in entry.data["devices"] if d["device_id"] == "d1")
-    assert moved["room_id"] == "r2"
+    # A move to a THIRD room, however, must leave r2 (where the device actually now is),
+    # not stale r1 - the fresh site fetch below still (incorrectly) reports r1, exactly as
+    # it would if the failed refresh above had simply never run.
+    monkeypatch.setattr("plejd.manage_device_room.async_get_site", AsyncMock(side_effect=[site, site]))
+    await async_move_device_to_room(hass, entry, device_id="d1", room_id="r3")
+
+    coordinator.async_leave_mesh_group.assert_awaited_with(39, 34)  # r2, not stale r1
+    coordinator.async_join_mesh_group.assert_awaited_with(39, 46)
 
 
 async def test_move_device_preserves_the_original_stale_room_across_a_chain_of_moves(monkeypatch):
@@ -843,6 +862,42 @@ async def test_move_device_detects_a_pending_move_made_stale_by_a_later_app_move
 
     coordinator.async_leave_mesh_group.assert_awaited_with(39, 46)  # r3 - the real current room, not stale r2
     coordinator.async_join_mesh_group.assert_awaited_with(39, 50)
+
+
+async def test_move_device_keeps_pending_when_room_id_converged_but_membership_has_not(monkeypatch):
+    # room_id reaching the target while membership is still stale is ORDINARY partial
+    # convergence (already exercised elsewhere for a DIFFERENT device's refresh), not proof
+    # of an external change - a repeat call for the SAME device in that window must not
+    # drop the pending entry, or the membership patch that's still needed stops being
+    # re-applied on every later refresh (Codex's exact reported scenario).
+    hass = _hass()
+    entry = _entry()
+    all_rooms = [_room("r1", "Room A", address=14), _room("r2", "Room B", address=34)]
+    unconverged_site = _site(
+        devices=[_device(room_id="r1", address=39)],
+        device_addresses={"d1": 39},
+        all_rooms=all_rooms,
+    )
+    monkeypatch.setattr("plejd.manage_device_room.async_login", AsyncMock(return_value="tok"))
+    monkeypatch.setattr(
+        "plejd.manage_device_room.async_get_site", AsyncMock(side_effect=[unconverged_site, unconverged_site])
+    )
+    await async_move_device_to_room(hass, entry, device_id="d1", room_id="r2")
+
+    # A redundant repeat request to the SAME destination: room_id has converged to r2, but
+    # r2's own room-group membership hasn't caught up yet (no r2 entry in `rooms` at all).
+    room_id_converged_site = _site(
+        devices=[_device(room_id="r2", address=39)],
+        device_addresses={"d1": 39},
+        all_rooms=all_rooms,
+    )
+    monkeypatch.setattr("plejd.manage_device_room.async_get_site", AsyncMock(return_value=room_id_converged_site))
+    with pytest.raises(HomeAssistantError, match="already in room"):
+        await async_move_device_to_room(hass, entry, device_id="d1", room_id="r2")
+
+    # The pending entry must survive this - dropping it here would lose the only state that
+    # keeps r1's stale membership patch (and r2's eventual add) re-applied on later refreshes.
+    assert "d1" in hass.data[DATA_PENDING_ROOM_MOVES][entry.entry_id]
 
 
 async def test_move_device_strips_the_room_actually_left_when_membership_outpaces_room_id(monkeypatch):
