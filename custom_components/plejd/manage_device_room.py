@@ -160,6 +160,21 @@ def _patch_room_membership(
     return patched
 
 
+def _room_membership_converged(fresh_rooms: list[PlejdCloudRoom], move: dict) -> bool:
+    """Whether the cloud's own rooms snapshot already reflects this move's membership.
+
+    A light move's room_id can converge slightly before its outputGroups membership
+    does (or vice versa) - pruning the pending entry on room_id alone could stop
+    re-patching membership for a still-stale room. Non-light moves have no membership
+    to converge (the patch only ever drops a stale entry for them), so room_id
+    convergence is the only signal available and is treated as sufficient.
+    """
+    if not move["is_light"] or move["output_address"] is None:
+        return True
+    room = next((r for r in fresh_rooms if r.address == move["new_room_address"]), None)
+    return room is not None and move["output_address"] in room.member_addresses
+
+
 async def _async_refresh_and_reload(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -167,11 +182,17 @@ async def _async_refresh_and_reload(
     token,
     *,
     pending: dict[str, dict],
+    device_id: str,
+    this_move: dict,
 ) -> None:
     try:
         fresh_site = await async_get_site(http_session, token, entry.data[CONF_SITE_ID])
     except PlejdCloudError as err:
         raise HomeAssistantError(f"Plejd cloud error refreshing site: {err}") from err
+    # Only recorded as pending now that the fetch above succeeded - if it raised instead,
+    # `pending` is untouched, so a retry of this same move isn't wrongly rejected as
+    # "already in room" for an attempt that never actually got this far.
+    pending[device_id] = this_move
     # Claim the manual-reload so the entry's update listener (_async_reload_entry) doesn't
     # also reload for this same data change, racing this one - same guard schedule_ws's
     # own _async_persist uses for the identical async_update_entry -> listener race.
@@ -181,12 +202,13 @@ async def _async_refresh_and_reload(
         # room_id regardless of what this fresh cloud fetch says - not just the device
         # this particular call just moved - or an earlier move's own correction would get
         # reverted the next time any device is moved before the cloud converges. A pending
-        # entry is dropped once the fresh fetch actually agrees with it (converged).
+        # entry is dropped only once the fresh fetch agrees with it on BOTH room_id and
+        # room-group membership (they can converge at slightly different times).
         device_dicts = []
         for d in fresh_site.devices:
             move = pending.get(d.device_id)
             if move is not None:
-                if move["room_id"] == d.room_id:
+                if move["room_id"] == d.room_id and _room_membership_converged(fresh_site.rooms, move):
                     del pending[d.device_id]
                 else:
                     device_dicts.append({**asdict(d), "room_id": move["room_id"]})
@@ -279,8 +301,8 @@ async def async_move_device_to_room(hass: HomeAssistant, entry: ConfigEntry, *, 
         # directly - e.g. if it was instead moved via the app itself, the cloud (not any
         # of our own state) is the authoritative source for that.
         pending = _pending_moves(hass, entry)
-        this_move = pending.get(device_id)
-        current_room_id = this_move["room_id"] if this_move is not None else outputs[0].room_id
+        existing_pending = pending.get(device_id)
+        current_room_id = existing_pending["room_id"] if existing_pending is not None else outputs[0].room_id
         if current_room_id == room_id:
             raise HomeAssistantError(f"Device is already in room '{new_room.name}'")
 
@@ -297,13 +319,26 @@ async def async_move_device_to_room(hass: HomeAssistant, entry: ConfigEntry, *, 
         await coordinator.async_join_mesh_group(own_address, new_room.address)
 
         output = outputs[0]
-        pending[device_id] = {
+        this_move = {
             "room_id": room_id,
             "output_address": output.address,
             "is_light": output.category == CATEGORY_LIGHT,
             "dimmable": output.dimmable,
-            "old_room_address": old_room.address if old_room is not None else None,
+            # The ORIGINAL stale-cloud room, preserved across a chain of un-converged
+            # moves (e.g. r1->r2->r3) rather than overwritten with the latest hop - the
+            # cloud's rooms snapshot may still show the device in r1 (never having
+            # converged even the first move), and the membership patch needs r1, not r2,
+            # to correctly strip it back out. This is unrelated to the mesh commands
+            # above, which correctly target current_room_id (the latest known truth) -
+            # a different concept from "what the stale cloud still says".
+            "old_room_address": (
+                existing_pending["old_room_address"]
+                if existing_pending is not None
+                else (old_room.address if old_room is not None else None)
+            ),
             "new_room_address": new_room.address,
         }
 
-        await _async_refresh_and_reload(hass, entry, http_session, token, pending=pending)
+        await _async_refresh_and_reload(
+            hass, entry, http_session, token, pending=pending, device_id=device_id, this_move=this_move
+        )
