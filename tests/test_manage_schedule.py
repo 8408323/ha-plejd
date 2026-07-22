@@ -10,7 +10,7 @@ import pytest
 from homeassistant.exceptions import HomeAssistantError
 from plejd import schedule_ws
 from plejd.cloud import PlejdAuthError, PlejdCloudError, PlejdCloudSceneInfo, PlejdCloudSite
-from plejd.manage_schedule import async_create_schedule, async_update_schedule
+from plejd.manage_schedule import async_create_schedule, async_remove_schedule, async_update_schedule
 
 _KEY = bytes(range(16))
 _STEP = {"device_id": "d1", "output": 0, "state": "On", "value": 255}
@@ -340,7 +340,7 @@ async def test_create_schedule_raises_when_cloud_rejects_time_event(monkeypatch)
     monkeypatch.setattr("plejd.manage_schedule.async_login", AsyncMock(return_value="tok"))
     monkeypatch.setattr("plejd.manage_schedule.async_get_site", AsyncMock(return_value=_site()))
     monkeypatch.setattr("plejd.manage_schedule.async_cloud_create_scene", AsyncMock(return_value="new-scene-id"))
-    monkeypatch.setattr("plejd.manage_schedule.async_cloud_update_time_event", AsyncMock(return_value=None))
+    monkeypatch.setattr("plejd.manage_schedule.async_cloud_create_time_event", AsyncMock(return_value=None))
     remove_mock = AsyncMock(return_value=True)
     monkeypatch.setattr("plejd.manage_schedule.async_cloud_remove_scene", remove_mock)
     with pytest.raises(HomeAssistantError, match="Plejd cloud rejected the schedule creation"):
@@ -362,10 +362,12 @@ async def test_create_schedule_succeeds_and_caches_it(monkeypatch):
     entry = _entry()
     monkeypatch.setattr("plejd.manage_schedule.async_login", AsyncMock(return_value="tok"))
     monkeypatch.setattr("plejd.manage_schedule.async_get_site", AsyncMock(return_value=_site()))
-    create_mock = AsyncMock(return_value="new-scene-id")
-    monkeypatch.setattr("plejd.manage_schedule.async_cloud_create_scene", create_mock)
-    update_mock = AsyncMock(return_value={"eventId": "te1"})
-    monkeypatch.setattr("plejd.manage_schedule.async_cloud_update_time_event", update_mock)
+    create_scene_mock = AsyncMock(return_value="new-scene-id")
+    monkeypatch.setattr("plejd.manage_schedule.async_cloud_create_scene", create_scene_mock)
+    create_time_event_mock = AsyncMock(return_value={"eventId": "te1"})
+    monkeypatch.setattr("plejd.manage_schedule.async_cloud_create_time_event", create_time_event_mock)
+    update_scene_mock = AsyncMock(return_value=True)
+    monkeypatch.setattr("plejd.manage_schedule.async_cloud_update_scene", update_scene_mock)
 
     schedule_id = await async_create_schedule(
         hass,
@@ -378,25 +380,25 @@ async def test_create_schedule_succeeds_and_caches_it(monkeypatch):
         end_offset=0,
     )
 
-    # The generated id isn't otherwise discoverable (getSiteById can't rediscover it, and
-    # diagnostics redacts the cache) - callers (the create_schedule service handler, which
-    # fires it as an event) need this return value to surface it.
+    # The id is server-generated (createTimeEvent_V3's response eventId), not client-generated -
+    # it isn't otherwise discoverable (getSiteById can't rediscover it, diagnostics redacts the
+    # cache), so callers (the create_schedule service handler, which fires it as an event) need
+    # this return value to surface it.
+    assert schedule_id == "te1"
     assert schedule_id == entry.data["cloud_schedules"][0]["schedule_id"]
-    create_mock.assert_awaited_once_with(
+    create_scene_mock.assert_awaited_once_with(
         None,
         "tok",
         "S1",
         "Garage",
         [_STEP],
         hidden_from_scene_list=True,
-        settings=create_mock.await_args.kwargs["settings"],
+        settings='{"SceneType": "AstroEventScene"}',
     )
-    assert '"SceneType": "AstroEventScene"' in create_mock.await_args.kwargs["settings"]
-    update_mock.assert_awaited_once_with(
+    create_time_event_mock.assert_awaited_once_with(
         None,
         "tok",
         "S1",
-        update_mock.await_args.args[3],
         "new-scene-id",
         scheduled_days=[0, 1, 2, 3, 4, 5, 6],
         fade_time=0,
@@ -408,6 +410,11 @@ async def test_create_schedule_succeeds_and_caches_it(monkeypatch):
         dirty_devices=["d1"],
         night_reduction=None,
     )
+    # CreatedById can only be set once the server-generated eventId is known, so it's
+    # backfilled via a follow-up updateScene call rather than set at scene-creation time.
+    update_scene_mock.assert_awaited_once_with(
+        None, "tok", "S1", "new-scene-id", settings='{"SceneType": "AstroEventScene", "CreatedById": "te1"}'
+    )
     cached = entry.data["cloud_schedules"]
     assert len(cached) == 1
     assert cached[0]["scene_id"] == "new-scene-id"
@@ -415,7 +422,89 @@ async def test_create_schedule_succeeds_and_caches_it(monkeypatch):
     assert cached[0]["device_ids"] == ["d1"]
     assert cached[0]["night_reduction"] is None
     hass.config_entries.async_reload.assert_awaited_once_with("e1")
-    assert hass.bus.fired == [("plejd_schedule_created", {"schedule_id": schedule_id})]
+    assert hass.bus.fired == [("plejd_schedule_created", {"schedule_id": "te1"})]
+
+
+async def test_create_schedule_logs_when_createdby_backfill_is_rejected(monkeypatch, caplog):
+    # The schedule works even if this backfill fails (the scene(s) and trigger are already
+    # live) - so a rejection is logged, not raised.
+    monkeypatch.setattr("plejd.manage_schedule.async_login", AsyncMock(return_value="tok"))
+    monkeypatch.setattr("plejd.manage_schedule.async_get_site", AsyncMock(return_value=_site()))
+    monkeypatch.setattr("plejd.manage_schedule.async_cloud_create_scene", AsyncMock(return_value="new-scene-id"))
+    monkeypatch.setattr(
+        "plejd.manage_schedule.async_cloud_create_time_event", AsyncMock(return_value={"eventId": "te1"})
+    )
+    monkeypatch.setattr("plejd.manage_schedule.async_cloud_update_scene", AsyncMock(return_value=False))
+
+    schedule_id = await async_create_schedule(
+        _hass(),
+        _entry(),
+        title="X",
+        scene_steps=[_STEP],
+        start_event="sunset",
+        start_offset=0,
+        end_event="sunrise",
+        end_offset=0,
+    )
+
+    assert schedule_id == "te1"
+    assert "new-scene-id" in caplog.text
+    assert "CreatedById" in caplog.text
+
+
+async def test_create_schedule_logs_when_createdby_backfill_raises(monkeypatch, caplog):
+    monkeypatch.setattr("plejd.manage_schedule.async_login", AsyncMock(return_value="tok"))
+    monkeypatch.setattr("plejd.manage_schedule.async_get_site", AsyncMock(return_value=_site()))
+    monkeypatch.setattr("plejd.manage_schedule.async_cloud_create_scene", AsyncMock(return_value="new-scene-id"))
+    monkeypatch.setattr(
+        "plejd.manage_schedule.async_cloud_create_time_event", AsyncMock(return_value={"eventId": "te1"})
+    )
+    monkeypatch.setattr(
+        "plejd.manage_schedule.async_cloud_update_scene", AsyncMock(side_effect=PlejdCloudError("down"))
+    )
+
+    schedule_id = await async_create_schedule(
+        _hass(),
+        _entry(),
+        title="X",
+        scene_steps=[_STEP],
+        start_event="sunset",
+        start_offset=0,
+        end_event="sunrise",
+        end_offset=0,
+    )
+
+    assert schedule_id == "te1"
+    assert "te1" in caplog.text
+
+
+async def test_create_schedule_logs_when_night_reduction_createdby_backfill_is_rejected(monkeypatch, caplog):
+    monkeypatch.setattr("plejd.manage_schedule.async_login", AsyncMock(return_value="tok"))
+    monkeypatch.setattr("plejd.manage_schedule.async_get_site", AsyncMock(return_value=_site()))
+    monkeypatch.setattr(
+        "plejd.manage_schedule.async_cloud_create_scene", AsyncMock(side_effect=["on-scene-id", "night-scene-id"])
+    )
+    monkeypatch.setattr(
+        "plejd.manage_schedule.async_cloud_create_time_event", AsyncMock(return_value={"eventId": "te1"})
+    )
+    # The on-scene backfill succeeds, but the night-reduction scene's is rejected.
+    monkeypatch.setattr("plejd.manage_schedule.async_cloud_update_scene", AsyncMock(side_effect=[True, False]))
+
+    schedule_id = await async_create_schedule(
+        _hass(),
+        _entry(),
+        title="X",
+        scene_steps=[_STEP],
+        start_event="sunset",
+        start_offset=0,
+        end_event="sunrise",
+        end_offset=0,
+        night_reduction={"scene_steps": [_NIGHT_STEP], "start_time": "23:00", "end_time": "05:00"},
+    )
+
+    assert schedule_id == "te1"
+    assert "night-scene-id" in caplog.text
+    assert "CreatedById" in caplog.text
 
 
 async def test_create_schedule_fires_schedule_created_event_even_if_the_refresh_fails(monkeypatch):
@@ -429,8 +518,9 @@ async def test_create_schedule_fires_schedule_created_event_even_if_the_refresh_
     )
     monkeypatch.setattr("plejd.manage_schedule.async_cloud_create_scene", AsyncMock(return_value="new-id"))
     monkeypatch.setattr(
-        "plejd.manage_schedule.async_cloud_update_time_event", AsyncMock(return_value={"eventId": "te1"})
+        "plejd.manage_schedule.async_cloud_create_time_event", AsyncMock(return_value={"eventId": "te1"})
     )
+    monkeypatch.setattr("plejd.manage_schedule.async_cloud_update_scene", AsyncMock(return_value=True))
 
     with pytest.raises(HomeAssistantError, match="Plejd cloud error refreshing site"):
         await async_create_schedule(
@@ -465,8 +555,9 @@ async def test_create_schedule_appends_to_an_existing_non_empty_cache(monkeypatc
     monkeypatch.setattr("plejd.manage_schedule.async_get_site", AsyncMock(return_value=_site()))
     monkeypatch.setattr("plejd.manage_schedule.async_cloud_create_scene", AsyncMock(return_value="new-scene-id"))
     monkeypatch.setattr(
-        "plejd.manage_schedule.async_cloud_update_time_event", AsyncMock(return_value={"eventId": "te1"})
+        "plejd.manage_schedule.async_cloud_create_time_event", AsyncMock(return_value={"eventId": "te1"})
     )
+    monkeypatch.setattr("plejd.manage_schedule.async_cloud_update_scene", AsyncMock(return_value=True))
 
     await async_create_schedule(
         hass,
@@ -502,9 +593,12 @@ async def test_create_schedule_serializes_concurrent_calls_via_a_lock(monkeypatc
     monkeypatch.setattr(
         "plejd.manage_schedule.async_cloud_create_scene", AsyncMock(side_effect=lambda *a, **k: next(scene_ids))
     )
+    event_ids = iter(["te-a", "te-b"])
     monkeypatch.setattr(
-        "plejd.manage_schedule.async_cloud_update_time_event", AsyncMock(return_value={"eventId": "te1"})
+        "plejd.manage_schedule.async_cloud_create_time_event",
+        AsyncMock(side_effect=lambda *a, **k: {"eventId": next(event_ids)}),
     )
+    monkeypatch.setattr("plejd.manage_schedule.async_cloud_update_scene", AsyncMock(return_value=True))
 
     await asyncio.gather(
         async_create_schedule(
@@ -543,7 +637,8 @@ async def test_create_schedule_with_night_reduction_on_a_different_device_marks_
         "plejd.manage_schedule.async_cloud_create_scene", AsyncMock(side_effect=["on-scene-id", "night-scene-id"])
     )
     time_event_mock = AsyncMock(return_value={"eventId": "te1"})
-    monkeypatch.setattr("plejd.manage_schedule.async_cloud_update_time_event", time_event_mock)
+    monkeypatch.setattr("plejd.manage_schedule.async_cloud_create_time_event", time_event_mock)
+    monkeypatch.setattr("plejd.manage_schedule.async_cloud_update_scene", AsyncMock(return_value=True))
     night_step = {"device_id": "d2", "output": 0, "state": "Off", "value": 0}
 
     await async_create_schedule(
@@ -570,8 +665,9 @@ async def test_create_schedule_deduplicates_and_sorts_scheduled_days(monkeypatch
     monkeypatch.setattr("plejd.manage_schedule.async_get_site", AsyncMock(return_value=_site()))
     monkeypatch.setattr("plejd.manage_schedule.async_cloud_create_scene", AsyncMock(return_value="new-scene-id"))
     monkeypatch.setattr(
-        "plejd.manage_schedule.async_cloud_update_time_event", AsyncMock(return_value={"eventId": "te1"})
+        "plejd.manage_schedule.async_cloud_create_time_event", AsyncMock(return_value={"eventId": "te1"})
     )
+    monkeypatch.setattr("plejd.manage_schedule.async_cloud_update_scene", AsyncMock(return_value=True))
 
     await async_create_schedule(
         hass,
@@ -594,7 +690,7 @@ async def test_create_schedule_cleanup_swallows_a_failed_removal(monkeypatch):
     monkeypatch.setattr("plejd.manage_schedule.async_login", AsyncMock(return_value="tok"))
     monkeypatch.setattr("plejd.manage_schedule.async_get_site", AsyncMock(return_value=_site()))
     monkeypatch.setattr("plejd.manage_schedule.async_cloud_create_scene", AsyncMock(return_value="new-scene-id"))
-    monkeypatch.setattr("plejd.manage_schedule.async_cloud_update_time_event", AsyncMock(return_value=None))
+    monkeypatch.setattr("plejd.manage_schedule.async_cloud_create_time_event", AsyncMock(return_value=None))
     monkeypatch.setattr(
         "plejd.manage_schedule.async_cloud_remove_scene", AsyncMock(side_effect=PlejdCloudError("gone already"))
     )
@@ -617,7 +713,7 @@ async def test_create_schedule_logs_when_cloud_rejects_cleanup_removal(monkeypat
     monkeypatch.setattr("plejd.manage_schedule.async_login", AsyncMock(return_value="tok"))
     monkeypatch.setattr("plejd.manage_schedule.async_get_site", AsyncMock(return_value=_site()))
     monkeypatch.setattr("plejd.manage_schedule.async_cloud_create_scene", AsyncMock(return_value="new-scene-id"))
-    monkeypatch.setattr("plejd.manage_schedule.async_cloud_update_time_event", AsyncMock(return_value=None))
+    monkeypatch.setattr("plejd.manage_schedule.async_cloud_create_time_event", AsyncMock(return_value=None))
     monkeypatch.setattr("plejd.manage_schedule.async_cloud_remove_scene", AsyncMock(return_value=False))
 
     with pytest.raises(HomeAssistantError, match="Plejd cloud rejected the schedule creation"):
@@ -642,8 +738,10 @@ async def test_create_schedule_with_night_reduction_creates_both_scenes(monkeypa
     monkeypatch.setattr("plejd.manage_schedule.async_get_site", AsyncMock(return_value=_site()))
     create_mock = AsyncMock(side_effect=["on-scene-id", "night-scene-id"])
     monkeypatch.setattr("plejd.manage_schedule.async_cloud_create_scene", create_mock)
-    update_mock = AsyncMock(return_value={"eventId": "te1"})
-    monkeypatch.setattr("plejd.manage_schedule.async_cloud_update_time_event", update_mock)
+    create_time_event_mock = AsyncMock(return_value={"eventId": "te1"})
+    monkeypatch.setattr("plejd.manage_schedule.async_cloud_create_time_event", create_time_event_mock)
+    update_scene_mock = AsyncMock(return_value=True)
+    monkeypatch.setattr("plejd.manage_schedule.async_cloud_update_scene", update_scene_mock)
 
     await async_create_schedule(
         hass,
@@ -660,10 +758,14 @@ async def test_create_schedule_with_night_reduction_creates_both_scenes(monkeypa
     assert create_mock.await_count == 2
     night_call = create_mock.await_args_list[1]
     assert night_call.args[3] == "Garage Nattläge"
-    assert '"SceneType": "NightReductionScene"' in night_call.kwargs["settings"]
-    night_reduction_sent = update_mock.await_args.kwargs["night_reduction"]
+    assert night_call.kwargs["settings"] == '{"SceneType": "NightReductionScene"}'
+    night_reduction_sent = create_time_event_mock.await_args.kwargs["night_reduction"]
     assert night_reduction_sent["scene_id"] == "night-scene-id"
     assert night_reduction_sent["start_time"] == "23:15"
+    # Both the on-scene and the night-reduction scene get their CreatedById backfilled.
+    assert update_scene_mock.await_count == 2
+    assert update_scene_mock.await_args_list[0].args[3] == "on-scene-id"
+    assert update_scene_mock.await_args_list[1].args[3] == "night-scene-id"
     cached = entry.data["cloud_schedules"][0]["night_reduction"]
     assert cached["scene_id"] == "night-scene-id"
 
@@ -677,8 +779,9 @@ async def test_create_schedule_raises_on_cloud_error_during_refresh(monkeypatch)
     )
     monkeypatch.setattr("plejd.manage_schedule.async_cloud_create_scene", AsyncMock(return_value="new-id"))
     monkeypatch.setattr(
-        "plejd.manage_schedule.async_cloud_update_time_event", AsyncMock(return_value={"eventId": "te1"})
+        "plejd.manage_schedule.async_cloud_create_time_event", AsyncMock(return_value={"eventId": "te1"})
     )
+    monkeypatch.setattr("plejd.manage_schedule.async_cloud_update_scene", AsyncMock(return_value=True))
     with pytest.raises(HomeAssistantError, match="Plejd cloud error refreshing site"):
         await async_create_schedule(
             hass,
@@ -702,8 +805,9 @@ async def test_create_schedule_runs_a_follow_up_reload_for_a_concurrent_change(m
     monkeypatch.setattr("plejd.manage_schedule.async_get_site", AsyncMock(return_value=_site()))
     monkeypatch.setattr("plejd.manage_schedule.async_cloud_create_scene", AsyncMock(return_value="new-id"))
     monkeypatch.setattr(
-        "plejd.manage_schedule.async_cloud_update_time_event", AsyncMock(return_value={"eventId": "te1"})
+        "plejd.manage_schedule.async_cloud_create_time_event", AsyncMock(return_value={"eventId": "te1"})
     )
+    monkeypatch.setattr("plejd.manage_schedule.async_cloud_update_scene", AsyncMock(return_value=True))
 
     calls: list[str] = []
 
@@ -1242,3 +1346,235 @@ async def test_update_schedule_serializes_concurrent_calls_to_the_same_schedule(
     cached = entry.data["cloud_schedules"][0]
     assert cached["fade_time"] == 5
     assert cached["activated"] is False
+
+
+# --- remove_schedule ---
+
+
+async def test_remove_schedule_raises_if_not_tracked():
+    with pytest.raises(HomeAssistantError, match="isn't tracked by this integration"):
+        await async_remove_schedule(_hass(), _entry(), schedule_id="missing")
+
+
+async def test_remove_schedule_raises_on_cloud_error_marking_dirty_remove(monkeypatch):
+    entry = _entry(
+        data={"email": "u@x.com", "password": "pw", "site_id": "S1", "cloud_schedules": [_cached_schedule()]}
+    )
+    monkeypatch.setattr("plejd.manage_schedule.async_login", AsyncMock(return_value="tok"))
+    monkeypatch.setattr("plejd.manage_schedule.async_get_site", AsyncMock(return_value=_site()))
+    monkeypatch.setattr(
+        "plejd.manage_schedule.async_cloud_update_time_event", AsyncMock(side_effect=PlejdCloudError("down"))
+    )
+    with pytest.raises(HomeAssistantError, match="Plejd cloud error removing schedule"):
+        await async_remove_schedule(_hass(), entry, schedule_id="te1")
+
+
+async def test_remove_schedule_raises_when_dirty_remove_rejected(monkeypatch):
+    entry = _entry(
+        data={"email": "u@x.com", "password": "pw", "site_id": "S1", "cloud_schedules": [_cached_schedule()]}
+    )
+    monkeypatch.setattr("plejd.manage_schedule.async_login", AsyncMock(return_value="tok"))
+    monkeypatch.setattr("plejd.manage_schedule.async_get_site", AsyncMock(return_value=_site()))
+    monkeypatch.setattr("plejd.manage_schedule.async_cloud_update_time_event", AsyncMock(return_value=None))
+    with pytest.raises(HomeAssistantError, match="Plejd cloud rejected removing schedule te1"):
+        await async_remove_schedule(_hass(), entry, schedule_id="te1")
+
+
+async def test_remove_schedule_sends_dirty_remove_with_empty_devices(monkeypatch):
+    entry = _entry(
+        data={"email": "u@x.com", "password": "pw", "site_id": "S1", "cloud_schedules": [_cached_schedule()]}
+    )
+    monkeypatch.setattr("plejd.manage_schedule.async_login", AsyncMock(return_value="tok"))
+    monkeypatch.setattr("plejd.manage_schedule.async_get_site", AsyncMock(return_value=_site()))
+    time_event_mock = AsyncMock(return_value={"eventId": "te1"})
+    monkeypatch.setattr("plejd.manage_schedule.async_cloud_update_time_event", time_event_mock)
+    monkeypatch.setattr("plejd.manage_schedule.async_cloud_remove_time_event", AsyncMock(return_value=True))
+    monkeypatch.setattr("plejd.manage_schedule.async_cloud_update_scene", AsyncMock(return_value=True))
+    monkeypatch.setattr("plejd.manage_schedule.async_cloud_remove_scene", AsyncMock(return_value=True))
+
+    await async_remove_schedule(_hass(), entry, schedule_id="te1")
+
+    time_event_mock.assert_awaited_once_with(
+        None,
+        "tok",
+        "S1",
+        "te1",
+        "s1",
+        scheduled_days=[0, 1, 2, 3, 4, 5, 6],
+        fade_time=0,
+        activated=True,
+        start_event="sunset",
+        start_offset=15,
+        end_event="sunrise",
+        end_offset=0,
+        dirty_devices=[],
+        dirty_removed_devices=[],
+        dirty_remove=True,
+        night_reduction=None,
+    )
+
+
+async def test_remove_schedule_raises_on_cloud_error_calling_remove_time_event(monkeypatch):
+    entry = _entry(
+        data={"email": "u@x.com", "password": "pw", "site_id": "S1", "cloud_schedules": [_cached_schedule()]}
+    )
+    monkeypatch.setattr("plejd.manage_schedule.async_login", AsyncMock(return_value="tok"))
+    monkeypatch.setattr("plejd.manage_schedule.async_get_site", AsyncMock(return_value=_site()))
+    monkeypatch.setattr(
+        "plejd.manage_schedule.async_cloud_update_time_event", AsyncMock(return_value={"eventId": "te1"})
+    )
+    monkeypatch.setattr(
+        "plejd.manage_schedule.async_cloud_remove_time_event", AsyncMock(side_effect=PlejdCloudError("down"))
+    )
+    with pytest.raises(HomeAssistantError, match="Plejd cloud error removing schedule"):
+        await async_remove_schedule(_hass(), entry, schedule_id="te1")
+
+
+async def test_remove_schedule_raises_when_remove_time_event_rejected(monkeypatch):
+    entry = _entry(
+        data={"email": "u@x.com", "password": "pw", "site_id": "S1", "cloud_schedules": [_cached_schedule()]}
+    )
+    monkeypatch.setattr("plejd.manage_schedule.async_login", AsyncMock(return_value="tok"))
+    monkeypatch.setattr("plejd.manage_schedule.async_get_site", AsyncMock(return_value=_site()))
+    monkeypatch.setattr(
+        "plejd.manage_schedule.async_cloud_update_time_event", AsyncMock(return_value={"eventId": "te1"})
+    )
+    monkeypatch.setattr("plejd.manage_schedule.async_cloud_remove_time_event", AsyncMock(return_value=False))
+    with pytest.raises(HomeAssistantError, match="Plejd cloud rejected removing schedule te1"):
+        await async_remove_schedule(_hass(), entry, schedule_id="te1")
+
+
+async def test_remove_schedule_removes_on_scene_and_updates_cache(monkeypatch):
+    hass = _hass()
+    entry = _entry(
+        data={
+            "email": "u@x.com",
+            "password": "pw",
+            "site_id": "S1",
+            "cloud_schedules": [_cached_schedule(device_ids=["d1"])],
+        }
+    )
+    monkeypatch.setattr("plejd.manage_schedule.async_login", AsyncMock(return_value="tok"))
+    monkeypatch.setattr("plejd.manage_schedule.async_get_site", AsyncMock(return_value=_site()))
+    monkeypatch.setattr(
+        "plejd.manage_schedule.async_cloud_update_time_event", AsyncMock(return_value={"eventId": "te1"})
+    )
+    remove_time_event_mock = AsyncMock(return_value=True)
+    monkeypatch.setattr("plejd.manage_schedule.async_cloud_remove_time_event", remove_time_event_mock)
+    update_scene_mock = AsyncMock(return_value=True)
+    monkeypatch.setattr("plejd.manage_schedule.async_cloud_update_scene", update_scene_mock)
+    remove_scene_mock = AsyncMock(return_value=True)
+    monkeypatch.setattr("plejd.manage_schedule.async_cloud_remove_scene", remove_scene_mock)
+
+    await async_remove_schedule(hass, entry, schedule_id="te1")
+
+    remove_time_event_mock.assert_awaited_once_with(None, "tok", "S1", "te1", device_ids=["d1"])
+    update_scene_mock.assert_awaited_once_with(None, "tok", "S1", "s1", scene_steps=[])
+    remove_scene_mock.assert_awaited_once_with(None, "tok", "S1", "s1")
+    assert entry.data["cloud_schedules"] == []
+    hass.config_entries.async_reload.assert_awaited_once_with("e1")
+
+
+async def test_remove_schedule_also_removes_night_reduction_scene(monkeypatch):
+    entry = _entry(
+        data={
+            "email": "u@x.com",
+            "password": "pw",
+            "site_id": "S1",
+            "cloud_schedules": [
+                _cached_schedule(
+                    device_ids=["d1"],
+                    night_reduction={
+                        "scene_id": "night1",
+                        "device_ids": ["d2"],
+                        "start_time": "23:00",
+                        "end_time": "05:00",
+                        "weekend_start_time": None,
+                        "weekend_end_time": None,
+                    },
+                )
+            ],
+        }
+    )
+    monkeypatch.setattr("plejd.manage_schedule.async_login", AsyncMock(return_value="tok"))
+    monkeypatch.setattr("plejd.manage_schedule.async_get_site", AsyncMock(return_value=_site()))
+    time_event_mock = AsyncMock(return_value={"eventId": "te1"})
+    monkeypatch.setattr("plejd.manage_schedule.async_cloud_update_time_event", time_event_mock)
+    remove_time_event_mock = AsyncMock(return_value=True)
+    monkeypatch.setattr("plejd.manage_schedule.async_cloud_remove_time_event", remove_time_event_mock)
+    update_scene_mock = AsyncMock(return_value=True)
+    monkeypatch.setattr("plejd.manage_schedule.async_cloud_update_scene", update_scene_mock)
+    remove_scene_mock = AsyncMock(return_value=True)
+    monkeypatch.setattr("plejd.manage_schedule.async_cloud_remove_scene", remove_scene_mock)
+
+    await async_remove_schedule(_hass(), entry, schedule_id="te1")
+
+    # removeTimeEvent_V3's deviceIds covers both the on-scene and night-reduction devices.
+    remove_time_event_mock.assert_awaited_once_with(None, "tok", "S1", "te1", device_ids=["d1", "d2"])
+    assert update_scene_mock.await_count == 2
+    assert {c.args[3] for c in update_scene_mock.await_args_list} == {"s1", "night1"}
+    assert remove_scene_mock.await_count == 2
+    assert {c.args[3] for c in remove_scene_mock.await_args_list} == {"s1", "night1"}
+
+
+async def test_remove_schedule_logs_when_scene_cleanup_raises(monkeypatch, caplog):
+    # removeTimeEvent_V3 already succeeded - the schedule itself is gone, so a failure
+    # cleaning up its scene afterward must be logged, not raised.
+    hass = _hass()
+    entry = _entry(
+        data={"email": "u@x.com", "password": "pw", "site_id": "S1", "cloud_schedules": [_cached_schedule()]}
+    )
+    monkeypatch.setattr("plejd.manage_schedule.async_login", AsyncMock(return_value="tok"))
+    monkeypatch.setattr("plejd.manage_schedule.async_get_site", AsyncMock(return_value=_site()))
+    monkeypatch.setattr(
+        "plejd.manage_schedule.async_cloud_update_time_event", AsyncMock(return_value={"eventId": "te1"})
+    )
+    monkeypatch.setattr("plejd.manage_schedule.async_cloud_remove_time_event", AsyncMock(return_value=True))
+    monkeypatch.setattr(
+        "plejd.manage_schedule.async_cloud_update_scene", AsyncMock(side_effect=PlejdCloudError("down"))
+    )
+
+    await async_remove_schedule(hass, entry, schedule_id="te1")
+
+    assert "s1" in caplog.text
+    assert entry.data["cloud_schedules"] == []  # the schedule is still considered removed
+
+
+async def test_remove_schedule_logs_when_scene_removal_is_rejected(monkeypatch, caplog):
+    entry = _entry(
+        data={"email": "u@x.com", "password": "pw", "site_id": "S1", "cloud_schedules": [_cached_schedule()]}
+    )
+    monkeypatch.setattr("plejd.manage_schedule.async_login", AsyncMock(return_value="tok"))
+    monkeypatch.setattr("plejd.manage_schedule.async_get_site", AsyncMock(return_value=_site()))
+    monkeypatch.setattr(
+        "plejd.manage_schedule.async_cloud_update_time_event", AsyncMock(return_value={"eventId": "te1"})
+    )
+    monkeypatch.setattr("plejd.manage_schedule.async_cloud_remove_time_event", AsyncMock(return_value=True))
+    monkeypatch.setattr("plejd.manage_schedule.async_cloud_update_scene", AsyncMock(return_value=True))
+    monkeypatch.setattr("plejd.manage_schedule.async_cloud_remove_scene", AsyncMock(return_value=False))
+
+    await async_remove_schedule(_hass(), entry, schedule_id="te1")
+
+    assert "s1" in caplog.text
+    assert "rejected removing" in caplog.text
+
+
+async def test_remove_schedule_serializes_via_the_lock(monkeypatch):
+    # Uses the same per-entry lock as create/update - just confirm it's acquired without
+    # deadlocking or interfering with a normal single removal.
+    hass = _hass()
+    entry = _entry(
+        data={"email": "u@x.com", "password": "pw", "site_id": "S1", "cloud_schedules": [_cached_schedule()]}
+    )
+    monkeypatch.setattr("plejd.manage_schedule.async_login", AsyncMock(return_value="tok"))
+    monkeypatch.setattr("plejd.manage_schedule.async_get_site", AsyncMock(return_value=_site()))
+    monkeypatch.setattr(
+        "plejd.manage_schedule.async_cloud_update_time_event", AsyncMock(return_value={"eventId": "te1"})
+    )
+    monkeypatch.setattr("plejd.manage_schedule.async_cloud_remove_time_event", AsyncMock(return_value=True))
+    monkeypatch.setattr("plejd.manage_schedule.async_cloud_update_scene", AsyncMock(return_value=True))
+    monkeypatch.setattr("plejd.manage_schedule.async_cloud_remove_scene", AsyncMock(return_value=True))
+
+    await async_remove_schedule(hass, entry, schedule_id="te1")
+
+    assert entry.data["cloud_schedules"] == []

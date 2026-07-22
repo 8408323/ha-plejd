@@ -13,6 +13,7 @@ from plejd.cloud import (
     async_create_device,
     async_create_room,
     async_create_scene,
+    async_create_time_event,
     async_get_available_firmware,
     async_get_needed_output_count,
     async_get_site,
@@ -21,6 +22,7 @@ from plejd.cloud import (
     async_remove_device,
     async_remove_room,
     async_remove_scene,
+    async_remove_time_event,
     async_set_device_title,
     async_set_input_setting,
     async_update_room,
@@ -33,9 +35,11 @@ from plejd.const import (
     PLEJD_FN_CREATE_DEVICE,
     PLEJD_FN_CREATE_ROOM,
     PLEJD_FN_CREATE_SCENE,
+    PLEJD_FN_CREATE_TIME_EVENT,
     PLEJD_FN_REMOVE_DEVICE,
     PLEJD_FN_REMOVE_ROOM,
     PLEJD_FN_REMOVE_SCENE,
+    PLEJD_FN_REMOVE_TIME_EVENT,
     PLEJD_FN_SET_INPUT,
     PLEJD_FN_UPDATE_ROOM,
     PLEJD_FN_UPDATE_SCENE,
@@ -56,7 +60,9 @@ _UPDATE_SCENE = PLEJD_PARSE_URL + PLEJD_FN_UPDATE_SCENE
 _REMOVE_SCENE = PLEJD_PARSE_URL + PLEJD_FN_REMOVE_SCENE
 _REMOVE_DEVICE = PLEJD_PARSE_URL + PLEJD_FN_REMOVE_DEVICE
 _SET_INPUT = PLEJD_PARSE_URL + PLEJD_FN_SET_INPUT
+_CREATE_TIME_EVENT = PLEJD_PARSE_URL + PLEJD_FN_CREATE_TIME_EVENT
 _UPDATE_TIME_EVENT = PLEJD_PARSE_URL + PLEJD_FN_UPDATE_TIME_EVENT
+_REMOVE_TIME_EVENT = PLEJD_PARSE_URL + PLEJD_FN_REMOVE_TIME_EVENT
 
 _SITE = {
     "siteId": "S1",
@@ -1160,9 +1166,11 @@ async def test_update_time_event_sends_minimal_payload_without_night_reduction()
         "dirtyRemovedDevices": [],
         "dirtyRemove": False,
         "mode": "astro",
-        "version": 3,
+        "version": 2,
         "start": {"event": "sunset", "offset": 15},
         "end": {"event": "sunrise", "offset": 0},
+        "pauseStart": "00:00",
+        "pauseEnd": "00:00",
     }
 
 
@@ -1201,6 +1209,8 @@ async def test_update_time_event_sends_dirty_devices_and_night_reduction():
                 },
             )
     assert captured["dirtyDevices"] == ["d1"]
+    assert captured["version"] == 3  # night_reduction present -> version 3, not 2
+    assert "pauseStart" not in captured and "pauseEnd" not in captured
     assert captured["nightReduction"] == {
         "startTime": "23:15",
         "endTime": "05:30",
@@ -1259,3 +1269,156 @@ async def test_update_time_event_rejects_malformed_result():
                 end_offset=0,
             )
     assert result is None
+
+
+async def test_update_time_event_sends_dirty_remove():
+    from aioresponses import CallbackResult
+
+    captured: dict = {}
+
+    def _capture(url, **kwargs):
+        captured.update(kwargs.get("json", {}))
+        return CallbackResult(payload={"result": {"targetDevices": [], "eventId": "te1"}})
+
+    with aioresponses() as m:
+        m.post(_UPDATE_TIME_EVENT, callback=_capture)
+        async with aiohttp.ClientSession() as s:
+            await async_update_time_event(
+                s,
+                "tok",
+                "site1",
+                "te1",
+                "scene1",
+                scheduled_days=[0],
+                fade_time=0,
+                activated=True,
+                start_event="sunset",
+                start_offset=15,
+                end_event="sunrise",
+                end_offset=0,
+                dirty_remove=True,
+            )
+    assert captured["dirtyRemove"] is True
+
+
+async def test_create_time_event_sends_null_time_event_id_and_target_devices():
+    from aioresponses import CallbackResult
+
+    captured: dict = {}
+
+    def _capture(url, **kwargs):
+        captured.update(kwargs.get("json", {}))
+        return CallbackResult(payload={"result": {"targetDevices": [{"deviceId": "d1", "index": 0}], "eventId": "te1"}})
+
+    with aioresponses() as m:
+        m.post(_CREATE_TIME_EVENT, callback=_capture)
+        async with aiohttp.ClientSession() as s:
+            result = await async_create_time_event(
+                s,
+                "tok",
+                "site1",
+                "scene1",
+                scheduled_days=[0, 1, 2, 3, 4, 5, 6],
+                fade_time=0,
+                activated=True,
+                start_event="sunset",
+                start_offset=15,
+                end_event="sunrise",
+                end_offset=0,
+                dirty_devices=["d1"],
+            )
+    assert result == {"targetDevices": [{"deviceId": "d1", "index": 0}], "eventId": "te1"}
+    assert captured == {
+        "siteId": "site1",
+        "timeEventId": None,
+        "sceneId": "scene1",
+        "scheduledDays": [0, 1, 2, 3, 4, 5, 6],
+        "fadeTime": 0,
+        "activated": True,
+        "dirtyDevices": ["d1"],
+        "dirtyRemovedDevices": [],
+        "dirtyRemove": False,
+        "mode": "astro",
+        "version": 2,
+        "start": {"event": "sunset", "offset": 15},
+        "end": {"event": "sunrise", "offset": 0},
+        "pauseStart": "00:00",
+        "pauseEnd": "00:00",
+        "targetDevices": ["d1"],
+    }
+
+
+async def test_create_time_event_with_night_reduction_uses_version_3():
+    from aioresponses import CallbackResult
+
+    captured: dict = {}
+
+    def _capture(url, **kwargs):
+        captured.update(kwargs.get("json", {}))
+        return CallbackResult(payload={"result": {"targetDevices": [], "eventId": "te1"}})
+
+    with aioresponses() as m:
+        m.post(_CREATE_TIME_EVENT, callback=_capture)
+        async with aiohttp.ClientSession() as s:
+            await async_create_time_event(
+                s,
+                "tok",
+                "site1",
+                "scene1",
+                scheduled_days=[0],
+                fade_time=0,
+                activated=True,
+                start_event="sunset",
+                start_offset=15,
+                end_event="sunrise",
+                end_offset=0,
+                night_reduction={"scene_id": "night1", "start_time": "23:15", "end_time": "05:30"},
+            )
+    assert captured["version"] == 3
+    assert "pauseStart" not in captured and "pauseEnd" not in captured
+    assert captured["nightReduction"] == {"startTime": "23:15", "endTime": "05:30", "sceneId": "night1"}
+
+
+async def test_create_time_event_rejects_malformed_result():
+    with aioresponses() as m:
+        m.post(_CREATE_TIME_EVENT, payload={"result": True})
+        async with aiohttp.ClientSession() as s:
+            result = await async_create_time_event(
+                s,
+                "tok",
+                "site1",
+                "scene1",
+                scheduled_days=[0],
+                fade_time=0,
+                activated=True,
+                start_event="sunset",
+                start_offset=15,
+                end_event="sunrise",
+                end_offset=0,
+            )
+    assert result is None
+
+
+async def test_remove_time_event_posts_correct_payload():
+    from aioresponses import CallbackResult
+
+    captured: dict = {}
+
+    def _capture(url, **kwargs):
+        captured.update(kwargs.get("json", {}))
+        return CallbackResult(payload={"result": True})
+
+    with aioresponses() as m:
+        m.post(_REMOVE_TIME_EVENT, callback=_capture)
+        async with aiohttp.ClientSession() as s:
+            ok = await async_remove_time_event(s, "tok", "site1", "te1", device_ids=["d1"])
+    assert ok is True
+    assert captured == {"siteId": "site1", "timeEventId": "te1", "mode": "astro", "deviceIds": ["d1"]}
+
+
+async def test_remove_time_event_rejects_malformed_truthy_result():
+    with aioresponses() as m:
+        m.post(_REMOVE_TIME_EVENT, payload={"result": "yes"})
+        async with aiohttp.ClientSession() as s:
+            ok = await async_remove_time_event(s, "tok", "site1", "te1", device_ids=["d1"])
+    assert ok is False

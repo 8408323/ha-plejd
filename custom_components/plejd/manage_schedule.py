@@ -1,20 +1,26 @@
-"""Create and update Plejd cloud schedules (astro triggers + night reduction).
+"""Create, update, and remove Plejd cloud schedules (astro triggers + night reduction).
 
 The real Plejd app's "Schemaläggning" feature - confirmed via a live capture to be
-entirely cloud-side: an updateTimeEvent_V3 Parse call (the sunset/sunrise-relative
-trigger, plus an optional night-reduction quiet-hours window) and one or two ordinary
-(hidden) scenes it runs, tied together by a CreatedById embedded in each scene's own
-settings JSON. Not the on-device weekly schedules schedule_ws.py manages
-(entry.options[CONF_SCHEDULES], CMD_TIME_EVENT_* mesh commands) - that's a separate,
-BLE-only mechanism; like manage_scene.py, this one never touches the mesh directly.
+entirely cloud-side: a TimeEvent Parse object (the sunset/sunrise-relative trigger, plus
+an optional night-reduction quiet-hours window) and one or two ordinary (hidden) scenes
+it runs, tied together by a CreatedById embedded in each scene's own settings JSON. Not
+the on-device weekly schedules schedule_ws.py manages (entry.options[CONF_SCHEDULES],
+CMD_TIME_EVENT_* mesh commands) - that's a separate, BLE-only mechanism; like
+manage_scene.py, this one never touches the mesh directly.
+
+Create and update are confirmed to be genuinely separate Parse functions
+(createTimeEvent_V3 / updateTimeEvent_V3) - creation gets a server-generated id back
+(the response's eventId), so a scene's CreatedById tag can only be set in a follow-up
+updateScene call once that id is known; the scenes themselves are created untagged.
+Removal is a whole-state updateTimeEvent_V3 resend with dirtyRemove=true, followed by
+the dedicated removeTimeEvent_V3 call - see async_remove_schedule's docstring for what's
+simplified relative to the captured sequence.
 
 getSiteById's own response for existing cloud schedules hasn't been captured/confirmed,
 so this only tracks schedules created through this integration itself
-(entry.data[CONF_CLOUD_SCHEDULES]) - async_update_schedule can only target one of those,
-not a schedule created through the app. Only "astro" mode (the only one captured) is
-supported; a fixed-clock-time trigger mode's wire shape is unconfirmed. Removing a
-schedule entirely (vs. deactivating it) is also unconfirmed and not implemented - use
-the activated flag on async_update_schedule to pause one instead.
+(entry.data[CONF_CLOUD_SCHEDULES]) - async_update_schedule/async_remove_schedule can only
+target one of those, not a schedule created through the app. Only "astro" mode (the only
+one captured) is supported; a fixed-clock-time trigger mode's wire shape is unconfirmed.
 """
 
 from __future__ import annotations
@@ -23,7 +29,6 @@ import asyncio
 import json
 import logging
 import re
-import uuid
 from dataclasses import asdict
 
 from homeassistant.config_entries import ConfigEntry
@@ -35,7 +40,9 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from . import schedule_ws
 from .cloud import PlejdAuthError, PlejdCloudError, async_get_site, async_login
 from .cloud import async_create_scene as async_cloud_create_scene
+from .cloud import async_create_time_event as async_cloud_create_time_event
 from .cloud import async_remove_scene as async_cloud_remove_scene
+from .cloud import async_remove_time_event as async_cloud_remove_time_event
 from .cloud import async_update_scene as async_cloud_update_scene
 from .cloud import async_update_time_event as async_cloud_update_time_event
 from .const import (
@@ -203,8 +210,20 @@ def _validate_night_reduction(night_reduction: dict) -> None:
         _validate_time(night_reduction["weekend_end_time"], "weekend_end_time")
 
 
-def _night_reduction_settings(schedule_id: str) -> str:
-    return json.dumps({"SceneType": "NightReductionScene", "CreatedById": schedule_id})
+def _astro_event_settings(schedule_id: str | None = None) -> str:
+    """The on-scene's settings JSON. schedule_id is only known after createTimeEvent_V3 returns
+    its server-generated eventId, so the scene is created without CreatedById and backfilled."""
+    payload: dict[str, object] = {"SceneType": "AstroEventScene"}
+    if schedule_id is not None:
+        payload["CreatedById"] = schedule_id
+    return json.dumps(payload)
+
+
+def _night_reduction_settings(schedule_id: str | None = None) -> str:
+    payload: dict[str, object] = {"SceneType": "NightReductionScene"}
+    if schedule_id is not None:
+        payload["CreatedById"] = schedule_id
+    return json.dumps(payload)
 
 
 def _night_reduction_result(scene_id: str, night_reduction: dict) -> dict:
@@ -258,7 +277,6 @@ async def async_create_schedule(
         _validate_night_reduction(night_reduction)
 
     http_session, token, site = await _async_login_and_get_site(hass, entry)
-    schedule_id = str(uuid.uuid4())
     device_ids = sorted({s["device_id"] for s in scene_steps})
 
     # Held for the whole cloud+cache sequence, not just the final write: this integration is
@@ -275,9 +293,10 @@ async def async_create_schedule(
                 title,
                 scene_steps,
                 hidden_from_scene_list=True,
-                settings=json.dumps({"SceneType": "AstroEventScene", "CreatedById": schedule_id}),
+                settings=_astro_event_settings(),
             )
             created_scene_ids.append(on_scene_id)
+            night_scene_id: str | None = None
             night_reduction_result: dict | None = None
             if night_reduction is not None:
                 night_scene_id = await async_cloud_create_scene(
@@ -287,18 +306,17 @@ async def async_create_schedule(
                     f"{title} Nattläge",
                     night_reduction["scene_steps"],
                     hidden_from_scene_list=True,
-                    settings=_night_reduction_settings(schedule_id),
+                    settings=_night_reduction_settings(),
                 )
                 created_scene_ids.append(night_scene_id)
                 night_reduction_result = _night_reduction_result(night_scene_id, night_reduction)
             dirty_devices = sorted(
                 set(device_ids) | (set(night_reduction_result["device_ids"]) if night_reduction_result else set())
             )
-            result = await async_cloud_update_time_event(
+            result = await async_cloud_create_time_event(
                 http_session,
                 token,
                 site.site_id,
-                schedule_id,
                 on_scene_id,
                 scheduled_days=days,
                 fade_time=fade_time,
@@ -313,9 +331,27 @@ async def async_create_schedule(
         except PlejdCloudError as err:
             await _async_cleanup_orphaned_scenes(http_session, token, site.site_id, created_scene_ids)
             raise HomeAssistantError(f"Plejd cloud error creating schedule: {err}") from err
-        if result is None:
+        if result is None or not result.get("eventId"):
             await _async_cleanup_orphaned_scenes(http_session, token, site.site_id, created_scene_ids)
             raise HomeAssistantError("Plejd cloud rejected the schedule creation")
+        schedule_id = result["eventId"]
+
+        # The scene(s) exist and the trigger is live at this point - the schedule works even
+        # if this backfill fails, so a failure here is logged, not raised (matches the
+        # orphaned-scene cleanup's own "don't mask what already succeeded" philosophy).
+        try:
+            if not await async_cloud_update_scene(
+                http_session, token, site.site_id, on_scene_id, settings=_astro_event_settings(schedule_id)
+            ):
+                _LOGGER.warning("Plejd: cloud rejected tagging schedule scene %s with its CreatedById", on_scene_id)
+            if night_scene_id is not None and not await async_cloud_update_scene(
+                http_session, token, site.site_id, night_scene_id, settings=_night_reduction_settings(schedule_id)
+            ):
+                _LOGGER.warning(
+                    "Plejd: cloud rejected tagging night-reduction scene %s with its CreatedById", night_scene_id
+                )
+        except PlejdCloudError:
+            _LOGGER.warning("Plejd: could not tag schedule %s's scene(s) with CreatedById", schedule_id, exc_info=True)
 
         schedule = {
             "schedule_id": schedule_id,
@@ -505,3 +541,79 @@ async def async_update_schedule(
                 updated if s["schedule_id"] == schedule_id else s for s in entry.data.get(CONF_CLOUD_SCHEDULES, [])
             ]
             await _async_refresh_and_reload(hass, entry, http_session, token, cloud_schedules=cloud_schedules)
+
+
+async def async_remove_schedule(hass: HomeAssistant, entry: ConfigEntry, *, schedule_id: str) -> None:
+    """Remove a cloud schedule created via async_create_schedule, then refresh + reload.
+
+    Mirrors the confirmed capture: a whole-state updateTimeEvent_V3 resend with
+    dirtyRemove=true (dirtyDevices/dirtyRemovedDevices both empty, matching the capture),
+    then the dedicated removeTimeEvent_V3 call. The capture also showed an updateScene
+    resending the on-scene's individual steps with dirtyRemoved=true before emptying them -
+    skipped here since this integration only caches device_ids, not the original per-step
+    output/state/value needed to resend that call faithfully; going straight from
+    dirtyRemove to removeTimeEvent_V3 is the minimal confirmed-safe path (steps are still
+    emptied via updateScene right before removeScene, matching the capture, since that
+    doesn't need per-step data).
+
+    Once removeTimeEvent_V3 confirms the trigger is gone, the schedule itself no longer
+    exists - a failure cleaning up its scene(s) after that point is logged, not raised.
+    """
+    async with _async_get_lock(hass, entry):
+        cached = next((s for s in entry.data.get(CONF_CLOUD_SCHEDULES, []) if s["schedule_id"] == schedule_id), None)
+        if cached is None:
+            raise HomeAssistantError(
+                f"Plejd schedule {schedule_id} isn't tracked by this integration "
+                "(only schedules created via create_schedule can be removed)"
+            )
+        http_session, token, site = await _async_login_and_get_site(hass, entry)
+
+        try:
+            result = await async_cloud_update_time_event(
+                http_session,
+                token,
+                site.site_id,
+                schedule_id,
+                cached["scene_id"],
+                scheduled_days=cached["scheduled_days"],
+                fade_time=cached["fade_time"],
+                activated=cached["activated"],
+                start_event=cached["start_event"],
+                start_offset=cached["start_offset"],
+                end_event=cached["end_event"],
+                end_offset=cached["end_offset"],
+                dirty_devices=[],
+                dirty_removed_devices=[],
+                dirty_remove=True,
+                night_reduction=cached["night_reduction"],
+            )
+        except PlejdCloudError as err:
+            raise HomeAssistantError(f"Plejd cloud error removing schedule: {err}") from err
+        if result is None:
+            raise HomeAssistantError(f"Plejd cloud rejected removing schedule {schedule_id}")
+
+        try:
+            removed = await async_cloud_remove_time_event(
+                http_session, token, site.site_id, schedule_id, device_ids=sorted(_all_device_ids(cached))
+            )
+        except PlejdCloudError as err:
+            raise HomeAssistantError(f"Plejd cloud error removing schedule: {err}") from err
+        if not removed:
+            raise HomeAssistantError(f"Plejd cloud rejected removing schedule {schedule_id}")
+
+        night_reduction = cached["night_reduction"]
+        scene_ids = [cached["scene_id"], *([night_reduction["scene_id"]] if night_reduction else [])]
+        for scene_id in scene_ids:
+            try:
+                await async_cloud_update_scene(http_session, token, site.site_id, scene_id, scene_steps=[])
+                if not await async_cloud_remove_scene(http_session, token, site.site_id, scene_id):
+                    _LOGGER.warning(
+                        "Plejd: cloud rejected removing schedule scene %s after removeTimeEvent_V3", scene_id
+                    )
+            except PlejdCloudError:
+                _LOGGER.warning(
+                    "Plejd: could not clean up schedule scene %s after removeTimeEvent_V3", scene_id, exc_info=True
+                )
+
+        cloud_schedules = [s for s in entry.data.get(CONF_CLOUD_SCHEDULES, []) if s["schedule_id"] != schedule_id]
+        await _async_refresh_and_reload(hass, entry, http_session, token, cloud_schedules=cloud_schedules)

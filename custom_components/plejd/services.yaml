@@ -460,6 +460,21 @@ update_schedule:
       selector:
         object:
 
+remove_schedule:
+  name: Remove schedule
+  description: >-
+    Remove a cloud schedule previously created via create_schedule - its
+    trigger and on-scene (and night-reduction scene, if any) are all deleted
+    from the Plejd cloud - then reload the config entry. Only schedules this
+    integration created can be targeted.
+  fields:
+    schedule_id:
+      name: Schedule ID
+      description: ID of the schedule to remove, as returned/tracked by create_schedule.
+      required: true
+      selector:
+        text:
+
 start_dim:
   name: Start dimming
   description: >-

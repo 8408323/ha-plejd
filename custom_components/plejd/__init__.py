@@ -29,7 +29,7 @@ from .manage_device import async_remove_device
 from .manage_device_room import async_move_device_to_room
 from .manage_room import async_remove_room, async_update_room
 from .manage_scene import async_create_scene, async_remove_scene, async_update_scene
-from .manage_schedule import async_create_schedule, async_update_schedule
+from .manage_schedule import async_create_schedule, async_remove_schedule, async_update_schedule
 from .remote_profiles import PlejdRemoteProfiles
 
 _WS_REGISTERED = f"{DOMAIN}_ws_registered"
@@ -68,6 +68,7 @@ SERVICE_REMOVE_DEVICE = "remove_device"
 SERVICE_MOVE_DEVICE_TO_ROOM = "move_device_to_room"
 SERVICE_CREATE_SCHEDULE = "create_schedule"
 SERVICE_UPDATE_SCHEDULE = "update_schedule"
+SERVICE_REMOVE_SCHEDULE = "remove_schedule"
 
 _INPUT_SETTING_SCHEMA = vol.Schema({vol.Required("input"): int, vol.Required("button_type"): str})
 
@@ -173,6 +174,8 @@ _UPDATE_SCHEDULE_SCHEMA = vol.Schema(
         vol.Optional("night_reduction"): _NIGHT_REDUCTION_SCHEMA,
     }
 )
+
+_REMOVE_SCHEDULE_SCHEMA = vol.Schema({vol.Required("schedule_id"): str})
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -306,6 +309,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             night_reduction=call.data.get("night_reduction"),
         )
 
+    async def _async_handle_remove_schedule(call) -> None:
+        current_entry = hass.data[_DATA_CURRENT_ENTRY]
+        await async_remove_schedule(hass, current_entry, schedule_id=call.data["schedule_id"])
+
     # Registered once per hass lifetime, before coordinator.async_start(), and NOT torn
     # down by entry.async_on_unload: HA runs every already-registered on_unload callback
     # as cleanup when async_setup_entry raises ConfigEntryNotReady (same path a failed
@@ -336,6 +343,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _register_once(SERVICE_MOVE_DEVICE_TO_ROOM, _async_handle_move_device_to_room, _MOVE_DEVICE_TO_ROOM_SCHEMA)
     _register_once(SERVICE_CREATE_SCHEDULE, _async_handle_create_schedule, _CREATE_SCHEDULE_SCHEMA)
     _register_once(SERVICE_UPDATE_SCHEDULE, _async_handle_update_schedule, _UPDATE_SCHEDULE_SCHEMA)
+    _register_once(SERVICE_REMOVE_SCHEDULE, _async_handle_remove_schedule, _REMOVE_SCHEDULE_SCHEMA)
 
     # Register the sidebar dashboard before starting the coordinator. It's optional, so a
     # failure (e.g. another panel already owns the `plejd` url path) must not abort setup —

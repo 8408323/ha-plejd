@@ -197,6 +197,75 @@ it cleanly.
 > this app has no `okhttp3.*` classes loaded at all, so hooking only the modern
 > OkHttp3 API (the usual first guess for "Android SSL pinning bypass" scripts)
 > silently does nothing.
+>
+> **2026-07-22 follow-up — the bypass above wasn't enough for every call.** A
+> schedule-save specifically kept failing ("the client does not trust the
+> proxy's certificate") even with the same script attached, including a case
+> where `frida -U -f ... -l bypass.js` reported "Failed to spawn: unexpectedly
+> timed out" yet the process had actually launched (confirmed via `ps`) —
+> attaching to it (`frida -U -n Plejd -l bypass.js`) afterward worked. The
+> deeper cause: killing the Frida CLI process (even after a successful spawn)
+> detaches the injected script and reverts its hooks, so a `timeout N frida ...
+> &` wrapper that gets killed after N seconds silently undoes the bypass for
+> anything that connects afterward — the process must stay attached (run
+> detached via `nohup ... &`, never killed until the capture is done) for the
+> hooks to still apply to a later call. Separately, some calls weren't caught
+> by `DotnetProxyTrustManager` at all; adding hooks for
+> `android.security.net.config.NetworkSecurityTrustManager` (Android's own
+> Network Security Config trust manager, a separate gate from the app's own
+> TLS code) plus a generic sweep of every loaded class implementing
+> `X509TrustManager.checkServerTrusted` fixed it.
+
+## Confirmed capture: cloud schedules (2026-07-22)
+
+Live-captured while creating, then deleting, a disposable test schedule (via
+the WireGuard-mode mitmproxy + Frida setup above). Real ids below are
+placeholders.
+
+**Create** is two Parse calls, not one — `functions/createTimeEvent_V3` is a
+separate function from `functions/updateTimeEvent_V3`, confirmed distinct:
+
+```
+POST functions/createScene
+  {siteId, sceneId, title, order: 0, sceneSteps: [...],
+   hiddenFromSceneList: true, settings: "{\"SceneType\":\"AstroEventScene\"}"}
+  -> {result: <int>}                      # no CreatedById yet
+
+POST functions/createTimeEvent_V3
+  {siteId, timeEventId: null, sceneId, scheduledDays, fadeTime, activated,
+   dirtyDevices, dirtyRemovedDevices: [], dirtyRemove: false, mode: "astro",
+   version: 2, start: {event, offset}, end: {event, offset},
+   pauseStart: "00:00", pauseEnd: "00:00", targetDevices}
+  -> {result: {targetDevices, eventId}}    # server generates the real id
+
+POST functions/updateScene                # backfills CreatedById once eventId is known
+  {siteId, sceneId, ..., settings: "{\"SceneType\":\"AstroEventScene\",\"CreatedById\":\"<eventId>\"}"}
+  -> {result: true}
+```
+
+`version: 2` + `pauseStart`/`pauseEnd` (always `"00:00"` here) is what this
+capture showed for a schedule *without* night reduction. An earlier capture of
+an *existing* schedule *with* night reduction configured showed `version: 3`
+and a `nightReduction` object instead of `pauseStart`/`pauseEnd` — both are
+individually confirmed-real payloads, but which field actually controls the
+switch between them wasn't re-verified in one session (not retested: enabling
+night reduction on a fresh schedule to watch `version` change). See
+[#106](https://github.com/8408323/ha-plejd/issues/106) and
+[#121](https://github.com/8408323/ha-plejd/issues/121).
+
+**Delete** is confirmed as a 5-call sequence:
+
+```
+1. updateTimeEvent_V3   — whole-state resend with dirtyRemove: true, dirtyDevices: []
+2. updateScene          — the on-scene's step(s) resent with dirtyRemoved: true
+3. removeTimeEvent_V3   — {siteId, timeEventId, mode: "astro", deviceIds} -> {result: true}
+4. updateScene          — sceneSteps: [] (emptied)
+5. removeScene          — {siteId, sceneId} -> {result: true}
+```
+
+`removeTimeEvent_V3` (step 3) is the dedicated deletion call — the earlier
+`dirtyRemove: true` resend (step 1) isn't itself destructive, it just marks
+intent before the real removal.
 
 ## Secrets
 

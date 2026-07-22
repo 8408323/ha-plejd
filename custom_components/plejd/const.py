@@ -215,11 +215,21 @@ PLEJD_FN_UPDATE_SCENE = (
 )
 PLEJD_FN_REMOVE_SCENE = "functions/removeScene"  # {siteId, sceneId} -> bool
 PLEJD_FN_REMOVE_DEVICE = "functions/removeDevice"  # {siteId, deviceId} -> bool
+PLEJD_FN_CREATE_TIME_EVENT = (
+    "functions/createTimeEvent_V3"  # {siteId, timeEventId: null, sceneId, scheduledDays, fadeTime,
+    # activated, dirtyDevices, dirtyRemovedDevices: [], dirtyRemove: false, mode, version, start,
+    # end, pauseStart?, pauseEnd?, nightReduction?, targetDevices} -> {targetDevices, eventId};
+    # timeEventId is server-generated - the response's eventId is the real id, confirmed distinct
+    # from updateTimeEvent_V3 (this integration wrongly used update for create until this was
+    # captured)
+)
 PLEJD_FN_UPDATE_TIME_EVENT = (
     "functions/updateTimeEvent_V3"  # {siteId, timeEventId, sceneId, scheduledDays, fadeTime,
     # activated, dirtyDevices, dirtyRemovedDevices, dirtyRemove, mode, version, start, end,
-    # nightReduction?} -> {targetDevices, eventId}; whole-state call, resent in full each edit
+    # pauseStart?, pauseEnd?, nightReduction?} -> {targetDevices, eventId}; whole-state call,
+    # resent in full each edit
 )
+PLEJD_FN_REMOVE_TIME_EVENT = "functions/removeTimeEvent_V3"  # {siteId, timeEventId, mode, deviceIds} -> bool
 
 # Room.RoomCategory enum values, sent to createRoom/updateRoom's "category" field as-is
 # (the app does `.ToString()` on the enum). Excludes KidsRoom - the app itself marks it

@@ -17,6 +17,7 @@ from plejd import (
     SERVICE_REMOVE_DEVICE,
     SERVICE_REMOVE_ROOM,
     SERVICE_REMOVE_SCENE,
+    SERVICE_REMOVE_SCHEDULE,
     SERVICE_SCAN_DEVICES,
     SERVICE_UPDATE_ROOM,
     SERVICE_UPDATE_SCENE,
@@ -1148,6 +1149,42 @@ async def test_update_schedule_service_forwards_defaults(monkeypatch):
         activated=None,
         night_reduction=None,
     )
+
+
+async def test_remove_schedule_service_is_registered_on_setup(monkeypatch):
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    _FakeCoordinator.instances.clear()
+    hass, entry = _hass(), _entry()
+    await async_setup_entry(hass, entry)
+    assert f"plejd.{SERVICE_REMOVE_SCHEDULE}" in hass.services._handlers
+
+
+async def test_remove_schedule_service_survives_entry_unload_cleanup(monkeypatch):
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    _FakeCoordinator.instances.clear()
+    hass, entry = _hass(), _entry()
+    unloads: list = []
+    entry.async_on_unload = unloads.append
+    await async_setup_entry(hass, entry)
+    assert f"plejd.{SERVICE_REMOVE_SCHEDULE}" in hass.services._handlers
+    for unload in unloads:
+        unload()
+    assert f"plejd.{SERVICE_REMOVE_SCHEDULE}" in hass.services._handlers
+
+
+async def test_remove_schedule_service_forwards_call_data(monkeypatch):
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    _FakeCoordinator.instances.clear()
+    hass, entry = _hass(), _entry()
+
+    remove_schedule = AsyncMock()
+    monkeypatch.setattr(plejd, "async_remove_schedule", remove_schedule)
+
+    await async_setup_entry(hass, entry)
+    handler = hass.services._handlers[f"plejd.{SERVICE_REMOVE_SCHEDULE}"]
+    await handler(types.SimpleNamespace(data={"schedule_id": "te1"}))
+
+    remove_schedule.assert_awaited_once_with(hass, entry, schedule_id="te1")
 
 
 # ── Dashboard panel ───────────────────────────────────────────────────────────
