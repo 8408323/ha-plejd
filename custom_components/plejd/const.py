@@ -198,6 +198,7 @@ PLEJD_FN_UPDATE_SCENE = (
     "functions/updateScene"  # {siteId, sceneId, title?|order?|sceneSteps?|hiddenFromSceneList?|settings?} -> bool
 )
 PLEJD_FN_REMOVE_SCENE = "functions/removeScene"  # {siteId, sceneId} -> bool
+PLEJD_FN_REMOVE_DEVICE = "functions/removeDevice"  # {siteId, deviceId} -> bool
 
 # Room.RoomCategory enum values, sent to createRoom/updateRoom's "category" field as-is
 # (the app does `.ToString()` on the enum). Excludes KidsRoom - the app itself marks it

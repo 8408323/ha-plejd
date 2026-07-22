@@ -12,6 +12,7 @@ from plejd import (
     SERVICE_ADD_DEVICE,
     SERVICE_ALL_OFF,
     SERVICE_CREATE_SCENE,
+    SERVICE_REMOVE_DEVICE,
     SERVICE_REMOVE_ROOM,
     SERVICE_REMOVE_SCENE,
     SERVICE_SCAN_DEVICES,
@@ -369,7 +370,11 @@ def test_update_scene_schema_rejects_negative_order():
     assert plejd._UPDATE_SCENE_SCHEMA({"scene_id": "s1", "order": 0})["order"] == 0
 
 
-async def test_add_device_service_unregistered_on_unload(monkeypatch):
+async def test_add_device_service_survives_entry_unload_cleanup(monkeypatch):
+    # Cloud-only services are registered once and NOT torn down by entry.async_on_unload,
+    # since HA runs every already-registered on_unload callback as cleanup when
+    # async_setup_entry raises ConfigEntryNotReady - if this service were removed by that
+    # cleanup, it would flicker unavailable on every failed mesh-connection retry.
     monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
     _FakeCoordinator.instances.clear()
     hass, entry = _hass(), _entry()
@@ -379,7 +384,32 @@ async def test_add_device_service_unregistered_on_unload(monkeypatch):
     assert f"plejd.{SERVICE_ADD_DEVICE}" in hass.services._handlers
     for unload in unloads:
         unload()
-    assert f"plejd.{SERVICE_ADD_DEVICE}" not in hass.services._handlers
+    assert f"plejd.{SERVICE_ADD_DEVICE}" in hass.services._handlers
+
+
+async def test_remove_device_service_survives_a_mesh_connection_failure(monkeypatch):
+    # Mirrors real HA behavior for the exact scenario this feature exists for: raising
+    # ConfigEntryNotReady from async_setup_entry (a failed mesh connection) makes HA run
+    # every already-registered on_unload callback as cleanup before scheduling a retry -
+    # simulated here by invoking the captured callbacks after the exception propagates,
+    # the same as config_entries.py's ConfigEntryNotReady handling does.
+    from homeassistant.exceptions import ConfigEntryNotReady
+
+    class _FailingCoordinator(_FakeCoordinator):
+        async def async_start(self):
+            raise ConfigEntryNotReady("mesh unreachable")
+
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FailingCoordinator)
+    _FakeCoordinator.instances.clear()
+    hass, entry = _hass(), _entry()
+    unloads: list = []
+    entry.async_on_unload = unloads.append
+    with pytest.raises(ConfigEntryNotReady):
+        await async_setup_entry(hass, entry)
+    assert f"plejd.{SERVICE_REMOVE_DEVICE}" in hass.services._handlers
+    for unload in unloads:
+        unload()
+    assert f"plejd.{SERVICE_REMOVE_DEVICE}" in hass.services._handlers
 
 
 async def test_add_device_service_forwards_call_data(monkeypatch):
@@ -566,7 +596,7 @@ async def test_all_off_service_is_registered_on_setup(monkeypatch):
     assert f"plejd.{SERVICE_ALL_OFF}" in hass.services._handlers
 
 
-async def test_all_off_service_unregistered_on_unload(monkeypatch):
+async def test_all_off_service_survives_entry_unload_cleanup(monkeypatch):
     monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
     _FakeCoordinator.instances.clear()
     hass, entry = _hass(), _entry()
@@ -576,7 +606,7 @@ async def test_all_off_service_unregistered_on_unload(monkeypatch):
     assert f"plejd.{SERVICE_ALL_OFF}" in hass.services._handlers
     for unload in unloads:
         unload()
-    assert f"plejd.{SERVICE_ALL_OFF}" not in hass.services._handlers
+    assert f"plejd.{SERVICE_ALL_OFF}" in hass.services._handlers
 
 
 async def test_all_off_service_calls_coordinator(monkeypatch):
@@ -587,6 +617,23 @@ async def test_all_off_service_calls_coordinator(monkeypatch):
     handler = hass.services._handlers[f"plejd.{SERVICE_ALL_OFF}"]
     await handler(types.SimpleNamespace(data={}))
     assert entry.runtime_data.all_off_calls == 1
+
+
+async def test_all_off_service_uses_the_current_coordinator_after_a_retry(monkeypatch):
+    # The handler is only ever (re-)registered on the first setup attempt (the guard
+    # skips re-registering on a later successful retry), so it must look up
+    # entry.runtime_data fresh at call time rather than close over the first attempt's
+    # (failed) coordinator instance.
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    _FakeCoordinator.instances.clear()
+    hass, entry = _hass(), _entry()
+    await async_setup_entry(hass, entry)  # first attempt
+    handler = hass.services._handlers[f"plejd.{SERVICE_ALL_OFF}"]
+    await async_setup_entry(hass, entry)  # simulated retry: new coordinator instance
+    await handler(types.SimpleNamespace(data={}))
+    assert entry.runtime_data is _FakeCoordinator.instances[-1]
+    assert entry.runtime_data.all_off_calls == 1
+    assert _FakeCoordinator.instances[0].all_off_calls == 0
 
 
 # ── Services: update_room / remove_room ───────────────────────────────────────
@@ -604,7 +651,7 @@ async def test_update_room_service_is_registered_on_setup(monkeypatch):
     assert f"plejd.{SERVICE_UPDATE_ROOM}" in hass.services._handlers
 
 
-async def test_update_room_service_unregistered_on_unload(monkeypatch):
+async def test_update_room_service_survives_entry_unload_cleanup(monkeypatch):
     monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
     _FakeCoordinator.instances.clear()
     hass, entry = _hass(), _entry()
@@ -614,7 +661,7 @@ async def test_update_room_service_unregistered_on_unload(monkeypatch):
     assert f"plejd.{SERVICE_UPDATE_ROOM}" in hass.services._handlers
     for unload in unloads:
         unload()
-    assert f"plejd.{SERVICE_UPDATE_ROOM}" not in hass.services._handlers
+    assert f"plejd.{SERVICE_UPDATE_ROOM}" in hass.services._handlers
 
 
 async def test_update_room_service_forwards_call_data(monkeypatch):
@@ -631,6 +678,28 @@ async def test_update_room_service_forwards_call_data(monkeypatch):
     await handler(call)
 
     update_room.assert_awaited_once_with(hass, entry, room_id="r1", title="Kök", order=2, category="Kitchen")
+
+
+async def test_update_room_service_rebinds_to_a_new_entry_after_reinstall(monkeypatch):
+    # The handler is only ever (re-)registered on the first setup attempt (the guard
+    # skips re-registering later), so removing the integration and adding it again
+    # (a genuinely different ConfigEntry object, not just a retry of the same one) must
+    # still route to the new entry, not the one the closures were first created for.
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    _FakeCoordinator.instances.clear()
+    hass, entry1 = _hass(), _entry()
+    await async_setup_entry(hass, entry1)
+    handler = hass.services._handlers[f"plejd.{SERVICE_UPDATE_ROOM}"]
+
+    entry2 = _entry()
+    entry2.entry_id = "e2"
+    await async_setup_entry(hass, entry2)
+
+    update_room = AsyncMock()
+    monkeypatch.setattr(plejd, "async_update_room", update_room)
+    await handler(types.SimpleNamespace(data={"room_id": "r1"}))
+
+    update_room.assert_awaited_once_with(hass, entry2, room_id="r1", title=None, order=None, category=None)
 
 
 async def test_update_room_service_forwards_defaults(monkeypatch):
@@ -656,7 +725,7 @@ async def test_remove_room_service_is_registered_on_setup(monkeypatch):
     assert f"plejd.{SERVICE_REMOVE_ROOM}" in hass.services._handlers
 
 
-async def test_remove_room_service_unregistered_on_unload(monkeypatch):
+async def test_remove_room_service_survives_entry_unload_cleanup(monkeypatch):
     monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
     _FakeCoordinator.instances.clear()
     hass, entry = _hass(), _entry()
@@ -666,7 +735,7 @@ async def test_remove_room_service_unregistered_on_unload(monkeypatch):
     assert f"plejd.{SERVICE_REMOVE_ROOM}" in hass.services._handlers
     for unload in unloads:
         unload()
-    assert f"plejd.{SERVICE_REMOVE_ROOM}" not in hass.services._handlers
+    assert f"plejd.{SERVICE_REMOVE_ROOM}" in hass.services._handlers
 
 
 async def test_remove_room_service_forwards_call_data(monkeypatch):
@@ -701,7 +770,7 @@ async def test_create_scene_service_is_registered_on_setup(monkeypatch):
     assert f"plejd.{SERVICE_CREATE_SCENE}" in hass.services._handlers
 
 
-async def test_create_scene_service_unregistered_on_unload(monkeypatch):
+async def test_create_scene_service_survives_entry_unload_cleanup(monkeypatch):
     monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
     _FakeCoordinator.instances.clear()
     hass, entry = _hass(), _entry()
@@ -711,7 +780,7 @@ async def test_create_scene_service_unregistered_on_unload(monkeypatch):
     assert f"plejd.{SERVICE_CREATE_SCENE}" in hass.services._handlers
     for unload in unloads:
         unload()
-    assert f"plejd.{SERVICE_CREATE_SCENE}" not in hass.services._handlers
+    assert f"plejd.{SERVICE_CREATE_SCENE}" in hass.services._handlers
 
 
 async def test_create_scene_service_forwards_call_data(monkeypatch):
@@ -742,7 +811,7 @@ async def test_update_scene_service_is_registered_on_setup(monkeypatch):
     assert f"plejd.{SERVICE_UPDATE_SCENE}" in hass.services._handlers
 
 
-async def test_update_scene_service_unregistered_on_unload(monkeypatch):
+async def test_update_scene_service_survives_entry_unload_cleanup(monkeypatch):
     monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
     _FakeCoordinator.instances.clear()
     hass, entry = _hass(), _entry()
@@ -752,7 +821,7 @@ async def test_update_scene_service_unregistered_on_unload(monkeypatch):
     assert f"plejd.{SERVICE_UPDATE_SCENE}" in hass.services._handlers
     for unload in unloads:
         unload()
-    assert f"plejd.{SERVICE_UPDATE_SCENE}" not in hass.services._handlers
+    assert f"plejd.{SERVICE_UPDATE_SCENE}" in hass.services._handlers
 
 
 async def test_update_scene_service_forwards_call_data(monkeypatch):
@@ -800,7 +869,7 @@ async def test_remove_scene_service_is_registered_on_setup(monkeypatch):
     assert f"plejd.{SERVICE_REMOVE_SCENE}" in hass.services._handlers
 
 
-async def test_remove_scene_service_unregistered_on_unload(monkeypatch):
+async def test_remove_scene_service_survives_entry_unload_cleanup(monkeypatch):
     monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
     _FakeCoordinator.instances.clear()
     hass, entry = _hass(), _entry()
@@ -810,7 +879,7 @@ async def test_remove_scene_service_unregistered_on_unload(monkeypatch):
     assert f"plejd.{SERVICE_REMOVE_SCENE}" in hass.services._handlers
     for unload in unloads:
         unload()
-    assert f"plejd.{SERVICE_REMOVE_SCENE}" not in hass.services._handlers
+    assert f"plejd.{SERVICE_REMOVE_SCENE}" in hass.services._handlers
 
 
 async def test_remove_scene_service_forwards_call_data(monkeypatch):
@@ -826,6 +895,48 @@ async def test_remove_scene_service_forwards_call_data(monkeypatch):
     await handler(types.SimpleNamespace(data={"scene_id": "s1"}))
 
     remove_scene.assert_awaited_once_with(hass, entry, scene_id="s1")
+
+
+# ── Service: remove_device ─────────────────────────────────────────────────────
+#
+# async_remove_device() itself is unit-tested in test_manage_device.py. These
+# tests only cover that the service is registered and forwards call.data.
+
+
+async def test_remove_device_service_is_registered_on_setup(monkeypatch):
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    _FakeCoordinator.instances.clear()
+    hass, entry = _hass(), _entry()
+    await async_setup_entry(hass, entry)
+    assert f"plejd.{SERVICE_REMOVE_DEVICE}" in hass.services._handlers
+
+
+async def test_remove_device_service_survives_entry_unload_cleanup(monkeypatch):
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    _FakeCoordinator.instances.clear()
+    hass, entry = _hass(), _entry()
+    unloads: list = []
+    entry.async_on_unload = unloads.append
+    await async_setup_entry(hass, entry)
+    assert f"plejd.{SERVICE_REMOVE_DEVICE}" in hass.services._handlers
+    for unload in unloads:
+        unload()
+    assert f"plejd.{SERVICE_REMOVE_DEVICE}" in hass.services._handlers
+
+
+async def test_remove_device_service_forwards_call_data(monkeypatch):
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    _FakeCoordinator.instances.clear()
+    hass, entry = _hass(), _entry()
+
+    remove_device = AsyncMock()
+    monkeypatch.setattr(plejd, "async_remove_device", remove_device)
+
+    await async_setup_entry(hass, entry)
+    handler = hass.services._handlers[f"plejd.{SERVICE_REMOVE_DEVICE}"]
+    await handler(types.SimpleNamespace(data={"device_id": "d1"}))
+
+    remove_device.assert_awaited_once_with(hass, entry, device_id="d1")
 
 
 # ── Dashboard panel ───────────────────────────────────────────────────────────
