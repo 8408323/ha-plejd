@@ -7,7 +7,14 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from homeassistant.exceptions import HomeAssistantError
-from plejd.cloud import PlejdAuthError, PlejdCloudDevice, PlejdCloudError, PlejdCloudSite
+from plejd.cloud import (
+    PlejdAuthError,
+    PlejdCloudDevice,
+    PlejdCloudError,
+    PlejdCloudInput,
+    PlejdCloudMotion,
+    PlejdCloudSite,
+)
 from plejd.manage_device import async_remove_device
 
 _KEY = bytes(range(16))
@@ -29,18 +36,25 @@ def _device(device_id="d1", name="Spottar") -> PlejdCloudDevice:
     )
 
 
-def _site(devices=None) -> PlejdCloudSite:
+def _site(devices=None, inputs=None, motion=None, gateways=None) -> PlejdCloudSite:
+    devices = devices or []
+    inputs = inputs or []
+    motion = motion or []
+    device_addresses = {d.device_id: d.address for d in devices if d.address is not None}
+    device_addresses.update({i.device_id: i.address for i in inputs})
+    device_addresses.update({m.device_id: m.address for m in motion})
     return PlejdCloudSite(
         site_id="S1",
         title="Home",
         crypto_key=_KEY,
         mesh_key="01-02-03-04",
-        devices=devices or [],
-        inputs=[],
-        motion=[],
+        devices=devices,
+        inputs=inputs,
+        motion=motion,
         scenes=[],
-        gateways=[],
+        gateways=gateways or [],
         resource_set_id=None,
+        device_addresses=device_addresses,
     )
 
 
@@ -131,6 +145,32 @@ async def test_remove_device_succeeds_and_reloads(monkeypatch):
     remove_mock.assert_awaited_once_with(None, "tok", "S1", "d1")
     assert entry.data["devices"] == []
     hass.config_entries.async_reload.assert_awaited_once_with("e1")
+
+
+async def test_remove_device_finds_input_devices(monkeypatch):
+    input_dev = PlejdCloudInput(device_id="d2", name="Hallway button", address=22)
+    monkeypatch.setattr("plejd.manage_device.async_login", AsyncMock(return_value="tok"))
+    monkeypatch.setattr("plejd.manage_device.async_get_site", AsyncMock(return_value=_site(inputs=[input_dev])))
+    monkeypatch.setattr("plejd.manage_device.async_cloud_remove_device", AsyncMock(return_value=False))
+    with pytest.raises(HomeAssistantError, match="Hallway button"):
+        await async_remove_device(_hass(), _entry(), device_id="d2")
+
+
+async def test_remove_device_finds_motion_sensors(monkeypatch):
+    motion_dev = PlejdCloudMotion(device_id="d3", name="Hall motion", address=33)
+    monkeypatch.setattr("plejd.manage_device.async_login", AsyncMock(return_value="tok"))
+    monkeypatch.setattr("plejd.manage_device.async_get_site", AsyncMock(return_value=_site(motion=[motion_dev])))
+    monkeypatch.setattr("plejd.manage_device.async_cloud_remove_device", AsyncMock(return_value=False))
+    with pytest.raises(HomeAssistantError, match="Hall motion"):
+        await async_remove_device(_hass(), _entry(), device_id="d3")
+
+
+async def test_remove_device_finds_gateway_by_id_with_no_display_name(monkeypatch):
+    monkeypatch.setattr("plejd.manage_device.async_login", AsyncMock(return_value="tok"))
+    monkeypatch.setattr("plejd.manage_device.async_get_site", AsyncMock(return_value=_site(gateways=["GWY-01"])))
+    monkeypatch.setattr("plejd.manage_device.async_cloud_remove_device", AsyncMock(return_value=False))
+    with pytest.raises(HomeAssistantError, match="GWY-01"):
+        await async_remove_device(_hass(), _entry(), device_id="GWY-01")
 
 
 async def test_remove_device_runs_a_follow_up_reload_for_a_concurrent_change(monkeypatch):

@@ -255,7 +255,10 @@ remove_device:
   fields:
     device_id:
       name: Device ID
-      description: Plejd device ID (the BLE MAC address, lowercase without colons).
+      description: >-
+        Plejd cloud device ID, exactly as shown for the device (e.g. in its HA
+        device info or the add_device/scan_new_devices results) - matching is
+        case-sensitive.
       required: true
       selector:
         text:

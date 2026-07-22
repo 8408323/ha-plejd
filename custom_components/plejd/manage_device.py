@@ -90,16 +90,28 @@ async def _async_refresh_and_reload(hass: HomeAssistant, entry: ConfigEntry, htt
             await hass.config_entries.async_reload(entry.entry_id)
 
 
+def _device_name(site, device_id: str) -> str:
+    """Display name for any physical device (output, input, motion sensor, or gateway)."""
+    for candidates in (site.devices, site.inputs, site.motion):
+        found = next((d for d in candidates if d.device_id == device_id), None)
+        if found is not None:
+            return found.name
+    return device_id
+
+
 async def async_remove_device(hass: HomeAssistant, entry: ConfigEntry, *, device_id: str) -> None:
     """Remove a device from the site, then refresh + reload the config entry."""
     http_session, token, site = await _async_login_and_get_site(hass, entry)
-    device = next((d for d in site.devices if d.device_id == device_id), None)
-    if device is None:
+    # device_addresses covers every physical device (outputs, sensors, gateway) - site.devices
+    # alone only holds controllable outputs, which would wrongly reject removing an input,
+    # motion sensor, or gateway (see #114's identical all_rooms/rooms distinction).
+    if device_id not in site.device_addresses and device_id not in site.gateways:
         raise HomeAssistantError(f"Plejd device {device_id} not found on this site")
+    name = _device_name(site, device_id)
     try:
         ok = await async_cloud_remove_device(http_session, token, site.site_id, device_id)
     except PlejdCloudError as err:
         raise HomeAssistantError(f"Plejd cloud error removing device: {err}") from err
     if not ok:
-        raise HomeAssistantError(f"Plejd cloud rejected removing device '{device.name}'")
+        raise HomeAssistantError(f"Plejd cloud rejected removing device '{name}'")
     await _async_refresh_and_reload(hass, entry, http_session, token)

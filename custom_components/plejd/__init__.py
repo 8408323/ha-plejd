@@ -118,45 +118,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     coordinator = PlejdCoordinator(hass, entry)
     # Assign before connecting so diagnostics work even while setup is still failing.
     entry.runtime_data = coordinator
-    # Register the sidebar dashboard before starting the coordinator. It's optional, so a
-    # failure (e.g. another panel already owns the `plejd` url path) must not abort setup —
-    # the mesh/lights still work, and options remain reachable to hide it. HA also runs
-    # this on_unload if a later setup step fails. Toggle via the options.
-    if entry.options.get(CONF_SHOW_PANEL, True):
-        try:
-            await panel.async_register_panel(hass)
-        except Exception:  # noqa: BLE001 - the dashboard is optional; never fail setup over it
-            _LOGGER.warning("Plejd dashboard panel could not be registered; continuing without it", exc_info=True)
-    entry.async_on_unload(lambda: panel.async_unregister_panel(hass))
-    await coordinator.async_start()
-
-    # Holiday mode (presence simulation) — constructed before platform forwarding so the
-    # switch platform can look it up; the switch entity itself controls start/stop.
-    hass.data[DATA_HOLIDAY_MODE] = PlejdHolidayMode(hass, entry)
-
-    try:
-        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-    except Exception:
-        # Don't leak the BLE connection, or a running holiday-mode timer, if platform setup
-        # fails partway — a platform forwarded before the failure (e.g. a restored-on
-        # holiday switch) may have already started it.
-        holiday_mode = hass.data.pop(DATA_HOLIDAY_MODE, None)
-        if holiday_mode is not None:
-            # A platform earlier than switch may not have run yet, so this manager's
-            # persisted deadlines were never loaded; start() loads them (idempotent if
-            # a restored switch already did) so stop()'s persist can't wipe the store
-            # with an empty, never-loaded in-memory state.
-            await holiday_mode.async_start()
-            await holiday_mode.async_stop()
-        await coordinator.async_shutdown()
-        raise
-    entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
-    # Mirror HA device renames back to the Plejd app (cloud title update).
-    entry.async_on_unload(
-        hass.bus.async_listen(
-            device_registry.EVENT_DEVICE_REGISTRY_UPDATED, coordinator.async_handle_device_registry_update
-        )
-    )
 
     async def _async_handle_add_device(call) -> None:
         await async_add_device(
@@ -226,6 +187,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     async def _async_handle_remove_device(call) -> None:
         await async_remove_device(hass, entry, device_id=call.data["device_id"])
 
+    # Registered before coordinator.async_start() so these cloud-only services (no mesh
+    # connection needed) stay available even when the mesh can't connect right now - e.g.
+    # decommissioning the one device that's keeping the whole site from reaching
+    # ConfigEntryNotReady's retry loop. all_off/scan_new_devices/add_device do need the
+    # mesh/Bluetooth at call time, but registering them early is still correct: today,
+    # a coordinator.async_start() failure means the service isn't registered at all
+    # (a confusing "service not found"); after this, they're registered and fail with a
+    # clear error instead, which is strictly more informative, not less safe.
     hass.services.async_register(DOMAIN, SERVICE_ADD_DEVICE, _async_handle_add_device, schema=_ADD_DEVICE_SCHEMA)
     entry.async_on_unload(lambda: hass.services.async_remove(DOMAIN, SERVICE_ADD_DEVICE))
     hass.services.async_register(DOMAIN, SERVICE_SCAN_DEVICES, _async_handle_scan_devices)
@@ -246,6 +215,46 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         DOMAIN, SERVICE_REMOVE_DEVICE, _async_handle_remove_device, schema=_REMOVE_DEVICE_SCHEMA
     )
     entry.async_on_unload(lambda: hass.services.async_remove(DOMAIN, SERVICE_REMOVE_DEVICE))
+
+    # Register the sidebar dashboard before starting the coordinator. It's optional, so a
+    # failure (e.g. another panel already owns the `plejd` url path) must not abort setup —
+    # the mesh/lights still work, and options remain reachable to hide it. HA also runs
+    # this on_unload if a later setup step fails. Toggle via the options.
+    if entry.options.get(CONF_SHOW_PANEL, True):
+        try:
+            await panel.async_register_panel(hass)
+        except Exception:  # noqa: BLE001 - the dashboard is optional; never fail setup over it
+            _LOGGER.warning("Plejd dashboard panel could not be registered; continuing without it", exc_info=True)
+    entry.async_on_unload(lambda: panel.async_unregister_panel(hass))
+    await coordinator.async_start()
+
+    # Holiday mode (presence simulation) — constructed before platform forwarding so the
+    # switch platform can look it up; the switch entity itself controls start/stop.
+    hass.data[DATA_HOLIDAY_MODE] = PlejdHolidayMode(hass, entry)
+
+    try:
+        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    except Exception:
+        # Don't leak the BLE connection, or a running holiday-mode timer, if platform setup
+        # fails partway — a platform forwarded before the failure (e.g. a restored-on
+        # holiday switch) may have already started it.
+        holiday_mode = hass.data.pop(DATA_HOLIDAY_MODE, None)
+        if holiday_mode is not None:
+            # A platform earlier than switch may not have run yet, so this manager's
+            # persisted deadlines were never loaded; start() loads them (idempotent if
+            # a restored switch already did) so stop()'s persist can't wipe the store
+            # with an empty, never-loaded in-memory state.
+            await holiday_mode.async_start()
+            await holiday_mode.async_stop()
+        await coordinator.async_shutdown()
+        raise
+    entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
+    # Mirror HA device renames back to the Plejd app (cloud title update).
+    entry.async_on_unload(
+        hass.bus.async_listen(
+            device_registry.EVENT_DEVICE_REGISTRY_UPDATED, coordinator.async_handle_device_registry_update
+        )
+    )
 
     # Remote → light dim bindings (managed from the dashboard via the WebSocket API).
     # Optional, like the panel: a storage error must not stop the mesh/lights loading.
