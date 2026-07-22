@@ -24,6 +24,7 @@ from .manage_scene import async_create_scene, async_remove_scene, async_update_s
 from .remote_profiles import PlejdRemoteProfiles
 
 _WS_REGISTERED = f"{DOMAIN}_ws_registered"
+_SERVICES_REGISTERED = f"{DOMAIN}_services_registered"
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -145,7 +146,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.bus.async_fire(f"{DOMAIN}_new_devices_found", {"devices": new_devices})
 
     async def _async_handle_all_off(call) -> None:
-        await coordinator.async_all_off()
+        # entry.runtime_data, not the closed-over coordinator: this handler is only
+        # ever (re-)registered on the first setup attempt (see the registration guard
+        # below), so a later successful retry's coordinator must be looked up fresh.
+        await entry.runtime_data.async_all_off()
 
     async def _async_handle_update_room(call) -> None:
         await async_update_room(
@@ -187,34 +191,33 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     async def _async_handle_remove_device(call) -> None:
         await async_remove_device(hass, entry, device_id=call.data["device_id"])
 
-    # Registered before coordinator.async_start() so these cloud-only services (no mesh
-    # connection needed) stay available even when the mesh can't connect right now - e.g.
-    # decommissioning the one device that's keeping the whole site from reaching
-    # ConfigEntryNotReady's retry loop. all_off/scan_new_devices/add_device do need the
-    # mesh/Bluetooth at call time, but registering them early is still correct: today,
-    # a coordinator.async_start() failure means the service isn't registered at all
-    # (a confusing "service not found"); after this, they're registered and fail with a
-    # clear error instead, which is strictly more informative, not less safe.
-    hass.services.async_register(DOMAIN, SERVICE_ADD_DEVICE, _async_handle_add_device, schema=_ADD_DEVICE_SCHEMA)
-    entry.async_on_unload(lambda: hass.services.async_remove(DOMAIN, SERVICE_ADD_DEVICE))
-    hass.services.async_register(DOMAIN, SERVICE_SCAN_DEVICES, _async_handle_scan_devices)
-    entry.async_on_unload(lambda: hass.services.async_remove(DOMAIN, SERVICE_SCAN_DEVICES))
-    hass.services.async_register(DOMAIN, SERVICE_ALL_OFF, _async_handle_all_off)
-    entry.async_on_unload(lambda: hass.services.async_remove(DOMAIN, SERVICE_ALL_OFF))
-    hass.services.async_register(DOMAIN, SERVICE_UPDATE_ROOM, _async_handle_update_room, schema=_UPDATE_ROOM_SCHEMA)
-    entry.async_on_unload(lambda: hass.services.async_remove(DOMAIN, SERVICE_UPDATE_ROOM))
-    hass.services.async_register(DOMAIN, SERVICE_REMOVE_ROOM, _async_handle_remove_room, schema=_REMOVE_ROOM_SCHEMA)
-    entry.async_on_unload(lambda: hass.services.async_remove(DOMAIN, SERVICE_REMOVE_ROOM))
-    hass.services.async_register(DOMAIN, SERVICE_CREATE_SCENE, _async_handle_create_scene, schema=_CREATE_SCENE_SCHEMA)
-    entry.async_on_unload(lambda: hass.services.async_remove(DOMAIN, SERVICE_CREATE_SCENE))
-    hass.services.async_register(DOMAIN, SERVICE_UPDATE_SCENE, _async_handle_update_scene, schema=_UPDATE_SCENE_SCHEMA)
-    entry.async_on_unload(lambda: hass.services.async_remove(DOMAIN, SERVICE_UPDATE_SCENE))
-    hass.services.async_register(DOMAIN, SERVICE_REMOVE_SCENE, _async_handle_remove_scene, schema=_REMOVE_SCENE_SCHEMA)
-    entry.async_on_unload(lambda: hass.services.async_remove(DOMAIN, SERVICE_REMOVE_SCENE))
-    hass.services.async_register(
-        DOMAIN, SERVICE_REMOVE_DEVICE, _async_handle_remove_device, schema=_REMOVE_DEVICE_SCHEMA
-    )
-    entry.async_on_unload(lambda: hass.services.async_remove(DOMAIN, SERVICE_REMOVE_DEVICE))
+    # Registered once per hass lifetime, before coordinator.async_start(), and NOT torn
+    # down by entry.async_on_unload: HA runs every already-registered on_unload callback
+    # as cleanup when async_setup_entry raises ConfigEntryNotReady (same path a failed
+    # mesh connection takes), which would otherwise unregister these services again right
+    # after registering them - defeating the point of registering early (e.g. being able
+    # to remove_device the one stale device that's keeping the mesh from connecting).
+    # Same permanent-registration pattern already used below for the WS commands; safe
+    # here too since this integration is single_config_entry (only one entry ever exists).
+    if not hass.data.get(_SERVICES_REGISTERED):
+        hass.services.async_register(DOMAIN, SERVICE_ADD_DEVICE, _async_handle_add_device, schema=_ADD_DEVICE_SCHEMA)
+        hass.services.async_register(DOMAIN, SERVICE_SCAN_DEVICES, _async_handle_scan_devices)
+        hass.services.async_register(DOMAIN, SERVICE_ALL_OFF, _async_handle_all_off)
+        hass.services.async_register(DOMAIN, SERVICE_UPDATE_ROOM, _async_handle_update_room, schema=_UPDATE_ROOM_SCHEMA)
+        hass.services.async_register(DOMAIN, SERVICE_REMOVE_ROOM, _async_handle_remove_room, schema=_REMOVE_ROOM_SCHEMA)
+        hass.services.async_register(
+            DOMAIN, SERVICE_CREATE_SCENE, _async_handle_create_scene, schema=_CREATE_SCENE_SCHEMA
+        )
+        hass.services.async_register(
+            DOMAIN, SERVICE_UPDATE_SCENE, _async_handle_update_scene, schema=_UPDATE_SCENE_SCHEMA
+        )
+        hass.services.async_register(
+            DOMAIN, SERVICE_REMOVE_SCENE, _async_handle_remove_scene, schema=_REMOVE_SCENE_SCHEMA
+        )
+        hass.services.async_register(
+            DOMAIN, SERVICE_REMOVE_DEVICE, _async_handle_remove_device, schema=_REMOVE_DEVICE_SCHEMA
+        )
+        hass.data[_SERVICES_REGISTERED] = True
 
     # Register the sidebar dashboard before starting the coordinator. It's optional, so a
     # failure (e.g. another panel already owns the `plejd` url path) must not abort setup —

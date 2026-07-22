@@ -20,11 +20,11 @@ from plejd.manage_device import async_remove_device
 _KEY = bytes(range(16))
 
 
-def _device(device_id="d1", name="Spottar") -> PlejdCloudDevice:
+def _device(device_id="d1", name="Spottar", address=11) -> PlejdCloudDevice:
     return PlejdCloudDevice(
         device_id=device_id,
         name=name,
-        address=11,
+        address=address,
         output_index=0,
         outputs=[11],
         hardware_id=1,
@@ -163,6 +163,18 @@ async def test_remove_device_finds_motion_sensors(monkeypatch):
     monkeypatch.setattr("plejd.manage_device.async_cloud_remove_device", AsyncMock(return_value=False))
     with pytest.raises(HomeAssistantError, match="Hall motion"):
         await async_remove_device(_hass(), _entry(), device_id="d3")
+
+
+async def test_remove_device_found_despite_missing_address_entry(monkeypatch):
+    # A device with no (or malformed) cloud deviceAddress entry - PlejdCloudDevice.address
+    # is None - is exactly the kind of stale/orphaned device this service exists to
+    # decommission; it must not be rejected as "not found" for lacking an address.
+    device = _device(device_id="d4", name="Orphaned dimmer", address=None)
+    monkeypatch.setattr("plejd.manage_device.async_login", AsyncMock(return_value="tok"))
+    monkeypatch.setattr("plejd.manage_device.async_get_site", AsyncMock(return_value=_site([device])))
+    monkeypatch.setattr("plejd.manage_device.async_cloud_remove_device", AsyncMock(return_value=False))
+    with pytest.raises(HomeAssistantError, match="Orphaned dimmer"):
+        await async_remove_device(_hass(), _entry(), device_id="d4")
 
 
 async def test_remove_device_finds_gateway_by_id_with_no_display_name(monkeypatch):
