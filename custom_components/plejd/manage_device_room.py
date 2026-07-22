@@ -108,6 +108,25 @@ def _move_lock(hass: HomeAssistant, entry: ConfigEntry) -> asyncio.Lock:
     return locks.setdefault(entry.entry_id, asyncio.Lock())
 
 
+async def _async_persist_pending(hass: HomeAssistant, entry: ConfigEntry, pending: dict[str, dict]) -> None:
+    """Persist just the pending-moves cache, guarded against racing the entry's own reload.
+
+    Used for a self-contained update outside the main refresh-and-reload cycle (e.g.
+    pruning a pending entry before an early return) - without the same manual-reload guard
+    that cycle uses, the entry's update listener would fire unsuppressed and reload the
+    whole integration for what's meant to be a quiet metadata correction.
+    """
+    hass.data[schedule_ws.DATA_MANUAL_RELOAD] = entry.entry_id
+    try:
+        hass.config_entries.async_update_entry(entry, data={**entry.data, CONF_PENDING_ROOM_MOVES: dict(pending)})
+    finally:
+        hass.data.pop(schedule_ws.DATA_MANUAL_RELOAD, None)
+        hass.data.pop(schedule_ws.DATA_MANUAL_RELOAD_SEEN, None)
+        if hass.data.get(schedule_ws.DATA_RELOAD_PENDING) == entry.entry_id:
+            hass.data.pop(schedule_ws.DATA_RELOAD_PENDING, None)
+            await hass.config_entries.async_reload(entry.entry_id)
+
+
 async def _async_login_and_get_site(hass: HomeAssistant, entry: ConfigEntry):
     http_session = async_get_clientsession(hass)
     try:
@@ -231,11 +250,19 @@ def _room_membership_converged(fresh_rooms: list[PlejdCloudRoom], fresh_devices:
     device is already reported in the destination room_id and isn't a light, the exclusion
     is permanent and absence from every other room is the strongest signal available;
     otherwise it's ordinary non-convergence and this must keep waiting.
+
+    The non-light check must run BEFORE the output_address-is-None one, not after: an
+    unresolved output_address means membership can't be safely tracked, but it does NOT
+    mean there's nothing left to converge on for a non-light move - _patch_room_membership
+    keeps defensively dropping a stale destination room-light entity regardless of whether
+    output_address resolved (the join always targets the device's own address), so
+    convergence must still wait for that same "no room entity at all" signal, not be
+    declared trivially true just because output_address happens to be unresolved.
     """
-    if move["output_address"] is None:
-        return True
     if not move["is_light"]:
         return not any(r.address == move["new_room_address"] for r in fresh_rooms)
+    if move["output_address"] is None:
+        return True
     new_room = next((r for r in fresh_rooms if r.address == move["new_room_address"]), None)
     absent_elsewhere = not any(
         r.address != move["new_room_address"] and move["output_address"] in r.member_addresses for r in fresh_rooms
@@ -264,15 +291,20 @@ async def _async_refresh_and_reload(
     # already in - the safe failure mode is an "already in room" rejection on an exact
     # retry of the same move (still true, physically), not a silently wrong leave target.
     pending[device_id] = this_move
-    try:
-        fresh_site = await async_get_site(http_session, token, entry.data[CONF_SITE_ID])
-    except PlejdCloudError as err:
-        raise HomeAssistantError(f"Plejd cloud error refreshing site: {err}") from err
-    # Claim the manual-reload so the entry's update listener (_async_reload_entry) doesn't
-    # also reload for this same data change, racing this one - same guard schedule_ws's
-    # own _async_persist uses for the identical async_update_entry -> listener race.
+    # Claim the manual-reload up front (spanning the early persist below too, not just the
+    # later one) so the entry's update listener (_async_reload_entry) doesn't also reload
+    # for either of these data changes, racing this one - same guard schedule_ws's own
+    # _async_persist uses for the identical async_update_entry -> listener race.
     hass.data[schedule_ws.DATA_MANUAL_RELOAD] = entry.entry_id
     try:
+        # Persisted here too, not just in memory - a restart between now and the full
+        # persist below (e.g. if the fetch that follows never completes) must not lose
+        # this move either; entry.data is what _pending_moves() reseeds from after one.
+        hass.config_entries.async_update_entry(entry, data={**entry.data, CONF_PENDING_ROOM_MOVES: dict(pending)})
+        try:
+            fresh_site = await async_get_site(http_session, token, entry.data[CONF_SITE_ID])
+        except PlejdCloudError as err:
+            raise HomeAssistantError(f"Plejd cloud error refreshing site: {err}") from err
         # Every device with a pending (not-yet-cloud-confirmed) move keeps its intended
         # room_id regardless of what this fresh cloud fetch says - not just the device
         # this particular call just moved - or an earlier move's own correction would get
@@ -390,6 +422,7 @@ async def async_move_device_to_room(hass: HomeAssistant, entry: ConfigEntry, *, 
             # its own, so without this it can sit stale indefinitely once nothing but this
             # same device's own next move ever looks at it again.
             fresh_room_id = outputs[0].room_id
+            pruned = False
             if fresh_room_id == existing_pending["room_id"] and _room_membership_converged(
                 site.rooms, site.devices, existing_pending
             ):
@@ -398,6 +431,7 @@ async def async_move_device_to_room(hass: HomeAssistant, entry: ConfigEntry, *, 
                 # instead of continuing to treat this device as still "pending".
                 del pending[device_id]
                 existing_pending = None
+                pruned = True
             elif fresh_room_id not in (existing_pending["room_id"], existing_pending.get("from_room_id")):
                 # Fresh cloud shows neither the room this pending move started from NOR its
                 # target - the only way that happens is if something else (almost certainly
@@ -409,6 +443,13 @@ async def async_move_device_to_room(hass: HomeAssistant, entry: ConfigEntry, *, 
                 # staleness, so it must NOT be treated as proof of an external change.)
                 del pending[device_id]
                 existing_pending = None
+                pruned = True
+            if pruned:
+                # Persisted immediately, not just in hass.data - the "already in room" exit
+                # right below (and every other early return in this function) happens
+                # before _async_refresh_and_reload ever runs, so without this a restart
+                # would reseed entry.data's own stale copy of this pruned entry and undo it.
+                await _async_persist_pending(hass, entry, pending)
         current_room_id = existing_pending["room_id"] if existing_pending is not None else outputs[0].room_id
         if current_room_id == room_id:
             raise HomeAssistantError(f"Device is already in room '{new_room.name}'")
@@ -436,10 +477,14 @@ async def async_move_device_to_room(hass: HomeAssistant, entry: ConfigEntry, *, 
             "is_light": output.category == CATEGORY_LIGHT,
             "dimmable": output.dimmable,
             "new_room_address": new_room.address,
-            # The room this exact move started from - lets a later call's revalidation
-            # (see above) tell "still hasn't converged" (fresh cloud == from_room_id) apart
-            # from "converged, then moved again by someone else" (fresh cloud == neither).
-            "from_room_id": current_room_id,
+            # The room the WHOLE chain of not-yet-converged moves started from - not just
+            # this move's own immediately-preceding target. Chaining onto a still-pending
+            # move (existing_pending not None here) inherits ITS OWN from_room_id, since
+            # that's the room a stale cloud fetch is actually still stuck reporting; using
+            # current_room_id (the prior hop's target) instead would misidentify a fetch
+            # stuck on the ORIGINAL room as proof of an external change partway through a
+            # multi-hop chain. Only a fresh, non-chained move uses current_room_id itself.
+            "from_room_id": existing_pending["from_room_id"] if existing_pending is not None else current_room_id,
         }
 
         await _async_refresh_and_reload(
