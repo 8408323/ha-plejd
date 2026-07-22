@@ -78,7 +78,13 @@ async def _async_refresh_and_reload(hass: HomeAssistant, entry: ConfigEntry, htt
                 CONF_DEVICE_ADDRESSES: fresh_site.device_addresses,
             },
         )
-        await hass.config_entries.async_reload(entry.entry_id)
+        if not await hass.config_entries.async_reload(entry.entry_id):
+            # e.g. a platform refused to unload - the entry may still be running the old
+            # data/entities for the just-removed device, so this can't be reported as a
+            # clean success.
+            raise HomeAssistantError(
+                "Plejd device removed from the cloud, but reloading the integration failed - reload it manually"
+            )
     finally:
         hass.data.pop(schedule_ws.DATA_MANUAL_RELOAD, None)
         hass.data.pop(schedule_ws.DATA_MANUAL_RELOAD_SEEN, None)

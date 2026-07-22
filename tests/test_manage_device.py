@@ -147,6 +147,18 @@ async def test_remove_device_succeeds_and_reloads(monkeypatch):
     hass.config_entries.async_reload.assert_awaited_once_with("e1")
 
 
+async def test_remove_device_raises_when_reload_fails(monkeypatch):
+    hass = _hass()
+    entry = _entry()
+    hass.config_entries.async_reload = AsyncMock(return_value=False)
+    monkeypatch.setattr("plejd.manage_device.async_login", AsyncMock(return_value="tok"))
+    monkeypatch.setattr("plejd.manage_device.async_get_site", AsyncMock(side_effect=[_site([_device()]), _site([])]))
+    monkeypatch.setattr("plejd.manage_device.async_cloud_remove_device", AsyncMock(return_value=True))
+
+    with pytest.raises(HomeAssistantError, match="reloading the integration failed"):
+        await async_remove_device(hass, entry, device_id="d1")
+
+
 async def test_remove_device_finds_input_devices(monkeypatch):
     input_dev = PlejdCloudInput(device_id="d2", name="Hallway button", address=22)
     monkeypatch.setattr("plejd.manage_device.async_login", AsyncMock(return_value="tok"))
@@ -200,6 +212,7 @@ async def test_remove_device_runs_a_follow_up_reload_for_a_concurrent_change(mon
         calls.append(entry_id)
         if len(calls) == 1:  # only the first reload race-loses to the concurrent change
             hass.data[schedule_ws.DATA_RELOAD_PENDING] = entry_id
+        return True
 
     hass.config_entries.async_reload = AsyncMock(side_effect=_reload_sets_pending)
 
