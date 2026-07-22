@@ -37,9 +37,18 @@ def _site(all_scenes=None) -> PlejdCloudSite:
     )
 
 
+class _FakeBus:
+    def __init__(self):
+        self.fired: list[tuple[str, dict]] = []
+
+    def async_fire(self, event_type, data):
+        self.fired.append((event_type, data))
+
+
 def _hass():
     return types.SimpleNamespace(
         data={},
+        bus=_FakeBus(),
         config_entries=types.SimpleNamespace(
             async_update_entry=lambda entry, data: setattr(entry, "data", data),
             async_reload=AsyncMock(),
@@ -201,6 +210,63 @@ async def test_create_schedule_raises_when_only_one_weekend_time_given():
         )
 
 
+async def test_create_schedule_raises_on_malformed_night_reduction_start_time():
+    with pytest.raises(HomeAssistantError, match='start_time must be a 24-hour "HH:MM" time'):
+        await async_create_schedule(
+            _hass(),
+            _entry(),
+            title="X",
+            scene_steps=[_STEP],
+            start_event="sunset",
+            start_offset=0,
+            end_event="sunrise",
+            end_offset=0,
+            night_reduction={"scene_steps": [_NIGHT_STEP], "start_time": "25:99", "end_time": "05:00"},
+        )
+
+
+async def test_create_schedule_raises_on_malformed_weekend_time():
+    with pytest.raises(HomeAssistantError, match='weekend_start_time must be a 24-hour "HH:MM" time'):
+        await async_create_schedule(
+            _hass(),
+            _entry(),
+            title="X",
+            scene_steps=[_STEP],
+            start_event="sunset",
+            start_offset=0,
+            end_event="sunrise",
+            end_offset=0,
+            night_reduction={
+                "scene_steps": [_NIGHT_STEP],
+                "start_time": "23:00",
+                "end_time": "05:00",
+                "weekend_start_time": "bad",
+                "weekend_end_time": "06:00",
+            },
+        )
+
+
+async def test_create_schedule_raises_on_malformed_weekend_end_time():
+    with pytest.raises(HomeAssistantError, match='weekend_end_time must be a 24-hour "HH:MM" time'):
+        await async_create_schedule(
+            _hass(),
+            _entry(),
+            title="X",
+            scene_steps=[_STEP],
+            start_event="sunset",
+            start_offset=0,
+            end_event="sunrise",
+            end_offset=0,
+            night_reduction={
+                "scene_steps": [_NIGHT_STEP],
+                "start_time": "23:00",
+                "end_time": "05:00",
+                "weekend_start_time": "23:30",
+                "weekend_end_time": "bad",
+            },
+        )
+
+
 async def test_create_schedule_raises_on_login_failure(monkeypatch):
     monkeypatch.setattr("plejd.manage_schedule.async_login", AsyncMock(side_effect=PlejdCloudError("down")))
     with pytest.raises(HomeAssistantError, match="Plejd cloud error"):
@@ -349,6 +415,38 @@ async def test_create_schedule_succeeds_and_caches_it(monkeypatch):
     assert cached[0]["device_ids"] == ["d1"]
     assert cached[0]["night_reduction"] is None
     hass.config_entries.async_reload.assert_awaited_once_with("e1")
+    assert hass.bus.fired == [("plejd_schedule_created", {"schedule_id": schedule_id})]
+
+
+async def test_create_schedule_fires_schedule_created_event_even_if_the_refresh_fails(monkeypatch):
+    # The schedule is already created and persisted at the point the refresh runs - a
+    # transient refresh failure must not also cost the user the only way to learn its id.
+    hass = _hass()
+    entry = _entry()
+    monkeypatch.setattr("plejd.manage_schedule.async_login", AsyncMock(return_value="tok"))
+    monkeypatch.setattr(
+        "plejd.manage_schedule.async_get_site", AsyncMock(side_effect=[_site(), PlejdCloudError("down")])
+    )
+    monkeypatch.setattr("plejd.manage_schedule.async_cloud_create_scene", AsyncMock(return_value="new-id"))
+    monkeypatch.setattr(
+        "plejd.manage_schedule.async_cloud_update_time_event", AsyncMock(return_value={"eventId": "te1"})
+    )
+
+    with pytest.raises(HomeAssistantError, match="Plejd cloud error refreshing site"):
+        await async_create_schedule(
+            hass,
+            entry,
+            title="X",
+            scene_steps=[_STEP],
+            start_event="sunset",
+            start_offset=0,
+            end_event="sunrise",
+            end_offset=0,
+        )
+
+    assert len(hass.bus.fired) == 1
+    assert hass.bus.fired[0][0] == "plejd_schedule_created"
+    assert hass.bus.fired[0][1]["schedule_id"] == entry.data["cloud_schedules"][0]["schedule_id"]
 
 
 async def test_create_schedule_appends_to_an_existing_non_empty_cache(monkeypatch):
@@ -513,6 +611,30 @@ async def test_create_schedule_cleanup_swallows_a_failed_removal(monkeypatch):
         )
 
 
+async def test_create_schedule_logs_when_cloud_rejects_cleanup_removal(monkeypatch, caplog):
+    # async_cloud_remove_scene returning False (Parse rejected removeScene, no exception)
+    # must not be treated as a silent success - the orphaned scene needs a support trail too.
+    monkeypatch.setattr("plejd.manage_schedule.async_login", AsyncMock(return_value="tok"))
+    monkeypatch.setattr("plejd.manage_schedule.async_get_site", AsyncMock(return_value=_site()))
+    monkeypatch.setattr("plejd.manage_schedule.async_cloud_create_scene", AsyncMock(return_value="new-scene-id"))
+    monkeypatch.setattr("plejd.manage_schedule.async_cloud_update_time_event", AsyncMock(return_value=None))
+    monkeypatch.setattr("plejd.manage_schedule.async_cloud_remove_scene", AsyncMock(return_value=False))
+
+    with pytest.raises(HomeAssistantError, match="Plejd cloud rejected the schedule creation"):
+        await async_create_schedule(
+            _hass(),
+            _entry(),
+            title="X",
+            scene_steps=[_STEP],
+            start_event="sunset",
+            start_offset=0,
+            end_event="sunrise",
+            end_offset=0,
+        )
+    assert "new-scene-id" in caplog.text
+    assert "rejected cleanup" in caplog.text
+
+
 async def test_create_schedule_with_night_reduction_creates_both_scenes(monkeypatch):
     hass = _hass()
     entry = _entry()
@@ -612,7 +734,15 @@ async def test_create_schedule_runs_a_follow_up_reload_for_a_concurrent_change(m
 
 async def test_update_schedule_raises_if_not_tracked():
     with pytest.raises(HomeAssistantError, match="isn't tracked by this integration"):
-        await async_update_schedule(_hass(), _entry(), schedule_id="missing")
+        await async_update_schedule(_hass(), _entry(), schedule_id="missing", title="X")
+
+
+async def test_update_schedule_raises_when_no_fields_given():
+    entry = _entry(
+        data={"email": "u@x.com", "password": "pw", "site_id": "S1", "cloud_schedules": [_cached_schedule()]}
+    )
+    with pytest.raises(HomeAssistantError, match="at least one field"):
+        await async_update_schedule(_hass(), entry, schedule_id="te1")
 
 
 async def test_update_schedule_raises_on_invalid_start_offset():

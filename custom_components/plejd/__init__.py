@@ -271,7 +271,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     async def _async_handle_create_schedule(call) -> None:
         current_entry = hass.data[_DATA_CURRENT_ENTRY]
-        schedule_id = await async_create_schedule(
+        # async_create_schedule fires plejd_schedule_created itself (before its own
+        # post-create refresh, which can fail independently of the create having worked) -
+        # nothing left to do here with its returned schedule_id.
+        await async_create_schedule(
             hass,
             current_entry,
             title=call.data["title"],
@@ -284,10 +287,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             fade_time=call.data["fade_time"],
             night_reduction=call.data.get("night_reduction"),
         )
-        # entry.data[CONF_CLOUD_SCHEDULES] is redacted in diagnostics and there's no other
-        # listing surface yet, so the Services UI is otherwise a dead end for learning the
-        # id update_schedule needs - fire it as an event, same as scan_new_devices' results.
-        hass.bus.async_fire(f"{DOMAIN}_schedule_created", {"schedule_id": schedule_id})
 
     async def _async_handle_update_schedule(call) -> None:
         current_entry = hass.data[_DATA_CURRENT_ENTRY]

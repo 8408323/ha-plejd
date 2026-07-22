@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import uuid
 from dataclasses import asdict
 
@@ -48,6 +49,7 @@ from .const import (
     CONF_ROOMS,
     CONF_SCENES,
     CONF_SITE_ID,
+    DOMAIN,
     SCHEDULE_ASTRO_EVENTS,
     SCHEDULE_OFFSET_MAX,
     SCHEDULE_OFFSET_MIN,
@@ -132,7 +134,7 @@ async def _async_cleanup_orphaned_scenes(http_session, token: str, site_id: str,
     """
     for scene_id in scene_ids:
         try:
-            await async_cloud_remove_scene(http_session, token, site_id, scene_id)
+            ok = await async_cloud_remove_scene(http_session, token, site_id, scene_id)
         except PlejdCloudError:
             # Best-effort: the caller is already raising the real failure, so this must not
             # replace or mask it - but a silently-abandoned hidden scene needs a trail for
@@ -141,6 +143,12 @@ async def _async_cleanup_orphaned_scenes(http_session, token: str, site_id: str,
                 "Plejd: could not clean up orphaned scene %s after a schedule create/update failure",
                 scene_id,
                 exc_info=True,
+            )
+            continue
+        if not ok:
+            _LOGGER.warning(
+                "Plejd: cloud rejected cleanup of orphaned scene %s after a schedule create/update failure",
+                scene_id,
             )
 
 
@@ -171,15 +179,28 @@ def _validate_days(scheduled_days: list[int] | None) -> list[int]:
     return days
 
 
+_TIME_HH_MM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+
+
+def _validate_time(value: str, label: str) -> None:
+    if not _TIME_HH_MM.match(value):
+        raise HomeAssistantError(f'night_reduction\'s {label} must be a 24-hour "HH:MM" time, got {value!r}')
+
+
 def _validate_night_reduction(night_reduction: dict) -> None:
     if not night_reduction.get("scene_steps"):
         raise HomeAssistantError("night_reduction needs at least one scene step")
     if not night_reduction.get("start_time") or not night_reduction.get("end_time"):
         raise HomeAssistantError("night_reduction needs start_time and end_time")
+    _validate_time(night_reduction["start_time"], "start_time")
+    _validate_time(night_reduction["end_time"], "end_time")
     has_weekend_start = night_reduction.get("weekend_start_time") is not None
     has_weekend_end = night_reduction.get("weekend_end_time") is not None
     if has_weekend_start != has_weekend_end:
         raise HomeAssistantError("night_reduction's weekend_start_time and weekend_end_time must be given together")
+    if has_weekend_start:
+        _validate_time(night_reduction["weekend_start_time"], "weekend_start_time")
+        _validate_time(night_reduction["weekend_end_time"], "weekend_end_time")
 
 
 def _night_reduction_settings(schedule_id: str) -> str:
@@ -311,6 +332,10 @@ async def async_create_schedule(
             "night_reduction": night_reduction_result,
         }
         cloud_schedules = [*entry.data.get(CONF_CLOUD_SCHEDULES, []), schedule]
+        # Fire before the refresh, not after: the schedule is already created and persisted
+        # at this point, so a later refresh failure must not also swallow the only way the
+        # user can learn its id (this integration can't rediscover it from getSiteById).
+        hass.bus.async_fire(f"{DOMAIN}_schedule_created", {"schedule_id": schedule_id})
         await _async_refresh_and_reload(hass, entry, http_session, token, cloud_schedules=cloud_schedules)
         return schedule_id
 
@@ -350,6 +375,24 @@ async def async_update_schedule(
     two updates to the same schedule racing on the cloud calls could otherwise resend a
     stale whole-state payload and stomp each other, not just corrupt the local cache.
     """
+    if (
+        title is None
+        and scene_steps is None
+        and start_event is None
+        and start_offset is None
+        and end_event is None
+        and end_offset is None
+        and scheduled_days is None
+        and fade_time is None
+        and activated is None
+        and night_reduction is None
+    ):
+        # A no-op call would still resend the cached whole state to updateTimeEvent_V3 -
+        # harmless if the cache is fresh, but this integration can't tell if the schedule
+        # was since edited in the Plejd app, so a no-op "update" would silently overwrite
+        # whatever changed there instead of erroring loudly.
+        raise HomeAssistantError("update_schedule needs at least one field to change")
+
     async with _async_get_lock(hass, entry):
         cached = next((s for s in entry.data.get(CONF_CLOUD_SCHEDULES, []) if s["schedule_id"] == schedule_id), None)
         if cached is None:

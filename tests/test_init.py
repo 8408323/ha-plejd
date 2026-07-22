@@ -1056,35 +1056,6 @@ async def test_create_schedule_service_forwards_call_data(monkeypatch):
     )
 
 
-async def test_create_schedule_service_fires_schedule_created_event(monkeypatch):
-    # The generated schedule_id isn't otherwise discoverable from the Services UI (it's
-    # redacted from diagnostics and there's no listing surface yet) - update_schedule needs
-    # it, so it must be surfaced as an event, same as scan_new_devices' results.
-    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
-    _FakeCoordinator.instances.clear()
-    hass, entry = _hass(), _entry()
-
-    monkeypatch.setattr(plejd, "async_create_schedule", AsyncMock(return_value="te1"))
-
-    await async_setup_entry(hass, entry)
-    handler = hass.services._handlers[f"plejd.{SERVICE_CREATE_SCHEDULE}"]
-    await handler(
-        types.SimpleNamespace(
-            data={
-                "title": "Garage",
-                "scene_steps": [_STEP],
-                "start_event": "sunset",
-                "start_offset": 15,
-                "end_event": "sunrise",
-                "end_offset": 0,
-                "fade_time": 0,
-            }
-        )
-    )
-
-    assert hass.bus.fired[-1] == ("plejd_schedule_created", {"schedule_id": "te1"})
-
-
 async def test_update_schedule_service_is_registered_on_setup(monkeypatch):
     monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
     _FakeCoordinator.instances.clear()
