@@ -49,6 +49,7 @@ def _hass():
     return types.SimpleNamespace(
         data={},
         bus=_FakeBus(),
+        async_block_till_done=AsyncMock(),
         config_entries=types.SimpleNamespace(
             async_update_entry=lambda entry, data: setattr(entry, "data", data),
             async_reload=AsyncMock(),

@@ -65,6 +65,18 @@ async def _async_login_and_get_site(hass: HomeAssistant, entry: ConfigEntry):
     return http_session, token, site
 
 
+def _cloud_schedule_owning_scene(entry: ConfigEntry, scene_id: str) -> dict | None:
+    """Find the cloud schedule (if any) whose on-scene or night-reduction scene is scene_id."""
+    return next(
+        (
+            s
+            for s in entry.data.get(CONF_CLOUD_SCHEDULES, [])
+            if s["scene_id"] == scene_id or (s["night_reduction"] or {}).get("scene_id") == scene_id
+        ),
+        None,
+    )
+
+
 async def _async_refresh_and_reload(hass: HomeAssistant, entry: ConfigEntry, http_session, token) -> None:
     try:
         fresh_site = await async_get_site(http_session, token, entry.data[CONF_SITE_ID])
@@ -139,7 +151,13 @@ async def async_update_scene(
     scene_steps: list[dict] | None = None,
     hidden_from_scene_list: bool | None = None,
 ) -> None:
-    """Rename, reorder, and/or replace a scene's steps, then refresh + reload the config entry."""
+    """Rename, reorder, and/or replace a scene's steps, then refresh + reload the config entry.
+
+    Refuses to edit a scene that's a cloud schedule's on-scene or night-reduction scene -
+    editing it here would change the cloud's scene content without the matching TimeEvent
+    dirtyDevices update or CONF_CLOUD_SCHEDULES cache update that update_schedule performs,
+    leaving the schedule silently unsynced until it's next edited through update_schedule.
+    """
     if title is None and order is None and scene_steps is None and hidden_from_scene_list is None:
         raise HomeAssistantError(
             "update_scene needs at least one of title, order, scene_steps, or hidden_from_scene_list"
@@ -149,8 +167,15 @@ async def async_update_scene(
             "update_scene's scene_steps replaces every step - pass at least one, not an empty list"
         )
     http_session, token, site = await _async_login_and_get_site(hass, entry)
-    if not any(s.scene_id == scene_id for s in site.all_scenes):
+    scene = next((s for s in site.all_scenes if s.scene_id == scene_id), None)
+    if scene is None:
         raise HomeAssistantError(f"Plejd scene {scene_id} not found on this site")
+    cloud_schedule = _cloud_schedule_owning_scene(entry, scene_id)
+    if cloud_schedule is not None:
+        raise HomeAssistantError(
+            f"Plejd scene '{scene.name}' is managed by cloud schedule '{cloud_schedule['title']}'; "
+            "update it via update_schedule instead"
+        )
     try:
         ok = await async_cloud_update_scene(
             http_session,
@@ -190,14 +215,7 @@ async def async_remove_scene(hass: HomeAssistant, entry: ConfigEntry, *, scene_i
                 f"Plejd scene '{scene.name}' is used by schedule(s) {', '.join(referencing)}; "
                 "remove or update them first"
             )
-    cloud_schedule = next(
-        (
-            s
-            for s in entry.data.get(CONF_CLOUD_SCHEDULES, [])
-            if s["scene_id"] == scene_id or (s["night_reduction"] or {}).get("scene_id") == scene_id
-        ),
-        None,
-    )
+    cloud_schedule = _cloud_schedule_owning_scene(entry, scene_id)
     if cloud_schedule is not None:
         raise HomeAssistantError(
             f"Plejd scene '{scene.name}' is used by cloud schedule '{cloud_schedule['title']}'; "

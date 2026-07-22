@@ -133,7 +133,7 @@ async def _async_refresh_and_reload(
             await hass.config_entries.async_reload(entry.entry_id)
 
 
-def _sync_cloud_schedules_cache(hass: HomeAssistant, entry: ConfigEntry, cloud_schedules: list[dict]) -> None:
+async def _sync_cloud_schedules_cache(hass: HomeAssistant, entry: ConfigEntry, cloud_schedules: list[dict]) -> None:
     """Write entry.data[CONF_CLOUD_SCHEDULES] immediately, without triggering a reload.
 
     Called right before firing plejd_schedule_created: a listener reacting to that event
@@ -141,10 +141,16 @@ def _sync_cloud_schedules_cache(hass: HomeAssistant, entry: ConfigEntry, cloud_s
     later entry.data write inside _async_refresh_and_reload and see the new schedule as
     "not tracked". The full refresh (fresh devices/scenes/etc, and the real reload) still
     follows immediately after this.
+
+    async_update_entry schedules the entry's update listener as a new task rather than
+    running it inline, so it hasn't necessarily run by the time async_update_entry returns -
+    block until it (and anything it schedules) actually has, so it's skipped while this
+    guard is still held instead of running unguarded after it's released below.
     """
     hass.data[schedule_ws.DATA_MANUAL_RELOAD] = entry.entry_id
     try:
         hass.config_entries.async_update_entry(entry, data={**entry.data, CONF_CLOUD_SCHEDULES: cloud_schedules})
+        await hass.async_block_till_done()
     finally:
         hass.data.pop(schedule_ws.DATA_MANUAL_RELOAD, None)
         hass.data.pop(schedule_ws.DATA_MANUAL_RELOAD_SEEN, None)
@@ -393,7 +399,7 @@ async def async_create_schedule(
         # listener reacting to the event synchronously must already see the schedule as
         # tracked, and a later refresh failure must not also swallow the only way the user
         # can learn its id (this integration can't rediscover it from getSiteById).
-        _sync_cloud_schedules_cache(hass, entry, cloud_schedules)
+        await _sync_cloud_schedules_cache(hass, entry, cloud_schedules)
         hass.bus.async_fire(f"{DOMAIN}_schedule_created", {"schedule_id": schedule_id})
         await _async_refresh_and_reload(hass, entry, http_session, token, cloud_schedules=cloud_schedules)
         return schedule_id
@@ -534,6 +540,7 @@ async def async_update_schedule(
                 or end_event is not None
                 or end_offset is not None
                 or night_reduction is not None
+                or scene_steps is not None
                 or after_devices != before_devices
             )
             if needs_time_event_update:
