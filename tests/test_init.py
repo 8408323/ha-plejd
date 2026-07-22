@@ -11,9 +11,12 @@ from plejd import (
     PLATFORMS,
     SERVICE_ADD_DEVICE,
     SERVICE_ALL_OFF,
+    SERVICE_CREATE_SCENE,
     SERVICE_REMOVE_ROOM,
+    SERVICE_REMOVE_SCENE,
     SERVICE_SCAN_DEVICES,
     SERVICE_UPDATE_ROOM,
+    SERVICE_UPDATE_SCENE,
     async_setup_entry,
     async_unload_entry,
 )
@@ -339,6 +342,33 @@ def test_update_room_schema_rejects_invalid_category():
     assert plejd._UPDATE_ROOM_SCHEMA({"room_id": "r1", "category": "Kitchen"})["category"] == "Kitchen"
 
 
+_VALID_STEP = {"device_id": "d1", "output": 0, "state": "On", "value": 255}
+
+
+def test_scene_step_schema_rejects_invalid_state():
+    import voluptuous as vol
+
+    with pytest.raises(vol.Invalid):
+        plejd._SCENE_STEP_SCHEMA({**_VALID_STEP, "state": "NotARealState"})
+    assert plejd._SCENE_STEP_SCHEMA(_VALID_STEP)["state"] == "On"
+
+
+def test_create_scene_schema_rejects_negative_order():
+    import voluptuous as vol
+
+    with pytest.raises(vol.Invalid):
+        plejd._CREATE_SCENE_SCHEMA({"title": "X", "scene_steps": [_VALID_STEP], "order": -1})
+    assert plejd._CREATE_SCENE_SCHEMA({"title": "X", "scene_steps": [_VALID_STEP]})["order"] == 0
+
+
+def test_update_scene_schema_rejects_negative_order():
+    import voluptuous as vol
+
+    with pytest.raises(vol.Invalid):
+        plejd._UPDATE_SCENE_SCHEMA({"scene_id": "s1", "order": -1})
+    assert plejd._UPDATE_SCENE_SCHEMA({"scene_id": "s1", "order": 0})["order"] == 0
+
+
 async def test_add_device_service_unregistered_on_unload(monkeypatch):
     monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
     _FakeCoordinator.instances.clear()
@@ -652,6 +682,150 @@ async def test_remove_room_service_forwards_call_data(monkeypatch):
     await handler(types.SimpleNamespace(data={"room_id": "r1"}))
 
     remove_room.assert_awaited_once_with(hass, entry, room_id="r1")
+
+
+# ── Services: create_scene / update_scene / remove_scene ──────────────────────
+#
+# async_create_scene() / async_update_scene() / async_remove_scene() themselves
+# are unit-tested in test_manage_scene.py. These tests only cover that the
+# services are registered and forward call.data correctly.
+
+_STEP = {"device_id": "d1", "output": 0, "state": "On", "value": 255}
+
+
+async def test_create_scene_service_is_registered_on_setup(monkeypatch):
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    _FakeCoordinator.instances.clear()
+    hass, entry = _hass(), _entry()
+    await async_setup_entry(hass, entry)
+    assert f"plejd.{SERVICE_CREATE_SCENE}" in hass.services._handlers
+
+
+async def test_create_scene_service_unregistered_on_unload(monkeypatch):
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    _FakeCoordinator.instances.clear()
+    hass, entry = _hass(), _entry()
+    unloads: list = []
+    entry.async_on_unload = unloads.append
+    await async_setup_entry(hass, entry)
+    assert f"plejd.{SERVICE_CREATE_SCENE}" in hass.services._handlers
+    for unload in unloads:
+        unload()
+    assert f"plejd.{SERVICE_CREATE_SCENE}" not in hass.services._handlers
+
+
+async def test_create_scene_service_forwards_call_data(monkeypatch):
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    _FakeCoordinator.instances.clear()
+    hass, entry = _hass(), _entry()
+
+    create_scene = AsyncMock()
+    monkeypatch.setattr(plejd, "async_create_scene", create_scene)
+
+    await async_setup_entry(hass, entry)
+    handler = hass.services._handlers[f"plejd.{SERVICE_CREATE_SCENE}"]
+    call = types.SimpleNamespace(
+        data={"title": "Movie Night", "scene_steps": [_STEP], "order": 2, "hidden_from_scene_list": True}
+    )
+    await handler(call)
+
+    create_scene.assert_awaited_once_with(
+        hass, entry, title="Movie Night", scene_steps=[_STEP], order=2, hidden_from_scene_list=True
+    )
+
+
+async def test_update_scene_service_is_registered_on_setup(monkeypatch):
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    _FakeCoordinator.instances.clear()
+    hass, entry = _hass(), _entry()
+    await async_setup_entry(hass, entry)
+    assert f"plejd.{SERVICE_UPDATE_SCENE}" in hass.services._handlers
+
+
+async def test_update_scene_service_unregistered_on_unload(monkeypatch):
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    _FakeCoordinator.instances.clear()
+    hass, entry = _hass(), _entry()
+    unloads: list = []
+    entry.async_on_unload = unloads.append
+    await async_setup_entry(hass, entry)
+    assert f"plejd.{SERVICE_UPDATE_SCENE}" in hass.services._handlers
+    for unload in unloads:
+        unload()
+    assert f"plejd.{SERVICE_UPDATE_SCENE}" not in hass.services._handlers
+
+
+async def test_update_scene_service_forwards_call_data(monkeypatch):
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    _FakeCoordinator.instances.clear()
+    hass, entry = _hass(), _entry()
+
+    update_scene = AsyncMock()
+    monkeypatch.setattr(plejd, "async_update_scene", update_scene)
+
+    await async_setup_entry(hass, entry)
+    handler = hass.services._handlers[f"plejd.{SERVICE_UPDATE_SCENE}"]
+    call = types.SimpleNamespace(
+        data={"scene_id": "s1", "title": "X", "order": 1, "scene_steps": [_STEP], "hidden_from_scene_list": False}
+    )
+    await handler(call)
+
+    update_scene.assert_awaited_once_with(
+        hass, entry, scene_id="s1", title="X", order=1, scene_steps=[_STEP], hidden_from_scene_list=False
+    )
+
+
+async def test_update_scene_service_forwards_defaults(monkeypatch):
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    _FakeCoordinator.instances.clear()
+    hass, entry = _hass(), _entry()
+
+    update_scene = AsyncMock()
+    monkeypatch.setattr(plejd, "async_update_scene", update_scene)
+
+    await async_setup_entry(hass, entry)
+    handler = hass.services._handlers[f"plejd.{SERVICE_UPDATE_SCENE}"]
+    await handler(types.SimpleNamespace(data={"scene_id": "s1"}))
+
+    update_scene.assert_awaited_once_with(
+        hass, entry, scene_id="s1", title=None, order=None, scene_steps=None, hidden_from_scene_list=None
+    )
+
+
+async def test_remove_scene_service_is_registered_on_setup(monkeypatch):
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    _FakeCoordinator.instances.clear()
+    hass, entry = _hass(), _entry()
+    await async_setup_entry(hass, entry)
+    assert f"plejd.{SERVICE_REMOVE_SCENE}" in hass.services._handlers
+
+
+async def test_remove_scene_service_unregistered_on_unload(monkeypatch):
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    _FakeCoordinator.instances.clear()
+    hass, entry = _hass(), _entry()
+    unloads: list = []
+    entry.async_on_unload = unloads.append
+    await async_setup_entry(hass, entry)
+    assert f"plejd.{SERVICE_REMOVE_SCENE}" in hass.services._handlers
+    for unload in unloads:
+        unload()
+    assert f"plejd.{SERVICE_REMOVE_SCENE}" not in hass.services._handlers
+
+
+async def test_remove_scene_service_forwards_call_data(monkeypatch):
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    _FakeCoordinator.instances.clear()
+    hass, entry = _hass(), _entry()
+
+    remove_scene = AsyncMock()
+    monkeypatch.setattr(plejd, "async_remove_scene", remove_scene)
+
+    await async_setup_entry(hass, entry)
+    handler = hass.services._handlers[f"plejd.{SERVICE_REMOVE_SCENE}"]
+    await handler(types.SimpleNamespace(data={"scene_id": "s1"}))
+
+    remove_scene.assert_awaited_once_with(hass, entry, scene_id="s1")
 
 
 # ── Dashboard panel ───────────────────────────────────────────────────────────

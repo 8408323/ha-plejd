@@ -23,13 +23,16 @@ from .const import (
     PLEJD_FN_COMPATIBLE_DEVICES,
     PLEJD_FN_CREATE_DEVICE,
     PLEJD_FN_CREATE_ROOM,
+    PLEJD_FN_CREATE_SCENE,
     PLEJD_FN_FIRMWARE_BY_HW,
     PLEJD_FN_REMOVE_ROOM,
+    PLEJD_FN_REMOVE_SCENE,
     PLEJD_FN_SET_INPUT,
     PLEJD_FN_SITE_BY_ID,
     PLEJD_FN_SITE_LIST,
     PLEJD_FN_UPDATE_DEVICE,
     PLEJD_FN_UPDATE_ROOM,
+    PLEJD_FN_UPDATE_SCENE,
     PLEJD_PARSE_APP_ID,
     PLEJD_PARSE_LOGIN,
     PLEJD_PARSE_URL,
@@ -111,6 +114,20 @@ class PlejdCloudScene:
 
 
 @dataclass
+class PlejdCloudSceneInfo:
+    """Every scene on the site, for scene management (existence checks).
+
+    Unlike PlejdCloudScene, not filtered to scenes with a confirmed mesh index -
+    that list is built for scene execution (a broadcast needs a real index) and
+    silently excludes a scene missing from sceneIndex, which is exactly the wrong
+    lens for "does this scene exist" (same issue as PlejdCloudRoom vs all_rooms).
+    """
+
+    scene_id: str
+    name: str
+
+
+@dataclass
 class PlejdCloudRoom:
     """A Plejd room: its group mesh address (one 0x0098 controls the whole room) plus member output addresses."""
 
@@ -161,6 +178,8 @@ class PlejdCloudSite:
     rooms: list[PlejdCloudRoom] = field(default_factory=list)
     # every room on the site, for room management - see PlejdCloudRoomInfo.
     all_rooms: list[PlejdCloudRoomInfo] = field(default_factory=list)
+    # every scene on the site, for scene management - see PlejdCloudSceneInfo.
+    all_scenes: list[PlejdCloudSceneInfo] = field(default_factory=list)
 
 
 def _headers(token: str | None = None) -> dict[str, str]:
@@ -410,6 +429,90 @@ async def async_remove_room(session: ClientSession, token: str, site_id: str, ro
     return result is True
 
 
+def _scene_step_to_payload(step: dict) -> dict[str, object]:
+    """One scene step, in the app's own createScene/updateScene sceneSteps wire shape.
+
+    Every step passed to a create/update call is by definition being freshly pushed, so
+    dirty/dirtyRemoved are always True/False here - they track pending local edits in the
+    app's own offline cache, which this integration has no equivalent of.
+    """
+    payload: dict[str, object] = {
+        "deviceId": step["device_id"],
+        "output": step["output"],
+        "dirty": True,
+        "dirtyRemoved": False,
+        "state": step["state"],
+        "value": step["value"],
+    }
+    if "color_temperature" in step:
+        payload["colorTemperature"] = step["color_temperature"]
+    if "coverable_tilt" in step:
+        payload["coverableTilt"] = step["coverable_tilt"]
+    if "climate_boost_time" in step:
+        payload["climateBoostTime"] = step["climate_boost_time"]
+    return payload
+
+
+async def async_create_scene(
+    session: ClientSession,
+    token: str,
+    site_id: str,
+    title: str,
+    scene_steps: list[dict],
+    *,
+    order: int = 0,
+    hidden_from_scene_list: bool = False,
+    settings: str = "",
+) -> str:
+    """Create a new scene and return its ID (a UUID we generate and pass in)."""
+    scene_id = str(uuid.uuid4())
+    params = {
+        "siteId": site_id,
+        "sceneId": scene_id,
+        "title": title,
+        "order": order,
+        "sceneSteps": [_scene_step_to_payload(s) for s in scene_steps],
+        "hiddenFromSceneList": hidden_from_scene_list,
+        "settings": settings,
+    }
+    await _call_function(session, token, PLEJD_FN_CREATE_SCENE, params)
+    return scene_id
+
+
+async def async_update_scene(
+    session: ClientSession,
+    token: str,
+    site_id: str,
+    scene_id: str,
+    *,
+    title: str | None = None,
+    order: int | None = None,
+    scene_steps: list[dict] | None = None,
+    hidden_from_scene_list: bool | None = None,
+    settings: str | None = None,
+) -> bool:
+    """Rename, reorder, and/or replace a scene's steps. Only the supplied fields are sent."""
+    params: dict[str, object] = {"siteId": site_id, "sceneId": scene_id}
+    if title is not None:
+        params["title"] = title
+    if order is not None:
+        params["order"] = order
+    if scene_steps is not None:
+        params["sceneSteps"] = [_scene_step_to_payload(s) for s in scene_steps]
+    if hidden_from_scene_list is not None:
+        params["hiddenFromSceneList"] = hidden_from_scene_list
+    if settings is not None:
+        params["settings"] = settings
+    result = await _call_function(session, token, PLEJD_FN_UPDATE_SCENE, params)
+    return result is True
+
+
+async def async_remove_scene(session: ClientSession, token: str, site_id: str, scene_id: str) -> bool:
+    """Remove a scene."""
+    result = await _call_function(session, token, PLEJD_FN_REMOVE_SCENE, {"siteId": site_id, "sceneId": scene_id})
+    return result is True
+
+
 async def async_set_input_setting(
     session: ClientSession,
     token: str,
@@ -548,7 +651,12 @@ def parse_site(site: dict) -> PlejdCloudSite:
     scenes = [
         PlejdCloudScene(scene_id=sc["sceneId"], name=sc.get("title") or sc["sceneId"], index=int(idx))
         for sc in site.get("scenes") or []
-        if (idx := scene_index.get(sc.get("sceneId"))) is not None
+        if isinstance(sc, dict) and (idx := scene_index.get(sc.get("sceneId"))) is not None
+    ]
+    all_scenes = [
+        PlejdCloudSceneInfo(scene_id=sc["sceneId"], name=sc.get("title") or sc["sceneId"])
+        for sc in site.get("scenes") or []
+        if isinstance(sc, dict) and isinstance(sc.get("sceneId"), str)
     ]
 
     # A gateway (GWY-01) has no controllable output, so it is absent from devices[];
@@ -667,4 +775,5 @@ def parse_site(site: dict) -> PlejdCloudSite:
         device_addresses=device_addresses,
         rooms=rooms,
         all_rooms=all_rooms,
+        all_scenes=all_scenes,
     )
