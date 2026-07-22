@@ -56,7 +56,9 @@ async def _async_login_and_get_site(hass: HomeAssistant, entry: ConfigEntry):
     return http_session, token, site
 
 
-async def _async_refresh_and_reload(hass: HomeAssistant, entry: ConfigEntry, http_session, token) -> None:
+async def _async_refresh_and_reload(
+    hass: HomeAssistant, entry: ConfigEntry, http_session, token, *, moved_device_id: str, moved_room_id: str
+) -> None:
     try:
         fresh_site = await async_get_site(http_session, token, entry.data[CONF_SITE_ID])
     except PlejdCloudError as err:
@@ -66,11 +68,21 @@ async def _async_refresh_and_reload(hass: HomeAssistant, entry: ConfigEntry, htt
     # own _async_persist uses for the identical async_update_entry -> listener race.
     hass.data[schedule_ws.DATA_MANUAL_RELOAD] = entry.entry_id
     try:
+        # The moved device's roomId is forced to the intended destination regardless of
+        # what this fresh cloud fetch says: the cloud's own roomId/outputGroups records
+        # are only known to converge automatically when a gateway is online (confirmed
+        # live) - on a BLE-only site there's no such convergence path, so trusting the
+        # cloud fetch here could silently persist/reload the device's OLD room even
+        # though the mesh write already moved it.
+        device_dicts = [
+            {**asdict(d), "room_id": moved_room_id} if d.device_id == moved_device_id else asdict(d)
+            for d in fresh_site.devices
+        ]
         hass.config_entries.async_update_entry(
             entry,
             data={
                 **entry.data,
-                CONF_DEVICES: [asdict(d) for d in fresh_site.devices],
+                CONF_DEVICES: device_dicts,
                 CONF_INPUTS: [asdict(i) for i in fresh_site.inputs],
                 CONF_MOTION: [asdict(m) for m in fresh_site.motion],
                 CONF_SCENES: [asdict(s) for s in fresh_site.scenes],
@@ -102,12 +114,22 @@ async def async_move_device_to_room(hass: HomeAssistant, entry: ConfigEntry, *, 
     own_address = site.device_addresses.get(device_id)
     if own_address is None:
         raise HomeAssistantError(f"Plejd device {device_id} not found on this site")
+    outputs = [d for d in site.devices if d.device_id == device_id]
+    if len(outputs) > 1:
+        # The mesh command targets the device's own (shared) address, not a per-output
+        # one, but a live capture confirmed a multi-output device's outputs can have
+        # independently different rooms - without a capture of moving a second output to
+        # confirm how (or whether) the command disambiguates between them, moving a
+        # multi-output device risks silently moving the wrong output, or both.
+        raise HomeAssistantError(
+            f"Plejd device {device_id} has multiple outputs; move_device_to_room isn't safe for it yet"
+        )
     new_room = next((r for r in site.all_rooms if r.room_id == room_id), None)
     if new_room is None:
         raise HomeAssistantError(f"Plejd room {room_id} not found on this site")
     if new_room.address is None:
         raise HomeAssistantError(f"Plejd room '{new_room.name}' has no mesh group address")
-    current_room_id = next((d.room_id for d in site.devices if d.device_id == device_id), None)
+    current_room_id = outputs[0].room_id
     if current_room_id == room_id:
         raise HomeAssistantError(f"Device is already in room '{new_room.name}'")
 
@@ -117,4 +139,4 @@ async def async_move_device_to_room(hass: HomeAssistant, entry: ConfigEntry, *, 
         await coordinator.async_leave_mesh_group(own_address, old_room.address)
     await coordinator.async_join_mesh_group(own_address, new_room.address)
 
-    await _async_refresh_and_reload(hass, entry, http_session, token)
+    await _async_refresh_and_reload(hass, entry, http_session, token, moved_device_id=device_id, moved_room_id=room_id)

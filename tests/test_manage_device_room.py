@@ -106,6 +106,18 @@ async def test_move_device_raises_on_get_site_failure(monkeypatch):
         await async_move_device_to_room(_hass(), _entry(), device_id="d1", room_id="r2")
 
 
+async def test_move_device_raises_for_a_multi_output_device(monkeypatch):
+    site = _site(
+        devices=[_device(device_id="d1", room_id="r1"), _device(device_id="d1", room_id="r1")],
+        device_addresses={"d1": 39},
+        all_rooms=[_room("r2", "Stora badrummet", address=34)],
+    )
+    monkeypatch.setattr("plejd.manage_device_room.async_login", AsyncMock(return_value="tok"))
+    monkeypatch.setattr("plejd.manage_device_room.async_get_site", AsyncMock(return_value=site))
+    with pytest.raises(HomeAssistantError, match="multiple outputs"):
+        await async_move_device_to_room(_hass(), _entry(), device_id="d1", room_id="r2")
+
+
 async def test_move_device_raises_if_room_not_found(monkeypatch):
     site = _site(devices=[_device()], device_addresses={"d1": 39})
     monkeypatch.setattr("plejd.manage_device_room.async_login", AsyncMock(return_value="tok"))
@@ -155,6 +167,35 @@ async def test_move_device_leaves_old_room_and_joins_new(monkeypatch):
     coordinator.async_leave_mesh_group.assert_awaited_once_with(39, 14)
     coordinator.async_join_mesh_group.assert_awaited_once_with(39, 34)
     hass.config_entries.async_reload.assert_awaited_once_with("e1")
+    moved = next(d for d in entry.data["devices"] if d["device_id"] == "d1")
+    assert moved["room_id"] == "r2"
+
+
+async def test_move_device_forces_local_room_id_when_cloud_has_not_converged(monkeypatch):
+    # A BLE-only site (no gateway) has no path for the cloud to learn about a mesh-only
+    # room change - simulate the refresh fetch still reporting the device's OLD room, and
+    # confirm the persisted data is corrected to the intended destination regardless.
+    hass = _hass()
+    entry = _entry()
+    initial_site = _site(
+        devices=[_device(room_id="r1")],
+        device_addresses={"d1": 39},
+        all_rooms=[_room("r1", "Kok", address=14), _room("r2", "Stora badrummet", address=34)],
+    )
+    stale_refresh_site = _site(
+        devices=[_device(room_id="r1")],  # still "r1" - the cloud hasn't converged yet
+        device_addresses={"d1": 39},
+        all_rooms=[_room("r1", "Kok", address=14), _room("r2", "Stora badrummet", address=34)],
+    )
+    monkeypatch.setattr("plejd.manage_device_room.async_login", AsyncMock(return_value="tok"))
+    monkeypatch.setattr(
+        "plejd.manage_device_room.async_get_site", AsyncMock(side_effect=[initial_site, stale_refresh_site])
+    )
+
+    await async_move_device_to_room(hass, entry, device_id="d1", room_id="r2")
+
+    moved = next(d for d in entry.data["devices"] if d["device_id"] == "d1")
+    assert moved["room_id"] == "r2"
 
 
 async def test_move_device_skips_leave_when_device_has_no_current_room(monkeypatch):

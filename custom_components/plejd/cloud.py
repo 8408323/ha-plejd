@@ -772,9 +772,12 @@ def parse_site(site: dict) -> PlejdCloudSite:
     device_addresses: dict[str, int] = {}
     for device_id, addr in device_address.items():
         try:
-            device_addresses[device_id] = int(addr)
+            addr_int = int(addr)
         except (TypeError, ValueError):
             continue
+        if not 1 <= addr_int <= 255:
+            continue  # mesh addresses are single-byte (encode_command masks with & 0xFF); 0 is broadcast-like
+        device_addresses[device_id] = addr_int
 
     return PlejdCloudSite(
         site_id=meta.get("siteId") or "",

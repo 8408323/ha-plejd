@@ -350,7 +350,7 @@ def test_parse_site_device_addresses_drops_garbage_values():
     site = parse_site(
         {
             "plejdMesh": {"cryptoKey": "00" * 16},
-            "deviceAddress": {"d1": 5, "d2": "not-a-number", "d3": None},
+            "deviceAddress": {"d1": 5, "d2": "not-a-number", "d3": None, "d4": 300, "d5": -1, "d6": 0},
             "devices": [],
         }
     )

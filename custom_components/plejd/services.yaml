@@ -269,7 +269,9 @@ move_device_to_room:
     Move a device to a different room, then reload the config entry. Unlike
     other room/scene management, this requires a live mesh connection - room
     membership is a mesh-group operation, not a cloud call, so the BLE/gateway
-    transport must be connected for this to succeed.
+    transport must be connected for this to succeed. Not yet supported for a
+    multi-output device (e.g. a 2-channel dimmer) - its outputs can be in
+    different rooms and this isn't confirmed safe to disambiguate yet.
   fields:
     device_id:
       name: Device ID
