@@ -27,7 +27,7 @@ def _device(
 ) -> PlejdCloudDevice:
     return PlejdCloudDevice(
         device_id=device_id,
-        name="Diskbank",
+        name="Test Light",
         address=address,
         output_index=0,
         outputs=outputs if outputs is not None else [address],
@@ -122,7 +122,7 @@ async def test_move_device_raises_for_a_multi_output_device(monkeypatch):
     site = _site(
         devices=[_device(device_id="d1", room_id="r1"), _device(device_id="d1", room_id="r1")],
         device_addresses={"d1": 39},
-        all_rooms=[_room("r2", "Stora badrummet", address=34)],
+        all_rooms=[_room("r2", "Room B", address=34)],
     )
     monkeypatch.setattr("plejd.manage_device_room.async_login", AsyncMock(return_value="tok"))
     monkeypatch.setattr("plejd.manage_device_room.async_get_site", AsyncMock(return_value=site))
@@ -137,7 +137,7 @@ async def test_move_device_raises_for_a_single_record_with_multiple_output_addre
     site = _site(
         devices=[_device(device_id="d1", room_id="r1", outputs=[39, 40])],
         device_addresses={"d1": 39},
-        all_rooms=[_room("r2", "Stora badrummet", address=34)],
+        all_rooms=[_room("r2", "Room B", address=34)],
     )
     monkeypatch.setattr("plejd.manage_device_room.async_login", AsyncMock(return_value="tok"))
     monkeypatch.setattr("plejd.manage_device_room.async_get_site", AsyncMock(return_value=site))
@@ -167,7 +167,7 @@ async def test_move_device_raises_if_destination_room_has_no_address(monkeypatch
     site = _site(
         devices=[_device()],
         device_addresses={"d1": 39},
-        all_rooms=[_room("r2", "Stora badrummet", address=None)],
+        all_rooms=[_room("r2", "Room B", address=None)],
     )
     monkeypatch.setattr("plejd.manage_device_room.async_login", AsyncMock(return_value="tok"))
     monkeypatch.setattr("plejd.manage_device_room.async_get_site", AsyncMock(return_value=site))
@@ -179,7 +179,7 @@ async def test_move_device_raises_if_already_in_destination_room(monkeypatch):
     site = _site(
         devices=[_device(room_id="r1")],
         device_addresses={"d1": 39},
-        all_rooms=[_room("r1", "Kok", address=14)],
+        all_rooms=[_room("r1", "Room A", address=14)],
     )
     monkeypatch.setattr("plejd.manage_device_room.async_login", AsyncMock(return_value="tok"))
     monkeypatch.setattr("plejd.manage_device_room.async_get_site", AsyncMock(return_value=site))
@@ -194,7 +194,7 @@ async def test_move_device_leaves_old_room_and_joins_new(monkeypatch):
     site = _site(
         devices=[_device(room_id="r1")],
         device_addresses={"d1": 39},
-        all_rooms=[_room("r1", "Kok", address=14), _room("r2", "Stora badrummet", address=34)],
+        all_rooms=[_room("r1", "Room A", address=14), _room("r2", "Room B", address=34)],
     )
     monkeypatch.setattr("plejd.manage_device_room.async_login", AsyncMock(return_value="tok"))
     monkeypatch.setattr("plejd.manage_device_room.async_get_site", AsyncMock(side_effect=[site, site]))
@@ -208,14 +208,43 @@ async def test_move_device_leaves_old_room_and_joins_new(monkeypatch):
     assert moved["room_id"] == "r2"
 
 
+async def test_move_device_joins_via_the_coordinator_current_at_join_time(monkeypatch):
+    # entry.runtime_data must be read fresh for EACH mesh write, not cached once for both -
+    # simulates an unrelated reload (e.g. an options edit) swapping in a new coordinator
+    # in the gap between the leave and the join, and confirms the join goes to the NEW one.
+    hass = _hass()
+    old_coordinator = _coordinator()
+    new_coordinator = _coordinator()
+    entry = _entry(runtime_data=old_coordinator)
+
+    async def _leave_then_an_unrelated_reload_swaps_the_coordinator(*_args, **_kwargs):
+        entry.runtime_data = new_coordinator
+
+    old_coordinator.async_leave_mesh_group.side_effect = _leave_then_an_unrelated_reload_swaps_the_coordinator
+
+    site = _site(
+        devices=[_device(room_id="r1")],
+        device_addresses={"d1": 39},
+        all_rooms=[_room("r1", "Room A", address=14), _room("r2", "Room B", address=34)],
+    )
+    monkeypatch.setattr("plejd.manage_device_room.async_login", AsyncMock(return_value="tok"))
+    monkeypatch.setattr("plejd.manage_device_room.async_get_site", AsyncMock(side_effect=[site, site]))
+
+    await async_move_device_to_room(hass, entry, device_id="d1", room_id="r2")
+
+    old_coordinator.async_leave_mesh_group.assert_awaited_once_with(39, 14)
+    old_coordinator.async_join_mesh_group.assert_not_awaited()  # torn down by the time join runs
+    new_coordinator.async_join_mesh_group.assert_awaited_once_with(39, 34)
+
+
 async def test_move_device_patches_room_membership_when_both_rooms_already_exist(monkeypatch):
     hass = _hass()
     entry = _entry()
     old_room = PlejdCloudRoom(
-        room_id="r1", name="Kok", address=14, member_addresses=[39, 41], dimmable=True, dimmable_addresses=[39, 41]
+        room_id="r1", name="Room A", address=14, member_addresses=[39, 41], dimmable=True, dimmable_addresses=[39, 41]
     )
     new_room = PlejdCloudRoom(
-        room_id="r2", name="Stora badrummet", address=34, member_addresses=[50], dimmable=True, dimmable_addresses=[50]
+        room_id="r2", name="Room B", address=34, member_addresses=[50], dimmable=True, dimmable_addresses=[50]
     )
     unrelated_room = PlejdCloudRoom(
         room_id="r3", name="Garage", address=17, member_addresses=[60], dimmable=True, dimmable_addresses=[60]
@@ -223,7 +252,7 @@ async def test_move_device_patches_room_membership_when_both_rooms_already_exist
     site = _site(
         devices=[_device(room_id="r1")],
         device_addresses={"d1": 39},
-        all_rooms=[_room("r1", "Kok", address=14), _room("r2", "Stora badrummet", address=34)],
+        all_rooms=[_room("r1", "Room A", address=14), _room("r2", "Room B", address=34)],
         rooms=[old_room, new_room, unrelated_room],
     )
     monkeypatch.setattr("plejd.manage_device_room.async_login", AsyncMock(return_value="tok"))
@@ -247,12 +276,12 @@ async def test_move_device_leaves_room_membership_untouched_for_a_non_light_devi
     hass = _hass()
     entry = _entry()
     old_room = PlejdCloudRoom(
-        room_id="r1", name="Kok", address=14, member_addresses=[39, 41], dimmable=True, dimmable_addresses=[41]
+        room_id="r1", name="Room A", address=14, member_addresses=[39, 41], dimmable=True, dimmable_addresses=[41]
     )
     site = _site(
         devices=[_device(room_id="r1", category="switch", dimmable=False)],
         device_addresses={"d1": 39},
-        all_rooms=[_room("r1", "Kok", address=14), _room("r2", "Stora badrummet", address=34)],
+        all_rooms=[_room("r1", "Room A", address=14), _room("r2", "Room B", address=34)],
         rooms=[old_room],
     )
     monkeypatch.setattr("plejd.manage_device_room.async_login", AsyncMock(return_value="tok"))
@@ -272,15 +301,15 @@ async def test_move_device_drops_an_existing_destination_room_light_for_a_non_li
     hass = _hass()
     entry = _entry()
     old_room = PlejdCloudRoom(
-        room_id="r1", name="Kok", address=14, member_addresses=[39], dimmable=False, dimmable_addresses=[]
+        room_id="r1", name="Room A", address=14, member_addresses=[39], dimmable=False, dimmable_addresses=[]
     )
     destination_room = PlejdCloudRoom(
-        room_id="r2", name="Stora badrummet", address=34, member_addresses=[50], dimmable=True, dimmable_addresses=[50]
+        room_id="r2", name="Room B", address=34, member_addresses=[50], dimmable=True, dimmable_addresses=[50]
     )
     site = _site(
         devices=[_device(room_id="r1", category="switch", dimmable=False)],
         device_addresses={"d1": 39},
-        all_rooms=[_room("r1", "Kok", address=14), _room("r2", "Stora badrummet", address=34)],
+        all_rooms=[_room("r1", "Room A", address=14), _room("r2", "Room B", address=34)],
         rooms=[old_room, destination_room],
     )
     monkeypatch.setattr("plejd.manage_device_room.async_login", AsyncMock(return_value="tok"))
@@ -301,7 +330,7 @@ async def test_move_device_prunes_a_non_light_pending_move_on_room_id_convergenc
     site = _site(
         devices=[_device(room_id="r1", category="switch", dimmable=False)],
         device_addresses={"d1": 39},
-        all_rooms=[_room("r1", "Kok", address=14), _room("r2", "Stora badrummet", address=34)],
+        all_rooms=[_room("r1", "Room A", address=14), _room("r2", "Room B", address=34)],
     )
     monkeypatch.setattr("plejd.manage_device_room.async_login", AsyncMock(return_value="tok"))
     monkeypatch.setattr("plejd.manage_device_room.async_get_site", AsyncMock(side_effect=[site, site]))
@@ -315,7 +344,7 @@ async def test_move_device_prunes_a_non_light_pending_move_on_room_id_convergenc
             _device(device_id="e", room_id="r1", address=99),
         ],
         device_addresses={"d1": 39, "e": 99},
-        all_rooms=[_room("r1", "Kok", address=14), _room("r2", "Stora badrummet", address=34)],
+        all_rooms=[_room("r1", "Room A", address=14), _room("r2", "Room B", address=34)],
     )
     monkeypatch.setattr(
         "plejd.manage_device_room.async_get_site", AsyncMock(side_effect=[converged_site, converged_site])
@@ -332,12 +361,12 @@ async def test_move_device_leaves_room_membership_untouched_when_output_address_
     hass = _hass()
     entry = _entry()
     old_room = PlejdCloudRoom(
-        room_id="r1", name="Kok", address=14, member_addresses=[41], dimmable=True, dimmable_addresses=[41]
+        room_id="r1", name="Room A", address=14, member_addresses=[41], dimmable=True, dimmable_addresses=[41]
     )
     site = _site(
         devices=[_device(room_id="r1", address=None, outputs=[])],
         device_addresses={"d1": 39},
-        all_rooms=[_room("r1", "Kok", address=14), _room("r2", "Stora badrummet", address=34)],
+        all_rooms=[_room("r1", "Room A", address=14), _room("r2", "Room B", address=34)],
         rooms=[old_room],
     )
     monkeypatch.setattr("plejd.manage_device_room.async_login", AsyncMock(return_value="tok"))
@@ -358,15 +387,15 @@ async def test_move_device_drops_destination_room_for_a_non_light_device_with_un
     hass = _hass()
     entry = _entry()
     old_room = PlejdCloudRoom(
-        room_id="r1", name="Kok", address=14, member_addresses=[41], dimmable=True, dimmable_addresses=[41]
+        room_id="r1", name="Room A", address=14, member_addresses=[41], dimmable=True, dimmable_addresses=[41]
     )
     destination_room = PlejdCloudRoom(
-        room_id="r2", name="Stora badrummet", address=34, member_addresses=[50], dimmable=True, dimmable_addresses=[50]
+        room_id="r2", name="Room B", address=34, member_addresses=[50], dimmable=True, dimmable_addresses=[50]
     )
     site = _site(
         devices=[_device(room_id="r1", address=None, outputs=[], category="switch", dimmable=False)],
         device_addresses={"d1": 39},
-        all_rooms=[_room("r1", "Kok", address=14), _room("r2", "Stora badrummet", address=34)],
+        all_rooms=[_room("r1", "Room A", address=14), _room("r2", "Room B", address=34)],
         rooms=[old_room, destination_room],
     )
     monkeypatch.setattr("plejd.manage_device_room.async_login", AsyncMock(return_value="tok"))
@@ -387,7 +416,7 @@ async def test_move_device_prunes_pending_move_with_unresolved_output_address_on
     site = _site(
         devices=[_device(room_id="r1", address=None, outputs=[])],
         device_addresses={"d1": 39},
-        all_rooms=[_room("r1", "Kok", address=14), _room("r2", "Stora badrummet", address=34)],
+        all_rooms=[_room("r1", "Room A", address=14), _room("r2", "Room B", address=34)],
     )
     monkeypatch.setattr("plejd.manage_device_room.async_login", AsyncMock(return_value="tok"))
     monkeypatch.setattr("plejd.manage_device_room.async_get_site", AsyncMock(side_effect=[site, site]))
@@ -401,7 +430,7 @@ async def test_move_device_prunes_pending_move_with_unresolved_output_address_on
             _device(device_id="e", room_id="r1", address=99),
         ],
         device_addresses={"d1": 39, "e": 99},
-        all_rooms=[_room("r1", "Kok", address=14), _room("r2", "Stora badrummet", address=34)],
+        all_rooms=[_room("r1", "Room A", address=14), _room("r2", "Room B", address=34)],
     )
     monkeypatch.setattr(
         "plejd.manage_device_room.async_get_site", AsyncMock(side_effect=[converged_site, converged_site])
@@ -418,12 +447,12 @@ async def test_move_device_does_not_synthesize_a_room_not_already_present(monkey
     hass = _hass()
     entry = _entry()
     old_room = PlejdCloudRoom(
-        room_id="r1", name="Kok", address=14, member_addresses=[39], dimmable=True, dimmable_addresses=[39]
+        room_id="r1", name="Room A", address=14, member_addresses=[39], dimmable=True, dimmable_addresses=[39]
     )
     site = _site(
         devices=[_device(room_id="r1")],
         device_addresses={"d1": 39},
-        all_rooms=[_room("r1", "Kok", address=14), _room("r2", "Stora badrummet", address=34)],
+        all_rooms=[_room("r1", "Room A", address=14), _room("r2", "Room B", address=34)],
         rooms=[old_room],  # r2 (the destination) has no light-group entity yet
     )
     monkeypatch.setattr("plejd.manage_device_room.async_login", AsyncMock(return_value="tok"))
@@ -446,12 +475,12 @@ async def test_move_device_forces_local_room_id_when_cloud_has_not_converged(mon
     initial_site = _site(
         devices=[_device(room_id="r1")],
         device_addresses={"d1": 39},
-        all_rooms=[_room("r1", "Kok", address=14), _room("r2", "Stora badrummet", address=34)],
+        all_rooms=[_room("r1", "Room A", address=14), _room("r2", "Room B", address=34)],
     )
     stale_refresh_site = _site(
         devices=[_device(room_id="r1")],  # still "r1" - the cloud hasn't converged yet
         device_addresses={"d1": 39},
-        all_rooms=[_room("r1", "Kok", address=14), _room("r2", "Stora badrummet", address=34)],
+        all_rooms=[_room("r1", "Room A", address=14), _room("r2", "Room B", address=34)],
     )
     monkeypatch.setattr("plejd.manage_device_room.async_login", AsyncMock(return_value="tok"))
     monkeypatch.setattr(
@@ -484,8 +513,8 @@ async def test_move_device_uses_cloud_room_for_a_device_it_has_never_moved(monke
         devices=[_device(room_id="r3")],  # the cloud correctly reports the device's real current room
         device_addresses={"d1": 39},
         all_rooms=[
-            _room("r1", "Kok", address=14),
-            _room("r2", "Stora badrummet", address=34),
+            _room("r1", "Room A", address=14),
+            _room("r2", "Room B", address=34),
             _room("r3", "Sovrum", address=46),
         ],
     )
@@ -519,6 +548,7 @@ async def test_move_device_restores_a_pending_move_from_entry_data_after_a_resta
                     "is_light": True,
                     "dimmable": True,
                     "new_room_address": 34,
+                    "from_room_id": "r1",
                 }
             },
         },
@@ -527,8 +557,8 @@ async def test_move_device_restores_a_pending_move_from_entry_data_after_a_resta
         devices=[_device(room_id="r1", address=39)],  # cloud hasn't converged yet: still says r1
         device_addresses={"d1": 39},
         all_rooms=[
-            _room("r1", "Kok", address=14),
-            _room("r2", "Stora badrummet", address=34),
+            _room("r1", "Room A", address=14),
+            _room("r2", "Room B", address=34),
             _room("r3", "Sovrum", address=46),
         ],
     )
@@ -547,8 +577,8 @@ async def test_move_device_preserves_an_earlier_pending_move_for_another_device(
     hass = _hass()
     entry = _entry()
     rooms_by_id = {
-        "r1": _room("r1", "Kok", address=14),
-        "r2": _room("r2", "Stora badrummet", address=34),
+        "r1": _room("r1", "Room A", address=14),
+        "r2": _room("r2", "Room B", address=34),
         "r3": _room("r3", "Sovrum", address=46),
     }
 
@@ -599,7 +629,7 @@ async def test_move_device_preserves_an_earlier_pending_move_for_another_device(
         rooms=[
             PlejdCloudRoom(
                 room_id="r2",
-                name="Stora badrummet",
+                name="Room B",
                 address=34,
                 member_addresses=[39],
                 dimmable=True,
@@ -626,15 +656,15 @@ async def test_move_device_reapplies_room_membership_for_every_pending_device(mo
     hass = _hass()
     entry = _entry()
     all_rooms = [
-        _room("r1", "Kok", address=14),
-        _room("r2", "Stora badrummet", address=34),
+        _room("r1", "Room A", address=14),
+        _room("r2", "Room B", address=34),
         _room("r3", "Sovrum", address=46),
     ]
     r1 = PlejdCloudRoom(
-        room_id="r1", name="Kok", address=14, member_addresses=[39, 51], dimmable=True, dimmable_addresses=[39, 51]
+        room_id="r1", name="Room A", address=14, member_addresses=[39, 51], dimmable=True, dimmable_addresses=[39, 51]
     )
     r2 = PlejdCloudRoom(
-        room_id="r2", name="Stora badrummet", address=34, member_addresses=[60], dimmable=True, dimmable_addresses=[60]
+        room_id="r2", name="Room B", address=34, member_addresses=[60], dimmable=True, dimmable_addresses=[60]
     )
     stale_site = _site(
         devices=[
@@ -673,7 +703,7 @@ async def test_move_device_can_retry_after_a_refresh_failure(monkeypatch):
     site = _site(
         devices=[_device(room_id="r1")],
         device_addresses={"d1": 39},
-        all_rooms=[_room("r1", "Kok", address=14), _room("r2", "Stora badrummet", address=34)],
+        all_rooms=[_room("r1", "Room A", address=14), _room("r2", "Room B", address=34)],
     )
     monkeypatch.setattr("plejd.manage_device_room.async_login", AsyncMock(return_value="tok"))
     monkeypatch.setattr(
@@ -700,12 +730,12 @@ async def test_move_device_preserves_the_original_stale_room_across_a_chain_of_m
     hass = _hass()
     entry = _entry()
     all_rooms = [
-        _room("r1", "Kok", address=14),
-        _room("r2", "Stora badrummet", address=34),
+        _room("r1", "Room A", address=14),
+        _room("r2", "Room B", address=34),
         _room("r3", "Sovrum", address=46),
     ]
     r1 = PlejdCloudRoom(
-        room_id="r1", name="Kok", address=14, member_addresses=[39], dimmable=True, dimmable_addresses=[39]
+        room_id="r1", name="Room A", address=14, member_addresses=[39], dimmable=True, dimmable_addresses=[39]
     )
     stale_site = _site(
         devices=[_device(room_id="r1", address=39)],
@@ -726,6 +756,95 @@ async def test_move_device_preserves_the_original_stale_room_across_a_chain_of_m
     assert rooms_by_id == {}  # r1 correctly stripped despite the cloud never showing the move
 
 
+async def test_move_device_prunes_a_pending_move_that_has_actually_converged(monkeypatch):
+    # r1 -> r2 converges (both room_id and membership) before this device is ever moved
+    # again - the pending entry must be recognized as confirmed and dropped right at the
+    # start of the next call, using the fresh fetch already in hand, rather than trusting
+    # it blindly forever (nothing else in the integration revisits it on its own).
+    hass = _hass()
+    entry = _entry()
+    all_rooms = [
+        _room("r1", "Room A", address=14),
+        _room("r2", "Room B", address=34),
+        _room("r3", "Sovrum", address=46),
+    ]
+    unconverged_site = _site(
+        devices=[_device(room_id="r1", address=39)],
+        device_addresses={"d1": 39},
+        all_rooms=all_rooms,
+    )
+    monkeypatch.setattr("plejd.manage_device_room.async_login", AsyncMock(return_value="tok"))
+    monkeypatch.setattr(
+        "plejd.manage_device_room.async_get_site", AsyncMock(side_effect=[unconverged_site, unconverged_site])
+    )
+    await async_move_device_to_room(hass, entry, device_id="d1", room_id="r2")
+    assert "d1" in hass.data[DATA_PENDING_ROOM_MOVES][entry.entry_id]
+
+    # Time passes; the cloud fully converges to r2 (room_id AND membership) with no other
+    # move ever happening in between. The next move (r2 -> r3) must leave r2 - the room the
+    # fresh fetch now genuinely agrees the device is in - proving it wasn't left stuck
+    # treating "r1" as though it were still the current room.
+    r2 = PlejdCloudRoom(
+        room_id="r2", name="Room B", address=34, member_addresses=[39], dimmable=True, dimmable_addresses=[39]
+    )
+    converged_site = _site(
+        devices=[_device(room_id="r2", address=39)],
+        device_addresses={"d1": 39},
+        all_rooms=all_rooms,
+        rooms=[r2],
+    )
+    coordinator = entry.runtime_data
+    monkeypatch.setattr(
+        "plejd.manage_device_room.async_get_site", AsyncMock(side_effect=[converged_site, converged_site])
+    )
+    await async_move_device_to_room(hass, entry, device_id="d1", room_id="r3")
+
+    coordinator.async_leave_mesh_group.assert_awaited_with(39, 34)  # r2 - the real, converged current room
+    coordinator.async_join_mesh_group.assert_awaited_with(39, 46)
+
+
+async def test_move_device_detects_a_pending_move_made_stale_by_a_later_app_move(monkeypatch):
+    # Codex-reported scenario: r1 -> r2 converges, then the Plejd app itself moves the
+    # device again (r2 -> r3) before this integration ever revisits it. The pending entry
+    # (still "r2") no longer matches EITHER the room it started from (r1) or the room the
+    # fresh cloud now reports (r3) - that mismatch is the signal that something else moved
+    # it since, and the fresh fetch must be trusted instead of the stale pending value.
+    hass = _hass()
+    entry = _entry()
+    all_rooms = [
+        _room("r1", "Room A", address=14),
+        _room("r2", "Room B", address=34),
+        _room("r3", "Sovrum", address=46),
+        _room("r4", "Kontor", address=50),
+    ]
+    unconverged_site = _site(
+        devices=[_device(room_id="r1", address=39)],
+        device_addresses={"d1": 39},
+        all_rooms=all_rooms,
+    )
+    monkeypatch.setattr("plejd.manage_device_room.async_login", AsyncMock(return_value="tok"))
+    monkeypatch.setattr(
+        "plejd.manage_device_room.async_get_site", AsyncMock(side_effect=[unconverged_site, unconverged_site])
+    )
+    await async_move_device_to_room(hass, entry, device_id="d1", room_id="r2")
+
+    # The app moved it again, to r3, after our own r1 -> r2 move fully converged. Neither
+    # r1 (from_room_id) nor r2 (pending's own target) match this fresh room_id.
+    coordinator = entry.runtime_data
+    app_moved_site = _site(
+        devices=[_device(room_id="r3", address=39)],
+        device_addresses={"d1": 39},
+        all_rooms=all_rooms,
+    )
+    monkeypatch.setattr(
+        "plejd.manage_device_room.async_get_site", AsyncMock(side_effect=[app_moved_site, app_moved_site])
+    )
+    await async_move_device_to_room(hass, entry, device_id="d1", room_id="r4")
+
+    coordinator.async_leave_mesh_group.assert_awaited_with(39, 46)  # r3 - the real current room, not stale r2
+    coordinator.async_join_mesh_group.assert_awaited_with(39, 50)
+
+
 async def test_move_device_strips_the_room_actually_left_when_membership_outpaces_room_id(monkeypatch):
     # The opposite ordering from the test above: r1 -> r2's room-group MEMBERSHIP has
     # already converged (the cloud's rooms snapshot now lists the device under r2) even
@@ -735,12 +854,12 @@ async def test_move_device_strips_the_room_actually_left_when_membership_outpace
     hass = _hass()
     entry = _entry()
     all_rooms = [
-        _room("r1", "Kok", address=14),
-        _room("r2", "Stora badrummet", address=34),
+        _room("r1", "Room A", address=14),
+        _room("r2", "Room B", address=34),
         _room("r3", "Sovrum", address=46),
     ]
     r1 = PlejdCloudRoom(
-        room_id="r1", name="Kok", address=14, member_addresses=[39], dimmable=True, dimmable_addresses=[39]
+        room_id="r1", name="Room A", address=14, member_addresses=[39], dimmable=True, dimmable_addresses=[39]
     )
     initial_site = _site(
         devices=[_device(room_id="r1", address=39)],
@@ -755,7 +874,7 @@ async def test_move_device_strips_the_room_actually_left_when_membership_outpace
     # Membership converged for the first move (r2 now lists 39) but roomId didn't (the
     # device's own cloud record still says "r1").
     r2_converged = PlejdCloudRoom(
-        room_id="r2", name="Stora badrummet", address=34, member_addresses=[39], dimmable=True, dimmable_addresses=[39]
+        room_id="r2", name="Room B", address=34, member_addresses=[39], dimmable=True, dimmable_addresses=[39]
     )
     partially_converged_site = _site(
         devices=[_device(room_id="r1", address=39)],
@@ -778,9 +897,9 @@ async def test_move_device_keeps_pending_when_only_room_id_has_converged(monkeyp
     # pruning the pending entry on room_id alone would stop re-patching a still-stale room.
     hass = _hass()
     entry = _entry()
-    all_rooms = [_room("r1", "Kok", address=14), _room("r2", "Stora badrummet", address=34)]
+    all_rooms = [_room("r1", "Room A", address=14), _room("r2", "Room B", address=34)]
     r1 = PlejdCloudRoom(
-        room_id="r1", name="Kok", address=14, member_addresses=[39], dimmable=True, dimmable_addresses=[39]
+        room_id="r1", name="Room A", address=14, member_addresses=[39], dimmable=True, dimmable_addresses=[39]
     )
     initial_site = _site(
         devices=[_device(room_id="r1", address=39)],
@@ -818,9 +937,9 @@ async def test_move_device_keeps_pending_when_still_listed_in_another_room(monke
     # being re-applied.
     hass = _hass()
     entry = _entry()
-    all_rooms = [_room("r1", "Kok", address=14), _room("r2", "Stora badrummet", address=34)]
+    all_rooms = [_room("r1", "Room A", address=14), _room("r2", "Room B", address=34)]
     r1 = PlejdCloudRoom(
-        room_id="r1", name="Kok", address=14, member_addresses=[39], dimmable=True, dimmable_addresses=[39]
+        room_id="r1", name="Room A", address=14, member_addresses=[39], dimmable=True, dimmable_addresses=[39]
     )
     initial_site = _site(
         devices=[_device(room_id="r1", address=39)],
@@ -835,10 +954,10 @@ async def test_move_device_keeps_pending_when_still_listed_in_another_room(monke
     # A later, unrelated move: the cloud now shows 39 as a member of BOTH r1 and r2 - only
     # half-converged, since a device only ever belongs to one room by the app's convention.
     r1_still_listing_it = PlejdCloudRoom(
-        room_id="r1", name="Kok", address=14, member_addresses=[39], dimmable=True, dimmable_addresses=[39]
+        room_id="r1", name="Room A", address=14, member_addresses=[39], dimmable=True, dimmable_addresses=[39]
     )
     r2_now_listing_it = PlejdCloudRoom(
-        room_id="r2", name="Stora badrummet", address=34, member_addresses=[39], dimmable=True, dimmable_addresses=[39]
+        room_id="r2", name="Room B", address=34, member_addresses=[39], dimmable=True, dimmable_addresses=[39]
     )
     partially_converged_site = _site(
         devices=[_device(device_id="d1", room_id="r2", address=39), _device(device_id="e", room_id="r1", address=99)],
@@ -866,9 +985,9 @@ async def test_move_device_prunes_a_light_pending_move_into_a_permanently_mixed_
     # absent from every other room - or this pending entry would be stuck forever.
     hass = _hass()
     entry = _entry()
-    all_rooms = [_room("r1", "Kok", address=14), _room("r2", "Stora badrummet", address=34)]
+    all_rooms = [_room("r1", "Room A", address=14), _room("r2", "Room B", address=34)]
     r1 = PlejdCloudRoom(
-        room_id="r1", name="Kok", address=14, member_addresses=[39], dimmable=True, dimmable_addresses=[39]
+        room_id="r1", name="Room A", address=14, member_addresses=[39], dimmable=True, dimmable_addresses=[39]
     )
     initial_site = _site(
         devices=[_device(room_id="r1", address=39)],
@@ -913,7 +1032,7 @@ async def test_move_device_keeps_a_non_light_pending_move_while_destination_room
     site = _site(
         devices=[_device(room_id="r1", category="switch", dimmable=False)],
         device_addresses={"d1": 39},
-        all_rooms=[_room("r1", "Kok", address=14), _room("r2", "Stora badrummet", address=34)],
+        all_rooms=[_room("r1", "Room A", address=14), _room("r2", "Room B", address=34)],
     )
     monkeypatch.setattr("plejd.manage_device_room.async_login", AsyncMock(return_value="tok"))
     monkeypatch.setattr("plejd.manage_device_room.async_get_site", AsyncMock(side_effect=[site, site]))
@@ -923,7 +1042,7 @@ async def test_move_device_keeps_a_non_light_pending_move_while_destination_room
     # A later, unrelated move: room_id has converged, but r2's light-group entity (with some
     # OTHER member, not d1's non-light output) still exists in the cloud's fresh fetch.
     destination_room = PlejdCloudRoom(
-        room_id="r2", name="Stora badrummet", address=34, member_addresses=[50], dimmable=True, dimmable_addresses=[50]
+        room_id="r2", name="Room B", address=34, member_addresses=[50], dimmable=True, dimmable_addresses=[50]
     )
     partially_converged_site = _site(
         devices=[
@@ -931,7 +1050,7 @@ async def test_move_device_keeps_a_non_light_pending_move_while_destination_room
             _device(device_id="e", room_id="r1", address=99),
         ],
         device_addresses={"d1": 39, "e": 99},
-        all_rooms=[_room("r1", "Kok", address=14), _room("r2", "Stora badrummet", address=34)],
+        all_rooms=[_room("r1", "Room A", address=14), _room("r2", "Room B", address=34)],
         rooms=[destination_room],
     )
     monkeypatch.setattr(
@@ -952,7 +1071,7 @@ async def test_move_device_skips_leave_when_device_has_no_current_room(monkeypat
     site = _site(
         devices=[_device(room_id=None)],
         device_addresses={"d1": 39},
-        all_rooms=[_room("r2", "Stora badrummet", address=34)],
+        all_rooms=[_room("r2", "Room B", address=34)],
     )
     monkeypatch.setattr("plejd.manage_device_room.async_login", AsyncMock(return_value="tok"))
     monkeypatch.setattr("plejd.manage_device_room.async_get_site", AsyncMock(side_effect=[site, site]))
@@ -972,7 +1091,7 @@ async def test_move_device_raises_when_old_room_has_no_address(monkeypatch):
     site = _site(
         devices=[_device(room_id="r1")],
         device_addresses={"d1": 39},
-        all_rooms=[_room("r1", "Kok", address=None), _room("r2", "Stora badrummet", address=34)],
+        all_rooms=[_room("r1", "Room A", address=None), _room("r2", "Room B", address=34)],
     )
     monkeypatch.setattr("plejd.manage_device_room.async_login", AsyncMock(return_value="tok"))
     monkeypatch.setattr("plejd.manage_device_room.async_get_site", AsyncMock(return_value=site))
@@ -988,7 +1107,7 @@ async def test_move_device_raises_on_cloud_error_during_refresh(monkeypatch):
     site = _site(
         devices=[_device(room_id="r1")],
         device_addresses={"d1": 39},
-        all_rooms=[_room("r1", "Kok", address=14), _room("r2", "Stora badrummet", address=34)],
+        all_rooms=[_room("r1", "Room A", address=14), _room("r2", "Room B", address=34)],
     )
     monkeypatch.setattr("plejd.manage_device_room.async_login", AsyncMock(return_value="tok"))
     monkeypatch.setattr(
@@ -1004,7 +1123,7 @@ async def test_move_device_raises_when_reload_fails(monkeypatch):
     site = _site(
         devices=[_device(room_id="r1")],
         device_addresses={"d1": 39},
-        all_rooms=[_room("r1", "Kok", address=14), _room("r2", "Stora badrummet", address=34)],
+        all_rooms=[_room("r1", "Room A", address=14), _room("r2", "Room B", address=34)],
     )
     monkeypatch.setattr("plejd.manage_device_room.async_login", AsyncMock(return_value="tok"))
     monkeypatch.setattr("plejd.manage_device_room.async_get_site", AsyncMock(side_effect=[site, site]))
@@ -1020,7 +1139,7 @@ async def test_move_device_runs_a_follow_up_reload_for_a_concurrent_change(monke
     site = _site(
         devices=[_device(room_id="r1")],
         device_addresses={"d1": 39},
-        all_rooms=[_room("r1", "Kok", address=14), _room("r2", "Stora badrummet", address=34)],
+        all_rooms=[_room("r1", "Room A", address=14), _room("r2", "Room B", address=34)],
     )
     monkeypatch.setattr("plejd.manage_device_room.async_login", AsyncMock(return_value="tok"))
     monkeypatch.setattr("plejd.manage_device_room.async_get_site", AsyncMock(side_effect=[site, site]))
@@ -1053,8 +1172,8 @@ async def test_move_device_serializes_concurrent_calls_for_the_same_device(monke
         devices=[_device(room_id="r1")],
         device_addresses={"d1": 39},
         all_rooms=[
-            _room("r1", "Kok", address=14),
-            _room("r2", "Stora badrummet", address=34),
+            _room("r1", "Room A", address=14),
+            _room("r2", "Room B", address=34),
             _room("r3", "Sovrum", address=46),
         ],
     )
@@ -1101,7 +1220,7 @@ async def test_move_device_serializes_concurrent_calls_for_different_devices(mon
     site = _site(
         devices=[_device(device_id="d1", room_id="r1", address=39), _device(device_id="d2", room_id="r1", address=51)],
         device_addresses={"d1": 39, "d2": 51},
-        all_rooms=[_room("r1", "Kok", address=14), _room("r2", "Stora badrummet", address=34)],
+        all_rooms=[_room("r1", "Room A", address=14), _room("r2", "Room B", address=34)],
     )
     monkeypatch.setattr("plejd.manage_device_room.async_get_site", AsyncMock(return_value=site))
 

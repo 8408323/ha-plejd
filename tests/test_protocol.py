@@ -74,15 +74,15 @@ def test_execute_scene_opcode():
 
 def test_leave_mesh_group_bytes():
     # Confirmed via a live BLE capture of the app's own "move device to room" action:
-    # decrypting the captured write for a device at address 0x27 (39) leaving room
-    # group 0x0e (14, "Kok / Matplats" on the real site) yielded exactly this vector.
+    # decrypting a captured write for a device leaving a room's mesh group yielded exactly
+    # this vector shape. Address/group values below are illustrative, not the real capture's.
     v = leave_mesh_group(0x27, 0x0E)
     assert v == bytes([0x27, 0x01, TYPE_WRITE, 0x00, 0x08, 0x01, 0x0E])
 
 
 def test_join_mesh_group_bytes():
-    # Same capture, joining room group 0x22 (34, "Stora badrummet") - identical shape
-    # to leave_mesh_group plus a trailing join-flag byte.
+    # Same capture, joining a different room's mesh group - identical shape to
+    # leave_mesh_group plus a trailing join-flag byte.
     v = join_mesh_group(0x27, 0x22)
     assert v == bytes([0x27, 0x01, TYPE_WRITE, 0x00, 0x08, 0x01, 0x22, 0x01])
 

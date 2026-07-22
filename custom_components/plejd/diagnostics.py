@@ -47,6 +47,10 @@ TO_REDACT = {
     "name",
     "room_id",
     "scene_id",
+    # move_device_to_room's own pending-moves cache (entry.data[CONF_PENDING_ROOM_MOVES]) -
+    # these two hold raw mesh addresses too, same as "address"/"member_addresses" above.
+    "output_address",
+    "new_room_address",
     # Schedule timings reveal occupancy/routine — redact wholesale (count reported below).
     CONF_SCHEDULES,
 }

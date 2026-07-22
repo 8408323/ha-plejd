@@ -69,7 +69,8 @@ from .const import (
 )
 
 # Our own not-yet-cloud-confirmed moves (hass.data[DATA_PENDING_ROOM_MOVES][entry_id] =
-# {device_id: {"room_id", "output_address", "is_light", "dimmable", "new_room_address"}}),
+# {device_id: {"room_id", "output_address", "is_light", "dimmable", "new_room_address",
+# "from_room_id"}}),
 # scoped to this integration's own calls only - never populated from a device's plain
 # entry.data/cloud room_id. This is what lets a repeat move trust "what we ourselves just
 # did" without ALSO blindly trusting stale local data for a device this integration never
@@ -379,6 +380,28 @@ async def async_move_device_to_room(hass: HomeAssistant, entry: ConfigEntry, *, 
         # of our own state) is the authoritative source for that.
         pending = _pending_moves(hass, entry)
         existing_pending = pending.get(device_id)
+        if existing_pending is not None:
+            # Revalidate against the fresh fetch already in hand, rather than trusting the
+            # pending entry blindly forever - nothing else in the integration revisits it on
+            # its own, so without this it can sit stale indefinitely once nothing but this
+            # same device's own next move ever looks at it again.
+            fresh_room_id = outputs[0].room_id
+            if fresh_room_id == existing_pending["room_id"] and _room_membership_converged(
+                site.rooms, site.devices, existing_pending
+            ):
+                # The cloud already agrees on BOTH room_id and room-group membership - the
+                # earlier move has actually converged by now, so drop the stale entry
+                # instead of continuing to treat this device as still "pending".
+                del pending[device_id]
+                existing_pending = None
+            elif fresh_room_id != existing_pending.get("from_room_id"):
+                # Fresh cloud shows neither the room this pending move started from NOR its
+                # target - the only way that happens is if something else (almost certainly
+                # the app) moved this device again after our own move must have already
+                # converged. Our pending state is proven stale rather than merely
+                # unconfirmed; trust the fresh fetch instead of a value known to be wrong.
+                del pending[device_id]
+                existing_pending = None
         current_room_id = existing_pending["room_id"] if existing_pending is not None else outputs[0].room_id
         if current_room_id == room_id:
             raise HomeAssistantError(f"Device is already in room '{new_room.name}'")
@@ -390,10 +413,14 @@ async def async_move_device_to_room(hass: HomeAssistant, entry: ConfigEntry, *, 
             # any mesh command rather than risk a partial move.
             raise HomeAssistantError(f"Plejd device {device_id}'s current room has no resolvable mesh group address")
 
-        coordinator = entry.runtime_data
+        # Read entry.runtime_data fresh at each call, not once for both: an unrelated
+        # action (an options edit, a schedule/room/scene change, a manual reload) can
+        # still reload this entry between the leave and the join, which replaces the
+        # coordinator - reusing a captured reference from before the leave would send the
+        # join through a coordinator that's already been torn down.
         if old_room is not None:
-            await coordinator.async_leave_mesh_group(own_address, old_room.address)
-        await coordinator.async_join_mesh_group(own_address, new_room.address)
+            await entry.runtime_data.async_leave_mesh_group(own_address, old_room.address)
+        await entry.runtime_data.async_join_mesh_group(own_address, new_room.address)
 
         output = outputs[0]
         this_move = {
@@ -402,6 +429,10 @@ async def async_move_device_to_room(hass: HomeAssistant, entry: ConfigEntry, *, 
             "is_light": output.category == CATEGORY_LIGHT,
             "dimmable": output.dimmable,
             "new_room_address": new_room.address,
+            # The room this exact move started from - lets a later call's revalidation
+            # (see above) tell "still hasn't converged" (fresh cloud == from_room_id) apart
+            # from "converged, then moved again by someone else" (fresh cloud == neither).
+            "from_room_id": current_room_id,
         }
 
         await _async_refresh_and_reload(

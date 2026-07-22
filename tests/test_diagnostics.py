@@ -59,6 +59,15 @@ def _entry():
                     "dimmable_addresses": [11],
                 }
             ],
+            "pending_room_moves": {
+                "d1": {
+                    "room_id": "r2",
+                    "output_address": 11,
+                    "is_light": True,
+                    "dimmable": True,
+                    "new_room_address": 34,
+                }
+            },
         },
         options={
             "transport": "gateway",
@@ -96,6 +105,11 @@ async def test_diagnostics_redacts_secrets_and_pii():
     assert room["dimmable"] is True  # not sensitive and is kept
     # schedules (occupancy/routine) are redacted wholesale, transport pref kept
     assert diag["options"]["schedules"] == "**REDACTED**" and diag["options"]["transport"] == "gateway"
+    # move_device_to_room's own not-yet-cloud-confirmed moves also carry mesh addresses
+    pending = data["pending_room_moves"]["d1"]
+    assert pending["output_address"] == "**REDACTED**"
+    assert pending["new_room_address"] == "**REDACTED**"
+    assert pending["room_id"] == "**REDACTED**"
 
 
 async def test_diagnostics_reports_transport_and_counts():
