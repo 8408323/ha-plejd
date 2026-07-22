@@ -301,7 +301,7 @@ async def test_create_schedule_succeeds_and_caches_it(monkeypatch):
     update_mock = AsyncMock(return_value={"eventId": "te1"})
     monkeypatch.setattr("plejd.manage_schedule.async_cloud_update_time_event", update_mock)
 
-    await async_create_schedule(
+    schedule_id = await async_create_schedule(
         hass,
         entry,
         title="Garage",
@@ -312,6 +312,10 @@ async def test_create_schedule_succeeds_and_caches_it(monkeypatch):
         end_offset=0,
     )
 
+    # The generated id isn't otherwise discoverable (getSiteById can't rediscover it, and
+    # diagnostics redacts the cache) - callers (the create_schedule service handler, which
+    # fires it as an event) need this return value to surface it.
+    assert schedule_id == entry.data["cloud_schedules"][0]["schedule_id"]
     create_mock.assert_awaited_once_with(
         None,
         "tok",

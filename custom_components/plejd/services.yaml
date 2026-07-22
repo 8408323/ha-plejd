@@ -293,7 +293,9 @@ create_schedule:
     plus an optional night-reduction quiet-hours window, then reload the
     config entry. Cloud-only, like create_scene - open the Plejd app once
     before relying on local/BLE-only execution. Only astro (sunset/sunrise)
-    triggers are supported; a fixed clock-time trigger isn't yet.
+    triggers are supported; a fixed clock-time trigger isn't yet. Fires
+    plejd_schedule_created with the generated schedule_id - update_schedule
+    needs it, and there's no other way to look it up.
   fields:
     title:
       name: Title

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import uuid
 from dataclasses import asdict
 
@@ -51,6 +52,8 @@ from .const import (
     SCHEDULE_OFFSET_MAX,
     SCHEDULE_OFFSET_MIN,
 )
+
+_LOGGER = logging.getLogger(__name__)
 
 _DATA_LOCKS = "plejd_cloud_schedule_locks"
 
@@ -131,9 +134,14 @@ async def _async_cleanup_orphaned_scenes(http_session, token: str, site_id: str,
         try:
             await async_cloud_remove_scene(http_session, token, site_id, scene_id)
         except PlejdCloudError:
-            # Best-effort: the caller is already raising the real failure: don't let a
-            # failed cleanup attempt replace or mask it.
-            pass
+            # Best-effort: the caller is already raising the real failure, so this must not
+            # replace or mask it - but a silently-abandoned hidden scene needs a trail for
+            # support to find later, so log it rather than dropping it entirely.
+            _LOGGER.warning(
+                "Plejd: could not clean up orphaned scene %s after a schedule create/update failure",
+                scene_id,
+                exc_info=True,
+            )
 
 
 def _validate_trigger(event: str, offset: int, label: str) -> None:
@@ -212,8 +220,14 @@ async def async_create_schedule(
     scheduled_days: list[int] | None = None,
     fade_time: int = 0,
     night_reduction: dict | None = None,
-) -> None:
-    """Create a cloud schedule: an on-scene, an optional night-reduction scene, and the trigger linking them."""
+) -> str:
+    """Create a cloud schedule: an on-scene, an optional night-reduction scene, and the trigger linking them.
+
+    Returns the generated schedule_id - the only place a caller can otherwise learn it is by
+    reading entry.data[CONF_CLOUD_SCHEDULES] directly, since getSiteById can't be used to
+    rediscover it (see the module docstring); the schedule_created service handler fires it
+    as an event so it's visible from the Services UI too.
+    """
     if not scene_steps:
         raise HomeAssistantError("create_schedule needs at least one scene step")
     _validate_trigger(start_event, start_offset, "start")
@@ -298,6 +312,7 @@ async def async_create_schedule(
         }
         cloud_schedules = [*entry.data.get(CONF_CLOUD_SCHEDULES, []), schedule]
         await _async_refresh_and_reload(hass, entry, http_session, token, cloud_schedules=cloud_schedules)
+        return schedule_id
 
 
 async def async_update_schedule(
