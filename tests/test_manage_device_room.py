@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import types
 from unittest.mock import AsyncMock, MagicMock
 
@@ -262,6 +263,58 @@ async def test_move_device_leaves_room_membership_untouched_for_a_non_light_devi
     assert rooms_by_id == {"r1": {**vars(old_room)}}  # untouched: still lists 39, no r2 entry added
 
 
+async def test_move_device_drops_an_existing_destination_room_light_for_a_non_light_move(monkeypatch):
+    # Unlike the sibling test above (no r2 entry existed yet), here the destination
+    # already has a cached light-group entity with OTHER light members. The mesh group
+    # now genuinely contains a non-light member too - the stale "light-only" cache must
+    # be dropped, not left in place, or its room light would keep broadcasting to it.
+    hass = _hass()
+    entry = _entry()
+    old_room = PlejdCloudRoom(
+        room_id="r1", name="Kok", address=14, member_addresses=[39], dimmable=False, dimmable_addresses=[]
+    )
+    destination_room = PlejdCloudRoom(
+        room_id="r2", name="Stora badrummet", address=34, member_addresses=[50], dimmable=True, dimmable_addresses=[50]
+    )
+    site = _site(
+        devices=[_device(room_id="r1", category="switch", dimmable=False)],
+        device_addresses={"d1": 39},
+        all_rooms=[_room("r1", "Kok", address=14), _room("r2", "Stora badrummet", address=34)],
+        rooms=[old_room, destination_room],
+    )
+    monkeypatch.setattr("plejd.manage_device_room.async_login", AsyncMock(return_value="tok"))
+    monkeypatch.setattr("plejd.manage_device_room.async_get_site", AsyncMock(side_effect=[site, site]))
+
+    await async_move_device_to_room(hass, entry, device_id="d1", room_id="r2")
+
+    room_ids = {r["room_id"] for r in entry.data["rooms"]}
+    assert room_ids == {"r1"}  # r2's now-unsafe light-group entity is dropped entirely
+
+
+async def test_move_device_leaves_room_membership_untouched_when_output_address_unresolved(monkeypatch):
+    # A device whose own mesh address is known (own_address, from deviceAddress) but whose
+    # SPECIFIC output has no resolvable address (e.g. an explicit null in outputAddress)
+    # can't be safely keyed into member_addresses at all.
+    hass = _hass()
+    entry = _entry()
+    old_room = PlejdCloudRoom(
+        room_id="r1", name="Kok", address=14, member_addresses=[41], dimmable=True, dimmable_addresses=[41]
+    )
+    site = _site(
+        devices=[_device(room_id="r1", address=None, outputs=[])],
+        device_addresses={"d1": 39},
+        all_rooms=[_room("r1", "Kok", address=14), _room("r2", "Stora badrummet", address=34)],
+        rooms=[old_room],
+    )
+    monkeypatch.setattr("plejd.manage_device_room.async_login", AsyncMock(return_value="tok"))
+    monkeypatch.setattr("plejd.manage_device_room.async_get_site", AsyncMock(side_effect=[site, site]))
+
+    await async_move_device_to_room(hass, entry, device_id="d1", room_id="r2")
+
+    rooms_by_id = {r["room_id"]: r for r in entry.data["rooms"]}
+    assert rooms_by_id == {"r1": {**vars(old_room)}}  # left untouched, nothing resolvable to key off
+
+
 async def test_move_device_does_not_synthesize_a_room_not_already_present(monkeypatch):
     # parse_site() can exclude a room from `rooms` for a real reason (no other light
     # member, or a non-light member sharing its group address) that this function has no
@@ -416,6 +469,52 @@ async def test_move_device_preserves_an_earlier_pending_move_for_another_device(
     assert devices_by_id["d"]["room_id"] == "r1"  # passed through untouched, no override existed
 
 
+async def test_move_device_reapplies_room_membership_for_every_pending_device(monkeypatch):
+    # This always starts fresh from the cloud's own rooms snapshot each call - refreshing
+    # for one device's move must re-apply an EARLIER, still-unconverged device's own
+    # room-membership patch too, not just persist its roomId (see the device_id test
+    # above) - or the earlier move's membership correction gets silently wiped out.
+    hass = _hass()
+    entry = _entry()
+    all_rooms = [
+        _room("r1", "Kok", address=14),
+        _room("r2", "Stora badrummet", address=34),
+        _room("r3", "Sovrum", address=46),
+    ]
+    r1 = PlejdCloudRoom(
+        room_id="r1", name="Kok", address=14, member_addresses=[39, 51], dimmable=True, dimmable_addresses=[39, 51]
+    )
+    r2 = PlejdCloudRoom(
+        room_id="r2", name="Stora badrummet", address=34, member_addresses=[60], dimmable=True, dimmable_addresses=[60]
+    )
+    stale_site = _site(
+        devices=[
+            _device(device_id="a", room_id="r1", address=39),
+            _device(device_id="b", room_id="r1", address=51),
+        ],
+        device_addresses={"a": 39, "b": 51},
+        all_rooms=all_rooms,
+        rooms=[r1, r2],
+    )
+    monkeypatch.setattr("plejd.manage_device_room.async_login", AsyncMock(return_value="tok"))
+    monkeypatch.setattr("plejd.manage_device_room.async_get_site", AsyncMock(side_effect=[stale_site, stale_site]))
+    await async_move_device_to_room(hass, entry, device_id="a", room_id="r2")
+
+    rooms_by_id = {r["room_id"]: r for r in entry.data["rooms"]}
+    assert rooms_by_id["r1"]["member_addresses"] == [51]
+    assert rooms_by_id["r2"]["member_addresses"] == [39, 60]
+
+    # Move "b" too - the cloud fetch is the SAME stale snapshot, with no idea "a" ever
+    # moved (still shows r1=[39, 51], r2=[60]).
+    monkeypatch.setattr("plejd.manage_device_room.async_get_site", AsyncMock(side_effect=[stale_site, stale_site]))
+    await async_move_device_to_room(hass, entry, device_id="b", room_id="r3")
+
+    rooms_by_id = {r["room_id"]: r for r in entry.data["rooms"]}
+    assert "r1" not in rooms_by_id  # both a and b have left - dropped, matching parse_site()
+    assert rooms_by_id["r2"]["member_addresses"] == [39, 60]  # a's earlier move still applied
+    assert "r3" not in rooms_by_id  # no pre-existing entry to patch - declined synthesis
+
+
 async def test_move_device_skips_leave_when_device_has_no_current_room(monkeypatch):
     hass = _hass()
     coordinator = _coordinator()
@@ -510,3 +609,50 @@ async def test_move_device_runs_a_follow_up_reload_for_a_concurrent_change(monke
 
     assert hass.config_entries.async_reload.await_count == 2  # ours, then the follow-up
     assert schedule_ws.DATA_RELOAD_PENDING not in hass.data
+
+
+async def test_move_device_serializes_concurrent_calls_for_the_same_device(monkeypatch):
+    # Two overlapping calls for the SAME device must not both read the same "current
+    # room" before either records its own move - or the device could end up joined to
+    # both destinations. Simulated by pausing the first call's login until the second
+    # call has had a chance to run and confirming it hasn't started its own login yet.
+    hass = _hass()
+    coordinator = _coordinator()
+    entry = _entry(runtime_data=coordinator)
+    site = _site(
+        devices=[_device(room_id="r1")],
+        device_addresses={"d1": 39},
+        all_rooms=[
+            _room("r1", "Kok", address=14),
+            _room("r2", "Stora badrummet", address=34),
+            _room("r3", "Sovrum", address=46),
+        ],
+    )
+    monkeypatch.setattr("plejd.manage_device_room.async_get_site", AsyncMock(return_value=site))
+
+    call_order: list[str] = []
+    release_first = asyncio.Event()
+
+    async def _login_pauses_the_first_call(*_args, **_kwargs):
+        call_order.append("login_start")
+        if len(call_order) == 1:
+            await release_first.wait()
+        call_order.append("login_done")
+        return "tok"
+
+    monkeypatch.setattr("plejd.manage_device_room.async_login", _login_pauses_the_first_call)
+
+    first = asyncio.ensure_future(async_move_device_to_room(hass, entry, device_id="d1", room_id="r2"))
+    await asyncio.sleep(0)
+    second = asyncio.ensure_future(async_move_device_to_room(hass, entry, device_id="d1", room_id="r3"))
+    await asyncio.sleep(0)
+
+    assert call_order == ["login_start"]  # the second call is still blocked on the lock
+
+    release_first.set()
+    await first
+    await second
+
+    assert call_order == ["login_start", "login_done", "login_start", "login_done"]
+    coordinator.async_join_mesh_group.assert_any_await(39, 34)  # r2, from the first call
+    coordinator.async_join_mesh_group.assert_any_await(39, 46)  # r3, from the second call
