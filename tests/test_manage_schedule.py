@@ -880,6 +880,31 @@ async def test_update_schedule_marks_a_dropped_device_as_dirty_removed(monkeypat
     assert time_event_mock.await_args.kwargs["dirty_removed_devices"] == ["d2"]
 
 
+async def test_update_schedule_keeps_old_device_ids_if_the_trigger_update_is_rejected(monkeypatch):
+    # The scene edit (dropping d2) really did land on the cloud, but the trigger update that
+    # would tell the cloud d2 is no longer dirty was rejected - caching the NEW device_ids
+    # anyway would make a later retry think d2 was already reported removed and never resend
+    # dirtyRemovedDevices for it.
+    hass = _hass()
+    entry = _entry(
+        data={
+            "email": "u@x.com",
+            "password": "pw",
+            "site_id": "S1",
+            "cloud_schedules": [_cached_schedule(device_ids=["d1", "d2"])],
+        }
+    )
+    monkeypatch.setattr("plejd.manage_schedule.async_login", AsyncMock(return_value="tok"))
+    monkeypatch.setattr("plejd.manage_schedule.async_get_site", AsyncMock(return_value=_site([_scene()])))
+    monkeypatch.setattr("plejd.manage_schedule.async_cloud_update_scene", AsyncMock(return_value=True))
+    monkeypatch.setattr("plejd.manage_schedule.async_cloud_update_time_event", AsyncMock(return_value=None))
+
+    with pytest.raises(HomeAssistantError, match="rejected the schedule update"):
+        await async_update_schedule(hass, entry, schedule_id="te1", scene_steps=[_STEP])
+
+    assert entry.data["cloud_schedules"][0]["device_ids"] == ["d1", "d2"]
+
+
 async def test_update_schedule_adds_night_reduction_creating_its_scene(monkeypatch):
     hass = _hass()
     entry = _entry(
@@ -1053,3 +1078,33 @@ async def test_update_schedule_raises_on_cloud_error_during_refresh(monkeypatch)
     # The trigger update already succeeded on the cloud before the refresh failed - the local
     # cache must still reflect it, not silently revert to the pre-update state.
     assert entry.data["cloud_schedules"][0]["start_offset"] == 30
+
+
+async def test_update_schedule_serializes_concurrent_calls_to_the_same_schedule(monkeypatch):
+    # Two concurrent update_schedule calls for the same schedule must not race on the
+    # read-build-send-persist sequence: without full serialization, both could send a
+    # whole-state cloud payload built from the same stale snapshot, and the later one to
+    # persist locally could roll back the other's already-applied change.
+    hass = _hass()
+    entry = _entry(
+        data={"email": "u@x.com", "password": "pw", "site_id": "S1", "cloud_schedules": [_cached_schedule()]}
+    )
+    monkeypatch.setattr("plejd.manage_schedule.async_login", AsyncMock(return_value="tok"))
+
+    async def _get_site(*args, **kwargs):
+        await asyncio.sleep(0)
+        return _site([_scene()])
+
+    monkeypatch.setattr("plejd.manage_schedule.async_get_site", _get_site)
+    monkeypatch.setattr(
+        "plejd.manage_schedule.async_cloud_update_time_event", AsyncMock(return_value={"eventId": "te1"})
+    )
+
+    await asyncio.gather(
+        async_update_schedule(hass, entry, schedule_id="te1", fade_time=5),
+        async_update_schedule(hass, entry, schedule_id="te1", activated=False),
+    )
+
+    cached = entry.data["cloud_schedules"][0]
+    assert cached["fade_time"] == 5
+    assert cached["activated"] is False

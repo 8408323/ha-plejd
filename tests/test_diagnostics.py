@@ -68,6 +68,22 @@ def _entry():
                     "new_room_address": 34,
                 }
             },
+            "cloud_schedules": [
+                {
+                    "schedule_id": "te1",
+                    "scene_id": "s1",
+                    "title": "Garage",
+                    "device_ids": ["d1"],
+                    "scheduled_days": [0, 1, 2, 3, 4, 5, 6],
+                    "fade_time": 0,
+                    "activated": True,
+                    "start_event": "sunset",
+                    "start_offset": 15,
+                    "end_event": "sunrise",
+                    "end_offset": 0,
+                    "night_reduction": None,
+                }
+            ],
         },
         options={
             "transport": "gateway",
@@ -109,12 +125,23 @@ async def test_diagnostics_redacts_secrets_and_pii():
     # it's keyed BY device_id (a dict key, invisible to a by-value redactor) and its values
     # carry mesh addresses too
     assert data["pending_room_moves"] == "**REDACTED**"
+    # cloud schedules (astro triggers + night reduction) reveal occupancy/routine just like
+    # the on-device ones above — redacted wholesale, count reported below
+    assert data["cloud_schedules"] == "**REDACTED**"
 
 
 async def test_diagnostics_reports_transport_and_counts():
     diag = await async_get_config_entry_diagnostics(None, _entry())
     assert diag["active_transport"] == "gateway" and diag["available"] is True
-    assert diag["counts"] == {"devices": 2, "scenes": 1, "inputs": 0, "motion": 0, "gateways": 1, "schedules": 1}
+    assert diag["counts"] == {
+        "devices": 2,
+        "scenes": 1,
+        "inputs": 0,
+        "motion": 0,
+        "gateways": 1,
+        "schedules": 1,
+        "cloud_schedules": 1,
+    }
     assert diag["models"] == ["CTR-01", "DIM-01"]
 
 
