@@ -36,7 +36,7 @@ def _device(device_id="d1", name="Spottar", address=11) -> PlejdCloudDevice:
     )
 
 
-def _site(devices=None, inputs=None, motion=None, gateways=None) -> PlejdCloudSite:
+def _site(devices=None, inputs=None, motion=None, gateways=None, resource_set_id=None, firmware_by_device=None):
     devices = devices or []
     inputs = inputs or []
     motion = motion or []
@@ -53,8 +53,9 @@ def _site(devices=None, inputs=None, motion=None, gateways=None) -> PlejdCloudSi
         motion=motion,
         scenes=[],
         gateways=gateways or [],
-        resource_set_id=None,
+        resource_set_id=resource_set_id,
         device_addresses=device_addresses,
+        firmware_by_device=firmware_by_device or {},
     )
 
 
@@ -62,16 +63,20 @@ def _hass():
     return types.SimpleNamespace(
         data={},
         config_entries=types.SimpleNamespace(
-            async_update_entry=lambda entry, data: setattr(entry, "data", data),
+            async_update_entry=lambda entry, data, options=None: (
+                setattr(entry, "data", data),
+                setattr(entry, "options", options if options is not None else entry.options),
+            ),
             async_reload=AsyncMock(),
         ),
     )
 
 
-def _entry(data=None):
+def _entry(data=None, options=None):
     return types.SimpleNamespace(
         entry_id="e1",
         data=data or {"email": "u@x.com", "password": "pw", "site_id": "S1"},
+        options=options or {},
         async_start_reauth=lambda hass: None,
     )
 
@@ -187,6 +192,61 @@ async def test_remove_device_found_despite_missing_address_entry(monkeypatch):
     monkeypatch.setattr("plejd.manage_device.async_cloud_remove_device", AsyncMock(return_value=False))
     with pytest.raises(HomeAssistantError, match="Orphaned dimmer"):
         await async_remove_device(_hass(), _entry(), device_id="d4")
+
+
+async def test_remove_device_found_via_firmware_by_device_only(monkeypatch):
+    # A physical device (e.g. a motion sensor) whose deviceAddress lookup also failed is
+    # missing from devices/inputs/motion entirely, not just address-less within one of
+    # them - but parse_site() still tracks it in firmware_by_device unconditionally.
+    device = _device(device_id="d5", name="Spottar")  # any device present, so the site isn't fully empty
+    monkeypatch.setattr("plejd.manage_device.async_login", AsyncMock(return_value="tok"))
+    monkeypatch.setattr(
+        "plejd.manage_device.async_get_site",
+        AsyncMock(return_value=_site([device], firmware_by_device={"d6": object()})),
+    )
+    monkeypatch.setattr("plejd.manage_device.async_cloud_remove_device", AsyncMock(return_value=False))
+    with pytest.raises(HomeAssistantError, match="d6"):  # no display name available - falls back to the id
+        await async_remove_device(_hass(), _entry(), device_id="d6")
+
+
+async def test_remove_device_resets_forced_transport_when_gateway_removed(monkeypatch):
+    hass = _hass()
+    entry = _entry(options={"transport": "gateway"})
+    monkeypatch.setattr("plejd.manage_device.async_login", AsyncMock(return_value="tok"))
+    monkeypatch.setattr(
+        "plejd.manage_device.async_get_site",
+        AsyncMock(
+            side_effect=[
+                _site([_device()], gateways=["GWY-01"], resource_set_id="rs1"),
+                _site([], gateways=[], resource_set_id=None),  # gateway is gone after removal
+            ]
+        ),
+    )
+    monkeypatch.setattr("plejd.manage_device.async_cloud_remove_device", AsyncMock(return_value=True))
+
+    await async_remove_device(hass, entry, device_id="d1")
+
+    assert entry.options["transport"] == "auto"
+
+
+async def test_remove_device_keeps_forced_transport_when_gateway_remains(monkeypatch):
+    hass = _hass()
+    entry = _entry(options={"transport": "gateway"})
+    monkeypatch.setattr("plejd.manage_device.async_login", AsyncMock(return_value="tok"))
+    monkeypatch.setattr(
+        "plejd.manage_device.async_get_site",
+        AsyncMock(
+            side_effect=[
+                _site([_device()], gateways=["GWY-01"], resource_set_id="rs1"),
+                _site([], gateways=["GWY-01"], resource_set_id="rs1"),  # gateway still present
+            ]
+        ),
+    )
+    monkeypatch.setattr("plejd.manage_device.async_cloud_remove_device", AsyncMock(return_value=True))
+
+    await async_remove_device(hass, entry, device_id="d1")
+
+    assert entry.options["transport"] == "gateway"
 
 
 async def test_remove_device_finds_gateway_by_id_with_no_display_name(monkeypatch):

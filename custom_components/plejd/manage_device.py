@@ -33,6 +33,8 @@ from .const import (
     CONF_ROOMS,
     CONF_SCENES,
     CONF_SITE_ID,
+    CONF_TRANSPORT,
+    TRANSPORT_AUTO,
 )
 
 
@@ -64,6 +66,12 @@ async def _async_refresh_and_reload(hass: HomeAssistant, entry: ConfigEntry, htt
     # own _async_persist uses for the identical async_update_entry -> listener race.
     hass.data[schedule_ws.DATA_MANUAL_RELOAD] = entry.entry_id
     try:
+        # Mirrors the config-flow/schedule_ws guard: drop a forced gateway-only
+        # preference once there's no usable gateway left, or removing the gateway
+        # device would leave the coordinator stuck raising ConfigEntryNotReady forever
+        # on reload instead of falling back to BLE.
+        has_gateway = bool(fresh_site.gateways and fresh_site.resource_set_id)
+        new_transport = entry.options.get(CONF_TRANSPORT, TRANSPORT_AUTO) if has_gateway else TRANSPORT_AUTO
         hass.config_entries.async_update_entry(
             entry,
             data={
@@ -77,6 +85,7 @@ async def _async_refresh_and_reload(hass: HomeAssistant, entry: ConfigEntry, htt
                 CONF_RESOURCE_SET_ID: fresh_site.resource_set_id,
                 CONF_DEVICE_ADDRESSES: fresh_site.device_addresses,
             },
+            options={**entry.options, CONF_TRANSPORT: new_transport},
         )
         if not await hass.config_entries.async_reload(entry.entry_id):
             # e.g. a platform refused to unload - the entry may still be running the old
@@ -108,13 +117,16 @@ def _device_name(site, device_id: str) -> str | None:
 async def async_remove_device(hass: HomeAssistant, entry: ConfigEntry, *, device_id: str) -> None:
     """Remove a device from the site, then refresh + reload the config entry."""
     http_session, token, site = await _async_login_and_get_site(hass, entry)
-    # Checked directly against devices/inputs/motion/gateways, not device_addresses - a
-    # device with a missing or malformed cloud address entry still belongs here (that's
-    # exactly the kind of stale device this service exists to decommission), and
-    # site.devices alone only holds controllable outputs, not inputs/motion/gateways
-    # (see #114's identical all_rooms/rooms distinction).
+    # Checked directly against devices/inputs/motion/gateways/firmware_by_device, not
+    # device_addresses - a device with a missing or malformed cloud address entry still
+    # belongs here (that's exactly the kind of stale device this service exists to
+    # decommission), and site.devices alone only holds controllable outputs, not
+    # inputs/motion/gateways (see #114's identical all_rooms/rooms distinction).
+    # firmware_by_device is unconditionally built from every plejdDevices/gateways entry
+    # (cloud.py), so it still covers a physical device (e.g. a motion sensor) that's
+    # missing from inputs/motion entirely because ITS address lookup failed too.
     name = _device_name(site, device_id)
-    if name is None and device_id not in site.gateways:
+    if name is None and device_id not in site.gateways and device_id not in site.firmware_by_device:
         raise HomeAssistantError(f"Plejd device {device_id} not found on this site")
     name = name or device_id
     try:

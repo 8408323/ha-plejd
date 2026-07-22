@@ -25,6 +25,11 @@ from .remote_profiles import PlejdRemoteProfiles
 
 _WS_REGISTERED = f"{DOMAIN}_ws_registered"
 _SERVICES_REGISTERED = f"{DOMAIN}_services_registered"
+# The config entry the permanently-registered service handlers below should act on -
+# refreshed on every async_setup_entry call (including a retry or a later reinstall), so
+# the handlers stay bound to whichever entry is actually current instead of the first one
+# ever seen. Deliberately never cleared on unload: see the registration comment below.
+_DATA_CURRENT_ENTRY = f"{DOMAIN}_current_entry"
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -119,11 +124,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     coordinator = PlejdCoordinator(hass, entry)
     # Assign before connecting so diagnostics work even while setup is still failing.
     entry.runtime_data = coordinator
+    # Refreshed on every attempt (including a retry, or a later remove+reinstall) so the
+    # permanently-registered handlers below always act on whichever entry is current -
+    # see _DATA_CURRENT_ENTRY.
+    hass.data[_DATA_CURRENT_ENTRY] = entry
 
     async def _async_handle_add_device(call) -> None:
+        current_entry = hass.data[_DATA_CURRENT_ENTRY]
         await async_add_device(
             hass,
-            entry,
+            current_entry,
             address=call.data["device_address"],
             name=call.data["name"],
             hardware_id=call.data.get("hardware_id", "0"),
@@ -146,15 +156,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.bus.async_fire(f"{DOMAIN}_new_devices_found", {"devices": new_devices})
 
     async def _async_handle_all_off(call) -> None:
-        # entry.runtime_data, not the closed-over coordinator: this handler is only
-        # ever (re-)registered on the first setup attempt (see the registration guard
-        # below), so a later successful retry's coordinator must be looked up fresh.
-        await entry.runtime_data.async_all_off()
+        # entry.runtime_data of the CURRENT entry, not a closed-over coordinator: this
+        # handler is only ever (re-)registered on the first setup attempt (see the
+        # registration guard below), so a later retry's or reinstall's coordinator must
+        # be looked up fresh.
+        await hass.data[_DATA_CURRENT_ENTRY].runtime_data.async_all_off()
 
     async def _async_handle_update_room(call) -> None:
+        current_entry = hass.data[_DATA_CURRENT_ENTRY]
         await async_update_room(
             hass,
-            entry,
+            current_entry,
             room_id=call.data["room_id"],
             title=call.data.get("title"),
             order=call.data.get("order"),
@@ -162,12 +174,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         )
 
     async def _async_handle_remove_room(call) -> None:
-        await async_remove_room(hass, entry, room_id=call.data["room_id"])
+        current_entry = hass.data[_DATA_CURRENT_ENTRY]
+        await async_remove_room(hass, current_entry, room_id=call.data["room_id"])
 
     async def _async_handle_create_scene(call) -> None:
+        current_entry = hass.data[_DATA_CURRENT_ENTRY]
         await async_create_scene(
             hass,
-            entry,
+            current_entry,
             title=call.data["title"],
             scene_steps=call.data["scene_steps"],
             order=call.data["order"],
@@ -175,9 +189,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         )
 
     async def _async_handle_update_scene(call) -> None:
+        current_entry = hass.data[_DATA_CURRENT_ENTRY]
         await async_update_scene(
             hass,
-            entry,
+            current_entry,
             scene_id=call.data["scene_id"],
             title=call.data.get("title"),
             order=call.data.get("order"),
@@ -186,10 +201,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         )
 
     async def _async_handle_remove_scene(call) -> None:
-        await async_remove_scene(hass, entry, scene_id=call.data["scene_id"])
+        current_entry = hass.data[_DATA_CURRENT_ENTRY]
+        await async_remove_scene(hass, current_entry, scene_id=call.data["scene_id"])
 
     async def _async_handle_remove_device(call) -> None:
-        await async_remove_device(hass, entry, device_id=call.data["device_id"])
+        current_entry = hass.data[_DATA_CURRENT_ENTRY]
+        await async_remove_device(hass, current_entry, device_id=call.data["device_id"])
 
     # Registered once per hass lifetime, before coordinator.async_start(), and NOT torn
     # down by entry.async_on_unload: HA runs every already-registered on_unload callback
@@ -198,7 +215,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # after registering them - defeating the point of registering early (e.g. being able
     # to remove_device the one stale device that's keeping the mesh from connecting).
     # Same permanent-registration pattern already used below for the WS commands; safe
-    # here too since this integration is single_config_entry (only one entry ever exists).
+    # here too since this integration is single_config_entry (only one entry ever exists)
+    # and every handler above reads hass.data[_DATA_CURRENT_ENTRY] fresh rather than
+    # closing over this specific attempt's entry, so they rebind correctly even after a
+    # full remove+reinstall (not just a setup retry) without needing to re-register.
     if not hass.data.get(_SERVICES_REGISTERED):
         hass.services.async_register(DOMAIN, SERVICE_ADD_DEVICE, _async_handle_add_device, schema=_ADD_DEVICE_SCHEMA)
         hass.services.async_register(DOMAIN, SERVICE_SCAN_DEVICES, _async_handle_scan_devices)

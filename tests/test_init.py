@@ -680,6 +680,28 @@ async def test_update_room_service_forwards_call_data(monkeypatch):
     update_room.assert_awaited_once_with(hass, entry, room_id="r1", title="Kök", order=2, category="Kitchen")
 
 
+async def test_update_room_service_rebinds_to_a_new_entry_after_reinstall(monkeypatch):
+    # The handler is only ever (re-)registered on the first setup attempt (the guard
+    # skips re-registering later), so removing the integration and adding it again
+    # (a genuinely different ConfigEntry object, not just a retry of the same one) must
+    # still route to the new entry, not the one the closures were first created for.
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    _FakeCoordinator.instances.clear()
+    hass, entry1 = _hass(), _entry()
+    await async_setup_entry(hass, entry1)
+    handler = hass.services._handlers[f"plejd.{SERVICE_UPDATE_ROOM}"]
+
+    entry2 = _entry()
+    entry2.entry_id = "e2"
+    await async_setup_entry(hass, entry2)
+
+    update_room = AsyncMock()
+    monkeypatch.setattr(plejd, "async_update_room", update_room)
+    await handler(types.SimpleNamespace(data={"room_id": "r1"}))
+
+    update_room.assert_awaited_once_with(hass, entry2, room_id="r1", title=None, order=None, category=None)
+
+
 async def test_update_room_service_forwards_defaults(monkeypatch):
     monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
     _FakeCoordinator.instances.clear()
