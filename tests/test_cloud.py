@@ -18,6 +18,7 @@ from plejd.cloud import (
     async_get_site,
     async_get_sites,
     async_login,
+    async_remove_device,
     async_remove_room,
     async_remove_scene,
     async_set_device_title,
@@ -31,6 +32,7 @@ from plejd.const import (
     PLEJD_FN_CREATE_DEVICE,
     PLEJD_FN_CREATE_ROOM,
     PLEJD_FN_CREATE_SCENE,
+    PLEJD_FN_REMOVE_DEVICE,
     PLEJD_FN_REMOVE_ROOM,
     PLEJD_FN_REMOVE_SCENE,
     PLEJD_FN_SET_INPUT,
@@ -50,6 +52,7 @@ _REMOVE_ROOM = PLEJD_PARSE_URL + PLEJD_FN_REMOVE_ROOM
 _CREATE_SCENE = PLEJD_PARSE_URL + PLEJD_FN_CREATE_SCENE
 _UPDATE_SCENE = PLEJD_PARSE_URL + PLEJD_FN_UPDATE_SCENE
 _REMOVE_SCENE = PLEJD_PARSE_URL + PLEJD_FN_REMOVE_SCENE
+_REMOVE_DEVICE = PLEJD_PARSE_URL + PLEJD_FN_REMOVE_DEVICE
 _SET_INPUT = PLEJD_PARSE_URL + PLEJD_FN_SET_INPUT
 
 _SITE = {
@@ -781,6 +784,31 @@ async def test_remove_scene_rejects_malformed_truthy_result():
         m.post(_REMOVE_SCENE, payload={"result": {}})
         async with aiohttp.ClientSession() as s:
             ok = await async_remove_scene(s, "tok", "site1", "scene1")
+    assert ok is False
+
+
+async def test_remove_device_posts_correct_payload():
+    from aioresponses import CallbackResult
+
+    captured: dict = {}
+
+    def _capture(url, **kwargs):
+        captured.update(kwargs.get("json", {}))
+        return CallbackResult(payload={"result": True})
+
+    with aioresponses() as m:
+        m.post(_REMOVE_DEVICE, callback=_capture)
+        async with aiohttp.ClientSession() as s:
+            ok = await async_remove_device(s, "tok", "site1", "d1")
+    assert ok is True
+    assert captured == {"siteId": "site1", "deviceId": "d1"}
+
+
+async def test_remove_device_rejects_malformed_truthy_result():
+    with aioresponses() as m:
+        m.post(_REMOVE_DEVICE, payload={"result": {}})
+        async with aiohttp.ClientSession() as s:
+            ok = await async_remove_device(s, "tok", "site1", "d1")
     assert ok is False
 
 

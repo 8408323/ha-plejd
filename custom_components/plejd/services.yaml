@@ -246,6 +246,23 @@ remove_scene:
       selector:
         text:
 
+remove_device:
+  name: Remove device
+  description: >-
+    Remove a device from the site, then reload the config entry. This
+    decommissions the device in the Plejd cloud - do this after physically
+    removing or replacing the hardware, not while it's still installed.
+  fields:
+    device_id:
+      name: Device ID
+      description: >-
+        Plejd cloud device ID, exactly as shown for the device (e.g. in its HA
+        device info or the add_device/scan_new_devices results) - matching is
+        case-sensitive.
+      required: true
+      selector:
+        text:
+
 start_dim:
   name: Start dimming
   description: >-

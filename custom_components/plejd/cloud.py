@@ -25,6 +25,7 @@ from .const import (
     PLEJD_FN_CREATE_ROOM,
     PLEJD_FN_CREATE_SCENE,
     PLEJD_FN_FIRMWARE_BY_HW,
+    PLEJD_FN_REMOVE_DEVICE,
     PLEJD_FN_REMOVE_ROOM,
     PLEJD_FN_REMOVE_SCENE,
     PLEJD_FN_SET_INPUT,
@@ -285,6 +286,12 @@ async def async_set_device_title(
     """Rename a device in the Plejd cloud (mirrors to the Plejd app). Returns the cloud's ok flag."""
     body = {"siteId": site_id, "deviceId": device_id, "deviceParseId": device_parse_id, "title": title}
     result = await _call_function(session, token, PLEJD_FN_UPDATE_DEVICE, body)
+    return result is True
+
+
+async def async_remove_device(session: ClientSession, token: str, site_id: str, device_id: str) -> bool:
+    """Remove a device from the site."""
+    result = await _call_function(session, token, PLEJD_FN_REMOVE_DEVICE, {"siteId": site_id, "deviceId": device_id})
     return result is True
 
 

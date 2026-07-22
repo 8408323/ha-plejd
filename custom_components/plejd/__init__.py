@@ -18,11 +18,18 @@ from .const import CONF_SHOW_PANEL, DOMAIN, ROOM_CATEGORIES
 from .coordinator import PlejdCoordinator
 from .discovery import async_bluetooth_available, async_scan_unprovisioned
 from .holiday_mode import DATA_HOLIDAY_MODE, PlejdHolidayMode
+from .manage_device import async_remove_device
 from .manage_room import async_remove_room, async_update_room
 from .manage_scene import async_create_scene, async_remove_scene, async_update_scene
 from .remote_profiles import PlejdRemoteProfiles
 
 _WS_REGISTERED = f"{DOMAIN}_ws_registered"
+_SERVICES_REGISTERED = f"{DOMAIN}_services_registered"
+# The config entry the permanently-registered service handlers below should act on -
+# refreshed on every async_setup_entry call (including a retry or a later reinstall), so
+# the handlers stay bound to whichever entry is actually current instead of the first one
+# ever seen. Deliberately never cleared on unload: see the registration comment below.
+_DATA_CURRENT_ENTRY = f"{DOMAIN}_current_entry"
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -49,6 +56,7 @@ SERVICE_REMOVE_ROOM = "remove_room"
 SERVICE_CREATE_SCENE = "create_scene"
 SERVICE_UPDATE_SCENE = "update_scene"
 SERVICE_REMOVE_SCENE = "remove_scene"
+SERVICE_REMOVE_DEVICE = "remove_device"
 
 _INPUT_SETTING_SCHEMA = vol.Schema({vol.Required("input"): int, vol.Required("button_type"): str})
 
@@ -109,11 +117,128 @@ _UPDATE_SCENE_SCHEMA = vol.Schema(
 
 _REMOVE_SCENE_SCHEMA = vol.Schema({vol.Required("scene_id"): str})
 
+_REMOVE_DEVICE_SCHEMA = vol.Schema({vol.Required("device_id"): str})
+
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     coordinator = PlejdCoordinator(hass, entry)
     # Assign before connecting so diagnostics work even while setup is still failing.
     entry.runtime_data = coordinator
+    # Refreshed on every attempt (including a retry, or a later remove+reinstall) so the
+    # permanently-registered handlers below always act on whichever entry is current -
+    # see _DATA_CURRENT_ENTRY.
+    hass.data[_DATA_CURRENT_ENTRY] = entry
+
+    async def _async_handle_add_device(call) -> None:
+        current_entry = hass.data[_DATA_CURRENT_ENTRY]
+        await async_add_device(
+            hass,
+            current_entry,
+            address=call.data["device_address"],
+            name=call.data["name"],
+            hardware_id=call.data.get("hardware_id", "0"),
+            room_id=call.data.get("room_id"),
+            room_title=call.data.get("room_title"),
+            room_category=call.data.get("room_category"),
+            firmware_build_time=int(call.data.get("firmware_build_time", 0)),
+            input_settings=call.data.get("input_settings", []),
+        )
+
+    async def _async_handle_scan_devices(call) -> None:
+        if not async_bluetooth_available(hass):
+            raise HomeAssistantError(
+                "Bluetooth is not available on this Home Assistant instance. Add a local "
+                "Bluetooth adapter or an ESPHome Bluetooth proxy, then try again."
+            )
+        new_devices = async_scan_unprovisioned(hass)
+        _LOGGER.info("Plejd scan found %d unprovisioned device(s)", len(new_devices))
+        _LOGGER.debug("Plejd scan found unprovisioned device(s): %s", [d["address"] for d in new_devices])
+        hass.bus.async_fire(f"{DOMAIN}_new_devices_found", {"devices": new_devices})
+
+    async def _async_handle_all_off(call) -> None:
+        # entry.runtime_data of the CURRENT entry, not a closed-over coordinator: this
+        # handler is only ever (re-)registered on the first setup attempt (see the
+        # registration guard below), so a later retry's or reinstall's coordinator must
+        # be looked up fresh.
+        await hass.data[_DATA_CURRENT_ENTRY].runtime_data.async_all_off()
+
+    async def _async_handle_update_room(call) -> None:
+        current_entry = hass.data[_DATA_CURRENT_ENTRY]
+        await async_update_room(
+            hass,
+            current_entry,
+            room_id=call.data["room_id"],
+            title=call.data.get("title"),
+            order=call.data.get("order"),
+            category=call.data.get("category"),
+        )
+
+    async def _async_handle_remove_room(call) -> None:
+        current_entry = hass.data[_DATA_CURRENT_ENTRY]
+        await async_remove_room(hass, current_entry, room_id=call.data["room_id"])
+
+    async def _async_handle_create_scene(call) -> None:
+        current_entry = hass.data[_DATA_CURRENT_ENTRY]
+        await async_create_scene(
+            hass,
+            current_entry,
+            title=call.data["title"],
+            scene_steps=call.data["scene_steps"],
+            order=call.data["order"],
+            hidden_from_scene_list=call.data["hidden_from_scene_list"],
+        )
+
+    async def _async_handle_update_scene(call) -> None:
+        current_entry = hass.data[_DATA_CURRENT_ENTRY]
+        await async_update_scene(
+            hass,
+            current_entry,
+            scene_id=call.data["scene_id"],
+            title=call.data.get("title"),
+            order=call.data.get("order"),
+            scene_steps=call.data.get("scene_steps"),
+            hidden_from_scene_list=call.data.get("hidden_from_scene_list"),
+        )
+
+    async def _async_handle_remove_scene(call) -> None:
+        current_entry = hass.data[_DATA_CURRENT_ENTRY]
+        await async_remove_scene(hass, current_entry, scene_id=call.data["scene_id"])
+
+    async def _async_handle_remove_device(call) -> None:
+        current_entry = hass.data[_DATA_CURRENT_ENTRY]
+        await async_remove_device(hass, current_entry, device_id=call.data["device_id"])
+
+    # Registered once per hass lifetime, before coordinator.async_start(), and NOT torn
+    # down by entry.async_on_unload: HA runs every already-registered on_unload callback
+    # as cleanup when async_setup_entry raises ConfigEntryNotReady (same path a failed
+    # mesh connection takes), which would otherwise unregister these services again right
+    # after registering them - defeating the point of registering early (e.g. being able
+    # to remove_device the one stale device that's keeping the mesh from connecting).
+    # Same permanent-registration pattern already used below for the WS commands; safe
+    # here too since this integration is single_config_entry (only one entry ever exists)
+    # and every handler above reads hass.data[_DATA_CURRENT_ENTRY] fresh rather than
+    # closing over this specific attempt's entry, so they rebind correctly even after a
+    # full remove+reinstall (not just a setup retry) without needing to re-register.
+    if not hass.data.get(_SERVICES_REGISTERED):
+        hass.services.async_register(DOMAIN, SERVICE_ADD_DEVICE, _async_handle_add_device, schema=_ADD_DEVICE_SCHEMA)
+        hass.services.async_register(DOMAIN, SERVICE_SCAN_DEVICES, _async_handle_scan_devices)
+        hass.services.async_register(DOMAIN, SERVICE_ALL_OFF, _async_handle_all_off)
+        hass.services.async_register(DOMAIN, SERVICE_UPDATE_ROOM, _async_handle_update_room, schema=_UPDATE_ROOM_SCHEMA)
+        hass.services.async_register(DOMAIN, SERVICE_REMOVE_ROOM, _async_handle_remove_room, schema=_REMOVE_ROOM_SCHEMA)
+        hass.services.async_register(
+            DOMAIN, SERVICE_CREATE_SCENE, _async_handle_create_scene, schema=_CREATE_SCENE_SCHEMA
+        )
+        hass.services.async_register(
+            DOMAIN, SERVICE_UPDATE_SCENE, _async_handle_update_scene, schema=_UPDATE_SCENE_SCHEMA
+        )
+        hass.services.async_register(
+            DOMAIN, SERVICE_REMOVE_SCENE, _async_handle_remove_scene, schema=_REMOVE_SCENE_SCHEMA
+        )
+        hass.services.async_register(
+            DOMAIN, SERVICE_REMOVE_DEVICE, _async_handle_remove_device, schema=_REMOVE_DEVICE_SCHEMA
+        )
+        hass.data[_SERVICES_REGISTERED] = True
+
     # Register the sidebar dashboard before starting the coordinator. It's optional, so a
     # failure (e.g. another panel already owns the `plejd` url path) must not abort setup —
     # the mesh/lights still work, and options remain reachable to hide it. HA also runs
@@ -153,88 +278,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             device_registry.EVENT_DEVICE_REGISTRY_UPDATED, coordinator.async_handle_device_registry_update
         )
     )
-
-    async def _async_handle_add_device(call) -> None:
-        await async_add_device(
-            hass,
-            entry,
-            address=call.data["device_address"],
-            name=call.data["name"],
-            hardware_id=call.data.get("hardware_id", "0"),
-            room_id=call.data.get("room_id"),
-            room_title=call.data.get("room_title"),
-            room_category=call.data.get("room_category"),
-            firmware_build_time=int(call.data.get("firmware_build_time", 0)),
-            input_settings=call.data.get("input_settings", []),
-        )
-
-    async def _async_handle_scan_devices(call) -> None:
-        if not async_bluetooth_available(hass):
-            raise HomeAssistantError(
-                "Bluetooth is not available on this Home Assistant instance. Add a local "
-                "Bluetooth adapter or an ESPHome Bluetooth proxy, then try again."
-            )
-        new_devices = async_scan_unprovisioned(hass)
-        _LOGGER.info("Plejd scan found %d unprovisioned device(s)", len(new_devices))
-        _LOGGER.debug("Plejd scan found unprovisioned device(s): %s", [d["address"] for d in new_devices])
-        hass.bus.async_fire(f"{DOMAIN}_new_devices_found", {"devices": new_devices})
-
-    async def _async_handle_all_off(call) -> None:
-        await coordinator.async_all_off()
-
-    async def _async_handle_update_room(call) -> None:
-        await async_update_room(
-            hass,
-            entry,
-            room_id=call.data["room_id"],
-            title=call.data.get("title"),
-            order=call.data.get("order"),
-            category=call.data.get("category"),
-        )
-
-    async def _async_handle_remove_room(call) -> None:
-        await async_remove_room(hass, entry, room_id=call.data["room_id"])
-
-    async def _async_handle_create_scene(call) -> None:
-        await async_create_scene(
-            hass,
-            entry,
-            title=call.data["title"],
-            scene_steps=call.data["scene_steps"],
-            order=call.data["order"],
-            hidden_from_scene_list=call.data["hidden_from_scene_list"],
-        )
-
-    async def _async_handle_update_scene(call) -> None:
-        await async_update_scene(
-            hass,
-            entry,
-            scene_id=call.data["scene_id"],
-            title=call.data.get("title"),
-            order=call.data.get("order"),
-            scene_steps=call.data.get("scene_steps"),
-            hidden_from_scene_list=call.data.get("hidden_from_scene_list"),
-        )
-
-    async def _async_handle_remove_scene(call) -> None:
-        await async_remove_scene(hass, entry, scene_id=call.data["scene_id"])
-
-    hass.services.async_register(DOMAIN, SERVICE_ADD_DEVICE, _async_handle_add_device, schema=_ADD_DEVICE_SCHEMA)
-    entry.async_on_unload(lambda: hass.services.async_remove(DOMAIN, SERVICE_ADD_DEVICE))
-    hass.services.async_register(DOMAIN, SERVICE_SCAN_DEVICES, _async_handle_scan_devices)
-    entry.async_on_unload(lambda: hass.services.async_remove(DOMAIN, SERVICE_SCAN_DEVICES))
-    hass.services.async_register(DOMAIN, SERVICE_ALL_OFF, _async_handle_all_off)
-    entry.async_on_unload(lambda: hass.services.async_remove(DOMAIN, SERVICE_ALL_OFF))
-    hass.services.async_register(DOMAIN, SERVICE_UPDATE_ROOM, _async_handle_update_room, schema=_UPDATE_ROOM_SCHEMA)
-    entry.async_on_unload(lambda: hass.services.async_remove(DOMAIN, SERVICE_UPDATE_ROOM))
-    hass.services.async_register(DOMAIN, SERVICE_REMOVE_ROOM, _async_handle_remove_room, schema=_REMOVE_ROOM_SCHEMA)
-    entry.async_on_unload(lambda: hass.services.async_remove(DOMAIN, SERVICE_REMOVE_ROOM))
-    hass.services.async_register(DOMAIN, SERVICE_CREATE_SCENE, _async_handle_create_scene, schema=_CREATE_SCENE_SCHEMA)
-    entry.async_on_unload(lambda: hass.services.async_remove(DOMAIN, SERVICE_CREATE_SCENE))
-    hass.services.async_register(DOMAIN, SERVICE_UPDATE_SCENE, _async_handle_update_scene, schema=_UPDATE_SCENE_SCHEMA)
-    entry.async_on_unload(lambda: hass.services.async_remove(DOMAIN, SERVICE_UPDATE_SCENE))
-    hass.services.async_register(DOMAIN, SERVICE_REMOVE_SCENE, _async_handle_remove_scene, schema=_REMOVE_SCENE_SCHEMA)
-    entry.async_on_unload(lambda: hass.services.async_remove(DOMAIN, SERVICE_REMOVE_SCENE))
 
     # Remote → light dim bindings (managed from the dashboard via the WebSocket API).
     # Optional, like the panel: a storage error must not stop the mesh/lights loading.
