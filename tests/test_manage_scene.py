@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from homeassistant.exceptions import HomeAssistantError
 from plejd import schedule_ws
-from plejd.cloud import PlejdAuthError, PlejdCloudError, PlejdCloudSceneInfo, PlejdCloudSite
+from plejd.cloud import PlejdAuthError, PlejdCloudError, PlejdCloudScene, PlejdCloudSceneInfo, PlejdCloudSite
 from plejd.manage_scene import async_create_scene, async_remove_scene, async_update_scene
 
 _KEY = bytes(range(16))
@@ -19,7 +19,7 @@ def _scene(scene_id="s1", name="Movie Night") -> PlejdCloudSceneInfo:
     return PlejdCloudSceneInfo(scene_id=scene_id, name=name)
 
 
-def _site(all_scenes=None) -> PlejdCloudSite:
+def _site(all_scenes=None, scenes=None) -> PlejdCloudSite:
     return PlejdCloudSite(
         site_id="S1",
         title="Home",
@@ -28,7 +28,7 @@ def _site(all_scenes=None) -> PlejdCloudSite:
         devices=[],
         inputs=[],
         motion=[],
-        scenes=[],
+        scenes=scenes or [],
         gateways=[],
         resource_set_id=None,
         all_scenes=all_scenes or [],
@@ -45,10 +45,11 @@ def _hass():
     )
 
 
-def _entry(data=None):
+def _entry(data=None, options=None):
     return types.SimpleNamespace(
         entry_id="e1",
         data=data or {"email": "u@x.com", "password": "pw", "site_id": "S1"},
+        options=options or {},
         async_start_reauth=lambda hass: None,
     )
 
@@ -156,6 +157,13 @@ async def test_update_scene_raises_if_scene_not_found(monkeypatch):
         await async_update_scene(_hass(), _entry(), scene_id="missing", title="X")
 
 
+async def test_update_scene_rejects_empty_scene_steps(monkeypatch):
+    # scene_steps replaces every existing step - an empty list must be rejected as invalid
+    # input, not silently accepted as "clear the scene" (#116 review).
+    with pytest.raises(HomeAssistantError, match="at least one"):
+        await async_update_scene(_hass(), _entry(), scene_id="s1", scene_steps=[])
+
+
 async def test_update_scene_raises_when_cloud_rejects_update(monkeypatch):
     monkeypatch.setattr("plejd.manage_scene.async_login", AsyncMock(return_value="tok"))
     monkeypatch.setattr("plejd.manage_scene.async_get_site", AsyncMock(return_value=_site([_scene()])))
@@ -196,6 +204,40 @@ async def test_remove_scene_raises_if_scene_not_found(monkeypatch):
     monkeypatch.setattr("plejd.manage_scene.async_get_site", AsyncMock(return_value=_site([])))
     with pytest.raises(HomeAssistantError, match="not found"):
         await async_remove_scene(_hass(), _entry(), scene_id="missing")
+
+
+async def test_remove_scene_refuses_when_referenced_by_a_schedule(monkeypatch):
+    monkeypatch.setattr("plejd.manage_scene.async_login", AsyncMock(return_value="tok"))
+    monkeypatch.setattr(
+        "plejd.manage_scene.async_get_site",
+        AsyncMock(return_value=_site([_scene()], scenes=[PlejdCloudScene(scene_id="s1", name="Movie Night", index=3)])),
+    )
+    entry = _entry(options={"schedules": [{"id": 0, "name": "Evening", "days": [0], "time": "20:00", "scene": 3}]})
+    remove_mock = AsyncMock()
+    monkeypatch.setattr("plejd.manage_scene.async_cloud_remove_scene", remove_mock)
+    with pytest.raises(HomeAssistantError, match="Evening"):
+        await async_remove_scene(_hass(), entry, scene_id="s1")
+    remove_mock.assert_not_awaited()  # must not even attempt the cloud call
+
+
+async def test_remove_scene_allows_when_no_schedule_references_it(monkeypatch):
+    hass = _hass()
+    entry = _entry(options={"schedules": [{"id": 0, "name": "Evening", "days": [0], "time": "20:00", "scene": 99}]})
+    monkeypatch.setattr("plejd.manage_scene.async_login", AsyncMock(return_value="tok"))
+    monkeypatch.setattr(
+        "plejd.manage_scene.async_get_site",
+        AsyncMock(
+            side_effect=[
+                _site([_scene()], scenes=[PlejdCloudScene(scene_id="s1", name="Movie Night", index=3)]),
+                _site([]),
+            ]
+        ),
+    )
+    monkeypatch.setattr("plejd.manage_scene.async_cloud_remove_scene", AsyncMock(return_value=True))
+
+    await async_remove_scene(hass, entry, scene_id="s1")
+
+    hass.config_entries.async_reload.assert_awaited_once_with("e1")
 
 
 async def test_remove_scene_raises_on_cloud_error_during_removal(monkeypatch):

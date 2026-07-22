@@ -154,6 +154,9 @@ create_scene:
   name: Create scene
   description: >-
     Create a new scene from a list of steps, then reload the config entry.
+    Cloud-only: this saves the scene to the Plejd cloud but does not program
+    the physical mesh, so open the Plejd app once (while it can reach the
+    mesh) before relying on local/BLE-only execution of a new scene.
   fields:
     title:
       name: Title
@@ -189,7 +192,10 @@ update_scene:
   name: Update scene
   description: >-
     Rename, reorder, and/or replace a scene's steps, then reload the config
-    entry. Only the fields you provide are changed.
+    entry. Only the fields you provide are changed. Cloud-only: replacing
+    scene_steps saves to the Plejd cloud but does not program the physical
+    mesh, so open the Plejd app once before relying on local/BLE-only
+    execution of the change.
   fields:
     scene_id:
       name: Scene ID
@@ -229,7 +235,9 @@ update_scene:
 remove_scene:
   name: Remove scene
   description: >-
-    Remove a scene, then reload the config entry.
+    Remove a scene, then reload the config entry. Refuses to remove a scene
+    that's still used by an on-device schedule - remove or update the
+    schedule(s) first.
   fields:
     scene_id:
       name: Scene ID

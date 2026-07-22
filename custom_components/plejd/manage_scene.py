@@ -3,6 +3,18 @@
 The HA-facing orchestration around cloud.py's scene functions: mutate on the
 cloud, then refresh and reload the config entry so the change is reflected.
 Shared by the create_scene, update_scene, and remove_scene services.
+
+Cloud-only, by design: create_scene/update_scene save a scene's steps to the
+Plejd cloud, but do NOT program the per-device mesh configuration a local
+CMD_SCENE (0x0021) broadcast relies on to know what a scene index actually
+does - that's a separate, still-unconfirmed opcode (docs/reverse_engineering.md
+calls it out as 0x0022 but its wire payload has never been captured). A scene
+created or edited this way needs the Plejd app opened once (while it can reach
+the mesh) to push that configuration before local/BLE-only execution reflects
+it; a gateway-connected site may sync sooner via the cloud's own path to the
+gateway, but that isn't confirmed either. Execute a scene through this
+integration only after confirming (e.g. via the app) that it's been synced to
+the physical devices.
 """
 
 from __future__ import annotations
@@ -29,6 +41,7 @@ from .const import (
     CONF_RESOURCE_SET_ID,
     CONF_ROOMS,
     CONF_SCENES,
+    CONF_SCHEDULES,
     CONF_SITE_ID,
 )
 
@@ -130,6 +143,10 @@ async def async_update_scene(
         raise HomeAssistantError(
             "update_scene needs at least one of title, order, scene_steps, or hidden_from_scene_list"
         )
+    if scene_steps is not None and not scene_steps:
+        raise HomeAssistantError(
+            "update_scene's scene_steps replaces every step - pass at least one, not an empty list"
+        )
     http_session, token, site = await _async_login_and_get_site(hass, entry)
     if not any(s.scene_id == scene_id for s in site.all_scenes):
         raise HomeAssistantError(f"Plejd scene {scene_id} not found on this site")
@@ -152,11 +169,25 @@ async def async_update_scene(
 
 
 async def async_remove_scene(hass: HomeAssistant, entry: ConfigEntry, *, scene_id: str) -> None:
-    """Remove a scene, then refresh + reload the config entry."""
+    """Remove a scene, then refresh + reload the config entry.
+
+    Refuses to remove a scene that's still referenced by an on-device schedule
+    (entry.options[CONF_SCHEDULES], keyed by mesh index) - once the cloud frees
+    the index, a later scene could silently reuse it and the schedule would run
+    the wrong thing instead of erroring.
+    """
     http_session, token, site = await _async_login_and_get_site(hass, entry)
     scene = next((s for s in site.all_scenes if s.scene_id == scene_id), None)
     if scene is None:
         raise HomeAssistantError(f"Plejd scene {scene_id} not found on this site")
+    indexed = next((s for s in site.scenes if s.scene_id == scene_id), None)
+    if indexed is not None:
+        referencing = [s["name"] for s in entry.options.get(CONF_SCHEDULES, []) if s.get("scene") == indexed.index]
+        if referencing:
+            raise HomeAssistantError(
+                f"Plejd scene '{scene.name}' is used by schedule(s) {', '.join(referencing)}; "
+                "remove or update them first"
+            )
     try:
         ok = await async_cloud_remove_scene(http_session, token, site.site_id, scene_id)
     except PlejdCloudError as err:
