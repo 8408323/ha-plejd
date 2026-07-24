@@ -18,6 +18,7 @@ from datetime import timedelta
 from typing import Any
 from uuid import uuid4
 
+from aiohttp import ClientError
 from homeassistant.components import bluetooth
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
@@ -32,6 +33,7 @@ from . import protocol
 from .cloud import (
     PlejdAuthError,
     PlejdCloudDevice,
+    PlejdCloudError,
     PlejdCloudInput,
     PlejdCloudMotion,
     PlejdCloudRoom,
@@ -431,12 +433,21 @@ class PlejdCoordinator:
             # No gateway connect path exists in BLE-only setups, so prompt reauth here -
             # otherwise a rejected password leaves the daily poll silently broken forever
             # (Reconfigure alone can't fix it: it reuses the stored, now-invalid password).
+            if self._closed:
+                return
             _LOGGER.warning("Plejd cloud poll: credentials rejected — starting reauth")
             self._entry.async_start_reauth(self.hass)
             return
-        except Exception:  # noqa: BLE001 - PlejdCloudError plus any transport failure (DNS/socket/TLS/
-            # timeout/non-JSON 5xx) is a missed poll, not a bug; retry at the next interval.
+        except (PlejdCloudError, ClientError, OSError):
+            # Transport/cloud-API failure (DNS/socket/TLS/timeout/non-JSON 5xx) is a missed
+            # poll, not a bug; retry at the next interval. An unexpected parse/programming
+            # error is NOT caught here and propagates, per error-handling.md.
             _LOGGER.debug("Plejd cloud poll: cloud unreachable, will retry at next interval", exc_info=True)
+            return
+        if self._closed:
+            # Shutdown began while the two cloud calls above were in flight; the interval
+            # timer is already unregistered, but this already-running call must not act on
+            # a possibly-removed entry (start reauth, persist a stale snapshot) after that.
             return
         new_data = {
             CONF_CRYPTO_KEY: site.crypto_key.hex(),
@@ -444,6 +455,7 @@ class PlejdCoordinator:
             CONF_INPUTS: [asdict(i) for i in site.inputs],
             CONF_MOTION: [asdict(m) for m in site.motion],
             CONF_SCENES: [asdict(s) for s in site.scenes],
+            CONF_ROOMS: [asdict(r) for r in site.rooms],
             CONF_GATEWAYS: site.gateways,
             CONF_RESOURCE_SET_ID: site.resource_set_id,
             CONF_DEVICE_ADDRESSES: site.device_addresses,

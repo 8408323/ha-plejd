@@ -1546,6 +1546,7 @@ def _cloud_poll_entry():
             CONF_INPUTS: [],
             CONF_MOTION: [],
             CONF_SCENES: [],
+            CONF_ROOMS: [],
             CONF_GATEWAYS: [],
             CONF_RESOURCE_SET_ID: None,
             CONF_DEVICE_ADDRESSES: {},
@@ -1553,7 +1554,7 @@ def _cloud_poll_entry():
     )
 
 
-def _fake_site(devices=None, gateways=None, resource_set_id=None, device_addresses=None):
+def _fake_site(devices=None, gateways=None, resource_set_id=None, device_addresses=None, rooms=None):
     """A PlejdCloudSite-like object matching _DEV by default (no change)."""
     from plejd.cloud import PlejdCloudSite
 
@@ -1571,6 +1572,7 @@ def _fake_site(devices=None, gateways=None, resource_set_id=None, device_address
         gateways=gateways or [],
         resource_set_id=resource_set_id,
         device_addresses=device_addresses or {},
+        rooms=rooms or [],
     )
 
 
@@ -1763,6 +1765,94 @@ async def test_cloud_poll_transport_error_is_treated_as_a_missed_poll(monkeypatc
     )
     c = PlejdCoordinator(hass, entry)
     await c._async_poll_cloud(None)  # must not raise
+
+
+async def test_cloud_poll_persists_rooms(monkeypatch):
+    from dataclasses import asdict
+
+    from plejd.cloud import PlejdCloudRoom
+
+    room = PlejdCloudRoom(
+        room_id="r1", name="Kok", address=100, member_addresses=[5], dimmable=True, dimmable_addresses=[5]
+    )
+
+    async def _login(session, email, password):
+        return "TOKEN"
+
+    async def _get_site(session, token, site_id):
+        return _fake_site(rooms=[room])
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _login)
+    monkeypatch.setattr(coordinator_mod, "async_get_site", _get_site)
+
+    entry = _cloud_poll_entry()
+    updated = {}
+    config_entries = types.SimpleNamespace(
+        async_get_entry=lambda eid: entry,
+        async_update_entry=lambda e, data: updated.update(data),
+    )
+    hass = _hass()
+    hass.session = object()
+    hass.config_entries = config_entries
+    c = PlejdCoordinator(hass, entry)
+    await c._async_poll_cloud(None)
+    # A room added/renamed/removed must be reflected too, not just devices/scenes -
+    # otherwise the advertised automatic room sync never actually updates room entities.
+    assert updated[CONF_ROOMS] == [asdict(room)]
+
+
+async def test_cloud_poll_discards_result_after_shutdown(monkeypatch):
+    from plejd.cloud import PlejdCloudDevice
+
+    async def _login(session, email, password):
+        return "TOKEN"
+
+    async def _get_site(session, token, site_id):
+        # Shutdown begins while this cloud call is still in flight - the interval timer
+        # is already unregistered by then, but this already-running call must still
+        # notice and not act on a possibly-removed entry with a stale snapshot.
+        c._closed = True
+        return _fake_site(devices=[PlejdCloudDevice(**{**_DEV, "device_id": "d2"})])
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _login)
+    monkeypatch.setattr(coordinator_mod, "async_get_site", _get_site)
+
+    entry = _cloud_poll_entry()
+    updated = {}
+    config_entries = types.SimpleNamespace(
+        async_get_entry=lambda eid: entry,
+        async_update_entry=lambda e, data: updated.update(data),
+    )
+    hass = _hass()
+    hass.session = object()
+    hass.config_entries = config_entries
+    c = PlejdCoordinator(hass, entry)
+    await c._async_poll_cloud(None)
+    assert not updated
+
+
+async def test_cloud_poll_auth_error_after_shutdown_does_not_start_reauth(monkeypatch):
+    from plejd.cloud import PlejdAuthError
+
+    async def _login(session, email, password):
+        c._closed = True
+        raise PlejdAuthError("bad creds")
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _login)
+
+    entry = _cloud_poll_entry()
+    config_entries = types.SimpleNamespace(
+        async_get_entry=lambda eid: entry,
+        async_update_entry=lambda e, data: None,
+    )
+    hass = _hass()
+    hass.session = object()
+    hass.config_entries = config_entries
+    c = PlejdCoordinator(hass, entry)
+    started = []
+    c._entry = types.SimpleNamespace(async_start_reauth=lambda h: started.append(h))
+    await c._async_poll_cloud(None)  # must not raise
+    assert not started
 
 
 def _fw_site(firmware_by_device):
