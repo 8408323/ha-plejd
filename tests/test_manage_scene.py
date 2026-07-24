@@ -110,6 +110,22 @@ async def test_create_scene_forwards_fields_and_reloads(monkeypatch):
     assert not schedule_ws.async_get_reload_lock(hass, entry.entry_id).locked()
 
 
+async def test_create_scene_does_not_raise_when_only_the_reload_fails(monkeypatch, caplog):
+    # The scene was already created on the cloud (non-idempotent) by the time the reload
+    # is attempted - raising here would make the whole service call look failed, inviting
+    # a retry that creates a duplicate scene. Only the reload itself needs a manual retry.
+    hass = _hass()
+    entry = _entry()
+    monkeypatch.setattr("plejd.manage_scene.async_login", AsyncMock(return_value="tok"))
+    monkeypatch.setattr("plejd.manage_scene.async_get_site", AsyncMock(side_effect=[_site(), _site([_scene()])]))
+    monkeypatch.setattr("plejd.manage_scene.async_cloud_create_scene", AsyncMock(return_value="new-scene-id"))
+    hass.config_entries.async_reload = AsyncMock(return_value=False)
+
+    await async_create_scene(hass, entry, title="Movie Night", scene_steps=[_STEP])
+
+    assert "entry failed to reload after a scene create" in caplog.text
+
+
 async def test_create_scene_raises_on_cloud_error_during_refresh(monkeypatch):
     monkeypatch.setattr("plejd.manage_scene.async_login", AsyncMock(return_value="tok"))
     monkeypatch.setattr("plejd.manage_scene.async_get_site", AsyncMock(side_effect=[_site(), PlejdCloudError("down")]))

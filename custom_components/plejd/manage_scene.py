@@ -77,7 +77,9 @@ def _cloud_schedule_owning_scene(entry: ConfigEntry, scene_id: str) -> dict | No
     )
 
 
-async def _async_refresh_and_reload(hass: HomeAssistant, entry: ConfigEntry, http_session, token) -> None:
+async def _async_refresh_and_reload(
+    hass: HomeAssistant, entry: ConfigEntry, http_session, token, *, created: bool = False
+) -> None:
     try:
         fresh_site = await async_get_site(http_session, token, entry.data[CONF_SITE_ID])
     except PlejdCloudError as err:
@@ -96,7 +98,13 @@ async def _async_refresh_and_reload(hass: HomeAssistant, entry: ConfigEntry, htt
             CONF_RESOURCE_SET_ID: fresh_site.resource_set_id,
             CONF_DEVICE_ADDRESSES: fresh_site.device_addresses,
         },
-        error_context="a scene update",
+        # A create's cloud object already exists and is non-idempotent by the time this
+        # runs - raising on a reload failure here would make the whole service call look
+        # failed, inviting a retry that creates a duplicate scene. Only the reload itself
+        # needs a manual retry (e.g. a later options-flow reload, or the next successful
+        # management operation's own reload picking up the same data).
+        raise_on_reload_failure=not created,
+        error_context="a scene create" if created else "a scene update",
     )
 
 
@@ -125,7 +133,7 @@ async def async_create_scene(
         )
     except PlejdCloudError as err:
         raise HomeAssistantError(f"Plejd cloud error creating scene: {err}") from err
-    await _async_refresh_and_reload(hass, entry, http_session, token)
+    await _async_refresh_and_reload(hass, entry, http_session, token, created=True)
 
 
 async def async_update_scene(

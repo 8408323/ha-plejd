@@ -81,7 +81,13 @@ def async_consume_expected_self_reload(hass: HomeAssistant, entry_id: str) -> bo
 
 
 async def async_reload_entry_with_lock(
-    hass: HomeAssistant, entry: ConfigEntry, data: dict, *, options: dict | None = None, error_context: str
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    data: dict,
+    *,
+    options: dict | None = None,
+    raise_on_reload_failure: bool = True,
+    error_context: str,
 ) -> None:
     """Write `data` (and optionally `options`) onto the entry and reload it under the
     shared per-entry reload lock.
@@ -89,9 +95,13 @@ async def async_reload_entry_with_lock(
     Shared by every management operation (room/scene/schedule/device services, add_device,
     ...) that needs to persist a full entry.data (and, for some, entry.options) overlay and
     reload for it to take effect. Raises HomeAssistantError if the entry's own reload
-    reports failure. A follow-up reload for a genuinely concurrent change the update
-    listener detected meanwhile (see DATA_RELOAD_PENDING) is only logged on failure, since
-    it isn't this caller's own operation to fail loudly for.
+    reports failure, UNLESS raise_on_reload_failure=False (only logs instead) - for a
+    caller whose cloud mutation is already done and non-idempotent (e.g. a scene/schedule
+    create), raising here would make the whole operation look failed, inviting a retry that
+    duplicates the already-created cloud object; only the reload itself needs a retry. A
+    follow-up reload for a genuinely concurrent change the update listener detected
+    meanwhile (see DATA_RELOAD_PENDING) is always only logged on failure, since it isn't
+    this caller's own operation to fail loudly for either way.
     """
     lock = async_get_reload_lock(hass, entry.entry_id)
     reloaded = True
@@ -119,6 +129,9 @@ async def async_reload_entry_with_lock(
                 except Exception:  # noqa: BLE001 - best-effort follow-up for someone else's change
                     _LOGGER.warning("Plejd: follow-up reload for a concurrent change failed")
     if not reloaded:
+        if not raise_on_reload_failure:
+            _LOGGER.warning("Plejd: entry failed to reload after %s; the cloud change was still made", error_context)
+            return
         raise HomeAssistantError(f"Plejd: entry failed to reload after {error_context}")
 
 
