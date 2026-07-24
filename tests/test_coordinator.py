@@ -1674,6 +1674,94 @@ async def test_cloud_poll_reverts_and_logs_when_reload_is_rejected(monkeypatch, 
     assert entry.data[CONF_DEVICES] == original_devices
 
 
+async def test_cloud_poll_reverts_and_logs_when_reload_raises(monkeypatch, caplog):
+    # async_reload() can raise instead of just returning False - must be treated the same
+    # as a rejected reload (revert + log), not let the exception skip the revert entirely.
+    from plejd.cloud import PlejdCloudDevice
+
+    new_dev = PlejdCloudDevice(**{**_DEV, "device_id": "d2", "name": "Matbord", "address": 9})
+    original_devices = list(_cloud_poll_entry().data[CONF_DEVICES])
+
+    async def _login(session, email, password):
+        return "TOKEN"
+
+    async def _get_site(session, token, site_id):
+        return _fake_site(devices=[PlejdCloudDevice(**_DEV), new_dev])
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _login)
+    monkeypatch.setattr(coordinator_mod, "async_get_site", _get_site)
+
+    entry = _cloud_poll_entry()
+    config_entries = types.SimpleNamespace(
+        async_get_entry=lambda eid: entry,
+        async_update_entry=lambda e, data: setattr(e, "data", data),
+        async_reload=AsyncMock(side_effect=RuntimeError("boom")),
+    )
+    hass = _hass()
+    hass.session = object()
+    hass.config_entries = config_entries
+    c = PlejdCoordinator(hass, entry)
+    await c._async_poll_cloud(None)  # must not raise
+    assert "reload after a site change raised" in caplog.text
+    assert entry.data[CONF_DEVICES] == original_devices
+
+
+async def test_cloud_poll_skips_a_suspiciously_empty_device_list(monkeypatch, caplog):
+    # A getSiteById response missing/omitting "devices" entirely parses to an empty list
+    # the same as a genuinely empty site - applying that unattended would silently wipe
+    # every device entity. Must be skipped like a missed poll, not "synced" destructively.
+    async def _login(session, email, password):
+        return "TOKEN"
+
+    async def _get_site(session, token, site_id):
+        return _fake_site(devices=[])
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _login)
+    monkeypatch.setattr(coordinator_mod, "async_get_site", _get_site)
+
+    entry = _cloud_poll_entry()  # cached CONF_DEVICES: [_DEV] (non-empty)
+    config_entries = types.SimpleNamespace(
+        async_get_entry=lambda eid: entry,
+        async_update_entry=lambda e, data: pytest.fail("must not persist a suspiciously empty snapshot"),
+        async_reload=AsyncMock(),
+    )
+    hass = _hass()
+    hass.session = object()
+    hass.config_entries = config_entries
+    c = PlejdCoordinator(hass, entry)
+    await c._async_poll_cloud(None)  # must not raise
+    assert "likely malformed response" in caplog.text
+    config_entries.async_reload.assert_not_awaited()
+
+
+async def test_start_self_heal_persists_without_reloading(monkeypatch):
+    # The setup-time self-heal call must persist a repaired snapshot without reloading -
+    # async_setup_entry (which triggered this) is still setting up THIS entry.
+    async def _login(session, email, password):
+        return "TOKEN"
+
+    async def _get_site(session, token, site_id):
+        return _fake_site(gateways=["gw-new"], resource_set_id="rs-new")
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _login)
+    monkeypatch.setattr(coordinator_mod, "async_get_site", _get_site)
+
+    entry = _cloud_poll_entry()
+    updated = {}
+    config_entries = types.SimpleNamespace(
+        async_get_entry=lambda eid: entry,
+        async_update_entry=lambda e, data: updated.update(data),
+        async_reload=AsyncMock(),
+    )
+    hass = _hass()
+    hass.session = object()
+    hass.config_entries = config_entries
+    c = PlejdCoordinator(hass, entry)
+    await c._async_poll_cloud(None, reload=False)
+    assert updated[CONF_GATEWAYS] == ["gw-new"]
+    config_entries.async_reload.assert_not_awaited()
+
+
 async def test_cloud_poll_runs_a_follow_up_reload_for_a_concurrent_change(monkeypatch):
     # _async_reload_entry marks DATA_RELOAD_PENDING when it suppressed its own reload for
     # a concurrent, unrelated change while this poll's reload was in flight - that change
@@ -1880,6 +1968,9 @@ async def test_start_attempts_cloud_self_heal_before_raising_not_ready(monkeypat
         await c.async_start()
     # The next setup retry re-reads entry.data fresh, so this is the only chance to fix it.
     assert updated[CONF_GATEWAYS] == ["gw-new"]
+    # async_setup_entry (which called this) is still setting up THIS entry - reloading it
+    # reentrantly here could hang or be rejected instead of taking effect.
+    hass.config_entries.async_reload.assert_not_awaited()
 
 
 async def test_start_preserves_the_original_not_ready_when_self_heal_raises(monkeypatch, caplog):

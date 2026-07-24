@@ -428,16 +428,24 @@ class PlejdCoordinator:
             # not replace this ConfigEntryNotReady - HA's setup-retry path is keyed on this
             # exact exception type, and the cached site may still work once BLE is back in
             # range even if the repair attempt itself failed.
+            # reload=False: async_setup_entry (which called this) is still in progress for
+            # THIS entry - reloading it reentrantly here could hang or be rejected instead of
+            # taking effect. Persist the repaired snapshot only; the re-raise below triggers
+            # HA's own setup retry, which re-reads entry.data fresh on its next attempt.
             try:
-                await self._async_poll_cloud(None)
+                await self._async_poll_cloud(None, reload=False)
             except Exception:  # noqa: BLE001 - best-effort; the original ConfigEntryNotReady below still applies
                 _LOGGER.warning("Plejd: cloud self-heal attempt during setup failed", exc_info=True)
             raise
         self._cloud_poll_unsub = async_track_time_interval(self.hass, self._async_poll_cloud, CLOUD_POLL_INTERVAL)
         self._schedule_firmware_checks()
 
-    async def _async_poll_cloud(self, _now: object) -> None:
-        """Detect site changes and reload the integration if anything differs."""
+    async def _async_poll_cloud(self, _now: object, *, reload: bool = True) -> None:
+        """Detect site changes and reload the integration if anything differs.
+
+        reload=False persists a repaired snapshot without reloading - see async_start's
+        setup-time self-heal call, which must not reload the entry it's still setting up.
+        """
         entry = self.hass.config_entries.async_get_entry(self._entry_id)
         if entry is None:
             return
@@ -472,6 +480,18 @@ class PlejdCoordinator:
         # docstring already documents and accepts for every other feature's refresh cycle,
         # now also triggered by this poll. Not solved here for the same reason: doing so
         # would need pending-move awareness plumbed through this poll too.
+        # A getSiteById response missing/omitting "devices" entirely (e.g. truncated or
+        # otherwise malformed) parses to an empty list the same as a genuinely empty site -
+        # applying that here unattended would silently remove every device entity. Skip
+        # (treat like a missed poll) rather than destructively "sync" to a suspiciously
+        # empty snapshot when the cache already knows about real devices.
+        if not site.devices and entry.data.get(CONF_DEVICES):
+            _LOGGER.warning(
+                "Plejd cloud poll: fresh site unexpectedly has no devices (cache has %d) - "
+                "skipping this poll as a likely malformed response",
+                len(entry.data[CONF_DEVICES]),
+            )
+            return
         new_data = {
             CONF_CRYPTO_KEY: site.crypto_key.hex(),
             CONF_DEVICES: [asdict(d) for d in site.devices],
@@ -491,6 +511,12 @@ class PlejdCoordinator:
         changed = [k for k, v in new_data.items() if entry.data.get(k) != v]
         if not changed:
             return
+        if not reload:
+            # Setup-time self-heal (see async_start): persist only, no reload - the caller's
+            # own re-raised ConfigEntryNotReady triggers HA's setup retry instead.
+            _LOGGER.info("Plejd site changed (%s) — persisting for the next setup retry", ", ".join(changed))
+            self.hass.config_entries.async_update_entry(entry, data={**entry.data, **new_data})
+            return
         _LOGGER.info("Plejd site changed (%s) — reloading to apply updates", ", ".join(changed))
         # Reload explicitly (rather than relying on the entry's update listener alone) so a
         # rejected reload (e.g. a platform refused to unload) is actually noticed - otherwise
@@ -501,7 +527,11 @@ class PlejdCoordinator:
         self.hass.data[schedule_ws.DATA_MANUAL_RELOAD] = entry.entry_id
         try:
             self.hass.config_entries.async_update_entry(entry, data={**entry.data, **new_data})
-            reload_ok = await self.hass.config_entries.async_reload(entry.entry_id)
+            try:
+                reload_ok = await self.hass.config_entries.async_reload(entry.entry_id)
+            except Exception:  # noqa: BLE001 - treated like a rejected reload below
+                _LOGGER.exception("Plejd cloud poll: reload after a site change raised")
+                reload_ok = False
         finally:
             self.hass.data.pop(schedule_ws.DATA_MANUAL_RELOAD, None)
             self.hass.data.pop(schedule_ws.DATA_MANUAL_RELOAD_SEEN, None)
