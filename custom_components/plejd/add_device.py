@@ -18,6 +18,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
+from . import schedule_ws
 from .cloud import (
     PlejdCloudError,
     async_get_site,
@@ -132,21 +133,35 @@ async def async_add_device(
         fresh_site = await async_get_site(http_session, token, entry.data[CONF_SITE_ID])
     except PlejdCloudError as err:
         raise HomeAssistantError(f"Plejd cloud error refreshing device list: {err}") from err
-    hass.config_entries.async_update_entry(
-        entry,
-        data={
-            **entry.data,
-            CONF_DEVICES: [asdict(d) for d in fresh_site.devices],
-            CONF_INPUTS: [asdict(i) for i in fresh_site.inputs],
-            CONF_MOTION: [asdict(m) for m in fresh_site.motion],
-            CONF_SCENES: [asdict(s) for s in fresh_site.scenes],
-            CONF_ROOMS: [asdict(r) for r in fresh_site.rooms],
-            CONF_GATEWAYS: fresh_site.gateways,
-            CONF_RESOURCE_SET_ID: fresh_site.resource_set_id,
-            CONF_DEVICE_ADDRESSES: fresh_site.device_addresses,
-        },
-    )
-    await hass.config_entries.async_reload(entry.entry_id)
+    # Claim the manual-reload so the entry's update listener (_async_reload_entry) doesn't
+    # also reload for this same data change, racing this one - same guard schedule_ws's
+    # own _async_persist uses for the identical async_update_entry -> listener race.
+    hass.data[schedule_ws.DATA_MANUAL_RELOAD] = entry.entry_id
+    try:
+        hass.config_entries.async_update_entry(
+            entry,
+            data={
+                **entry.data,
+                CONF_DEVICES: [asdict(d) for d in fresh_site.devices],
+                CONF_INPUTS: [asdict(i) for i in fresh_site.inputs],
+                CONF_MOTION: [asdict(m) for m in fresh_site.motion],
+                CONF_SCENES: [asdict(s) for s in fresh_site.scenes],
+                CONF_ROOMS: [asdict(r) for r in fresh_site.rooms],
+                CONF_GATEWAYS: fresh_site.gateways,
+                CONF_RESOURCE_SET_ID: fresh_site.resource_set_id,
+                CONF_DEVICE_ADDRESSES: fresh_site.device_addresses,
+            },
+        )
+        await hass.config_entries.async_reload(entry.entry_id)
+    finally:
+        hass.data.pop(schedule_ws.DATA_MANUAL_RELOAD, None)
+        hass.data.pop(schedule_ws.DATA_MANUAL_RELOAD_SEEN, None)
+        if hass.data.get(schedule_ws.DATA_RELOAD_PENDING) == entry.entry_id:
+            # A concurrent options/data change's own reload was suppressed by the guard
+            # above while ours was in flight; give it a reload of its own instead of
+            # dropping it silently (see _async_reload_entry).
+            hass.data.pop(schedule_ws.DATA_RELOAD_PENDING, None)
+            await hass.config_entries.async_reload(entry.entry_id)
 
     if input_setting_errors:
         raise HomeAssistantError(f"Device added, but some input settings failed: {'; '.join(input_setting_errors)}")
