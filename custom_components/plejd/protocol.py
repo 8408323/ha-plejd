@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from .const import (
     CMD_DEVICE_TYPE,
     CMD_GROUP_STATE_AND_LEVEL,
+    CMD_MESH_GROUP_MEMBERSHIP,
     CMD_NOTIFY_EVENTS,
     CMD_OUTPUT_BOOT_STATE,
     CMD_OUTPUT_CURVE_TYPE,
@@ -252,6 +253,20 @@ def execute_scene(address: int, scene: int) -> bytes:
     the slewrate/level fields in the schema belong to scene *configuration* (0x0022).
     """
     return encode_command(address, CMD_SCENE, bytes([scene & 0xFF]), command_type=TYPE_DONT_RESPOND)
+
+
+def leave_mesh_group(address: int, room_address: int) -> bytes:
+    """Remove a device from a room's mesh group (0x0008): stops it responding to that
+    room's group broadcasts. Confirmed via a live capture of the app's own "move device
+    to room" action - `address` is the device's own mesh address (not its output
+    address), matched against the room's group address via a live cloud fetch."""
+    return encode_command(address, CMD_MESH_GROUP_MEMBERSHIP, bytes([0x01, room_address & 0xFF]))
+
+
+def join_mesh_group(address: int, room_address: int) -> bytes:
+    """Add a device to a room's mesh group (0x0008): same payload as leave_mesh_group
+    with a trailing join-flag byte, confirmed on the same live capture."""
+    return encode_command(address, CMD_MESH_GROUP_MEMBERSHIP, bytes([0x01, room_address & 0xFF, 0x01]))
 
 
 def _mini_header(flag: int, size: int) -> int:

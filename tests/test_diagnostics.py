@@ -49,6 +49,41 @@ def _entry():
             "devices": [
                 {"device_id": "d1", "object_id": "7MK7dlrcfz", "address": 11, "name": "Vardagsrum", "model": "DIM-01"}
             ],
+            "rooms": [
+                {
+                    "room_id": "r1",
+                    "name": "Vardagsrum",
+                    "address": 14,
+                    "member_addresses": [11],
+                    "dimmable": True,
+                    "dimmable_addresses": [11],
+                }
+            ],
+            "pending_room_moves": {
+                "d1": {
+                    "room_id": "r2",
+                    "output_address": 11,
+                    "is_light": True,
+                    "dimmable": True,
+                    "new_room_address": 34,
+                }
+            },
+            "cloud_schedules": [
+                {
+                    "schedule_id": "te1",
+                    "scene_id": "s1",
+                    "title": "Garage",
+                    "device_ids": ["d1"],
+                    "scheduled_days": [0, 1, 2, 3, 4, 5, 6],
+                    "fade_time": 0,
+                    "activated": True,
+                    "start_event": "sunset",
+                    "start_offset": 15,
+                    "end_event": "sunrise",
+                    "end_offset": 0,
+                    "night_reduction": None,
+                }
+            ],
         },
         options={
             "transport": "gateway",
@@ -79,14 +114,34 @@ async def test_diagnostics_redacts_secrets_and_pii():
     assert dev["object_id"] == "**REDACTED**"  # cloud Parse id must not leak in diagnostics
     # model is not sensitive and is kept
     assert dev["model"] == "DIM-01"
+    room = data["rooms"][0]
+    assert room["room_id"] == "**REDACTED**" and room["address"] == "**REDACTED**" and room["name"] == "**REDACTED**"
+    assert room["member_addresses"] == "**REDACTED**"  # mesh output addresses -- BLE/PII-adjacent
+    assert room["dimmable_addresses"] == "**REDACTED**"  # mesh output addresses -- BLE/PII-adjacent
+    assert room["dimmable"] is True  # not sensitive and is kept
     # schedules (occupancy/routine) are redacted wholesale, transport pref kept
     assert diag["options"]["schedules"] == "**REDACTED**" and diag["options"]["transport"] == "gateway"
+    # move_device_to_room's own not-yet-cloud-confirmed moves: redacted wholesale, since
+    # it's keyed BY device_id (a dict key, invisible to a by-value redactor) and its values
+    # carry mesh addresses too
+    assert data["pending_room_moves"] == "**REDACTED**"
+    # cloud schedules (astro triggers + night reduction) reveal occupancy/routine just like
+    # the on-device ones above — redacted wholesale, count reported below
+    assert data["cloud_schedules"] == "**REDACTED**"
 
 
 async def test_diagnostics_reports_transport_and_counts():
     diag = await async_get_config_entry_diagnostics(None, _entry())
     assert diag["active_transport"] == "gateway" and diag["available"] is True
-    assert diag["counts"] == {"devices": 2, "scenes": 1, "inputs": 0, "motion": 0, "gateways": 1, "schedules": 1}
+    assert diag["counts"] == {
+        "devices": 2,
+        "scenes": 1,
+        "inputs": 0,
+        "motion": 0,
+        "gateways": 1,
+        "schedules": 1,
+        "cloud_schedules": 1,
+    }
     assert diag["models"] == ["CTR-01", "DIM-01"]
 
 

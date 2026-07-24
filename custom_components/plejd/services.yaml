@@ -41,6 +41,26 @@ add_device:
       required: false
       selector:
         text:
+    room_category:
+      name: Room category
+      description: >-
+        Category for a newly-created room (ignored if room_id is set or
+        room_title is omitted). Defaults to "Other" if omitted.
+      required: false
+      selector:
+        select:
+          options:
+            - LivingRoom
+            - Kitchen
+            - Outdoor
+            - Bedroom
+            - Hallway
+            - Bathroom
+            - Office
+            - Laundry
+            - Storage
+            - Other
+            - Garage
     firmware_build_time:
       name: Firmware build time
       description: >-
@@ -64,3 +84,425 @@ scan_new_devices:
   description: >-
     Scan for unprovisioned Plejd devices in Bluetooth range and fire
     plejd_new_devices_found with what was found.
+
+all_off:
+  name: All lights off
+  description: >-
+    Turn off every Plejd light output in the site in one action, mirroring the
+    Plejd app's site-wide "all off" control.
+
+update_room:
+  name: Update room
+  description: >-
+    Rename, reorder, and/or recategorize an existing room, then reload the
+    config entry. Only the fields you provide are changed.
+  fields:
+    room_id:
+      name: Room ID
+      description: Plejd cloud ID of the room to update.
+      required: true
+      selector:
+        text:
+    title:
+      name: Title
+      description: New room name.
+      required: false
+      selector:
+        text:
+    order:
+      name: Order
+      description: New position of the room in the room list (0-based).
+      required: false
+      selector:
+        number:
+          mode: box
+          min: 0
+    category:
+      name: Category
+      description: New room category.
+      required: false
+      selector:
+        select:
+          options:
+            - LivingRoom
+            - Kitchen
+            - Outdoor
+            - Bedroom
+            - Hallway
+            - Bathroom
+            - Office
+            - Laundry
+            - Storage
+            - Other
+            - Garage
+
+remove_room:
+  name: Remove room
+  description: >-
+    Remove a room, then reload the config entry. The Plejd cloud (and this
+    service) refuse to remove a room that still has devices in it - move or
+    remove its devices first.
+  fields:
+    room_id:
+      name: Room ID
+      description: Plejd cloud ID of the room to remove.
+      required: true
+      selector:
+        text:
+
+create_scene:
+  name: Create scene
+  description: >-
+    Create a new scene from a list of steps, then reload the config entry.
+    Cloud-only: this saves the scene to the Plejd cloud but does not program
+    the physical mesh, so open the Plejd app once (while it can reach the
+    mesh) before relying on local/BLE-only execution of a new scene.
+  fields:
+    title:
+      name: Title
+      description: Name for the new scene.
+      required: true
+      selector:
+        text:
+    scene_steps:
+      name: Scene steps
+      description: >-
+        Each step: device_id, output, state (On/Off/Temperature/PWM/Boost/Frost),
+        value, and optionally color_temperature, coverable_tilt, or
+        climate_boost_time depending on the output's capability.
+      required: true
+      selector:
+        object:
+    order:
+      name: Order
+      description: Position of the scene in the scene list (0-based).
+      required: false
+      selector:
+        number:
+          mode: box
+          min: 0
+    hidden_from_scene_list:
+      name: Hidden from scene list
+      description: Hide this scene from the app's main scene list.
+      required: false
+      selector:
+        boolean:
+
+update_scene:
+  name: Update scene
+  description: >-
+    Rename, reorder, and/or replace a scene's steps, then reload the config
+    entry. Only the fields you provide are changed. Cloud-only: replacing
+    scene_steps saves to the Plejd cloud but does not program the physical
+    mesh, so open the Plejd app once before relying on local/BLE-only
+    execution of the change.
+  fields:
+    scene_id:
+      name: Scene ID
+      description: Plejd cloud ID of the scene to update.
+      required: true
+      selector:
+        text:
+    title:
+      name: Title
+      description: New scene name.
+      required: false
+      selector:
+        text:
+    scene_steps:
+      name: Scene steps
+      description: >-
+        Full replacement list of steps (see create_scene for the shape). Replaces
+        every existing step, not a partial update.
+      required: false
+      selector:
+        object:
+    order:
+      name: Order
+      description: New position of the scene in the scene list (0-based).
+      required: false
+      selector:
+        number:
+          mode: box
+          min: 0
+    hidden_from_scene_list:
+      name: Hidden from scene list
+      description: Hide this scene from the app's main scene list.
+      required: false
+      selector:
+        boolean:
+
+remove_scene:
+  name: Remove scene
+  description: >-
+    Remove a scene, then reload the config entry. Refuses to remove a scene
+    that's still used by an on-device schedule - remove or update the
+    schedule(s) first.
+  fields:
+    scene_id:
+      name: Scene ID
+      description: Plejd cloud ID of the scene to remove.
+      required: true
+      selector:
+        text:
+
+remove_device:
+  name: Remove device
+  description: >-
+    Remove a device from the site, then reload the config entry. This
+    decommissions the device in the Plejd cloud - do this after physically
+    removing or replacing the hardware, not while it's still installed.
+  fields:
+    device_id:
+      name: Device ID
+      description: >-
+        Plejd cloud device ID, exactly as shown for the device (e.g. in its HA
+        device info or the add_device/scan_new_devices results) - matching is
+        case-sensitive.
+      required: true
+      selector:
+        text:
+
+move_device_to_room:
+  name: Move device to room
+  description: >-
+    Move a device to a different room, then reload the config entry. Unlike
+    other room/scene management, this requires a live mesh connection - room
+    membership is a mesh-group operation, not a cloud call, so the BLE/gateway
+    transport must be connected for this to succeed. Not yet supported for a
+    multi-output device (e.g. a 2-channel dimmer) - its outputs can be in
+    different rooms and this isn't confirmed safe to disambiguate yet.
+  fields:
+    device_id:
+      name: Device ID
+      description: Plejd cloud device ID of the device to move.
+      required: true
+      selector:
+        text:
+    room_id:
+      name: Room ID
+      description: Plejd cloud ID of the destination room.
+      required: true
+      selector:
+        text:
+
+create_schedule:
+  name: Create schedule
+  description: >-
+    Create a cloud schedule: an on-scene run at a sunset/sunrise-relative time,
+    plus an optional night-reduction quiet-hours window, then reload the
+    config entry. Cloud-only, like create_scene - open the Plejd app once
+    before relying on local/BLE-only execution. Only astro (sunset/sunrise)
+    triggers are supported; a fixed clock-time trigger isn't yet. Fires
+    plejd_schedule_created with the generated schedule_id - update_schedule
+    needs it, and there's no other way to look it up.
+  fields:
+    title:
+      name: Title
+      description: Name for the schedule's on-scene.
+      required: true
+      selector:
+        text:
+    scene_steps:
+      name: Scene steps
+      description: Steps to run when the schedule triggers (see create_scene for the shape).
+      required: true
+      selector:
+        object:
+    start_event:
+      name: Start event
+      description: Astro event that turns the scene on.
+      required: true
+      selector:
+        select:
+          options:
+            - sunset
+            - sunrise
+    start_offset:
+      name: Start offset
+      description: Minutes to offset from start_event (-120 to 120).
+      required: true
+      selector:
+        number:
+          mode: box
+          min: -120
+          max: 120
+    end_event:
+      name: End event
+      description: Astro event that turns the scene off.
+      required: true
+      selector:
+        select:
+          options:
+            - sunset
+            - sunrise
+    end_offset:
+      name: End offset
+      description: Minutes to offset from end_event (-120 to 120).
+      required: true
+      selector:
+        number:
+          mode: box
+          min: -120
+          max: 120
+    scheduled_days:
+      name: Scheduled days
+      description: Days the schedule is active, 0=Monday..6=Sunday. Defaults to every day.
+      required: false
+      selector:
+        object:
+    fade_time:
+      name: Fade time
+      description: Fade time in seconds for the scene transition.
+      required: false
+      selector:
+        number:
+          mode: box
+          min: 0
+    night_reduction:
+      name: Night reduction
+      description: >-
+        Optional quiet-hours override: scene_steps, start_time ("HH:MM"),
+        end_time, and optionally weekend_start_time/weekend_end_time for a
+        separate weekend window.
+      required: false
+      selector:
+        object:
+
+update_schedule:
+  name: Update schedule
+  description: >-
+    Update a cloud schedule previously created via create_schedule, then
+    reload the config entry. Only the fields you provide are changed. Only
+    schedules this integration created can be targeted - one created through
+    the Plejd app directly isn't trackable yet.
+  fields:
+    schedule_id:
+      name: Schedule ID
+      description: ID of the schedule to update, as returned/tracked by create_schedule.
+      required: true
+      selector:
+        text:
+    title:
+      name: Title
+      description: New name for the schedule's on-scene.
+      required: false
+      selector:
+        text:
+    scene_steps:
+      name: Scene steps
+      description: Full replacement list of on-scene steps. Replaces every existing step.
+      required: false
+      selector:
+        object:
+    start_event:
+      name: Start event
+      description: Astro event that turns the scene on.
+      required: false
+      selector:
+        select:
+          options:
+            - sunset
+            - sunrise
+    start_offset:
+      name: Start offset
+      description: Minutes to offset from start_event (-120 to 120).
+      required: false
+      selector:
+        number:
+          mode: box
+          min: -120
+          max: 120
+    end_event:
+      name: End event
+      description: Astro event that turns the scene off.
+      required: false
+      selector:
+        select:
+          options:
+            - sunset
+            - sunrise
+    end_offset:
+      name: End offset
+      description: Minutes to offset from end_event (-120 to 120).
+      required: false
+      selector:
+        number:
+          mode: box
+          min: -120
+          max: 120
+    scheduled_days:
+      name: Scheduled days
+      description: Full replacement list of active days, 0=Monday..6=Sunday.
+      required: false
+      selector:
+        object:
+    fade_time:
+      name: Fade time
+      description: Fade time in seconds for the scene transition.
+      required: false
+      selector:
+        number:
+          mode: box
+          min: 0
+    activated:
+      name: Activated
+      description: Enable or pause the schedule without removing it.
+      required: false
+      selector:
+        boolean:
+    night_reduction:
+      name: Night reduction
+      description: >-
+        Full replacement quiet-hours override (see create_schedule for the
+        shape) - creates its scene on first use, otherwise updates it in place.
+      required: false
+      selector:
+        object:
+
+remove_schedule:
+  name: Remove schedule
+  description: >-
+    Remove a cloud schedule previously created via create_schedule - its
+    trigger and on-scene (and night-reduction scene, if any) are all deleted
+    from the Plejd cloud - then reload the config entry. Only schedules this
+    integration created can be targeted.
+  fields:
+    schedule_id:
+      name: Schedule ID
+      description: ID of the schedule to remove, as returned/tracked by create_schedule.
+      required: true
+      selector:
+        text:
+
+start_dim:
+  name: Start dimming
+  description: >-
+    Begin smoothly ramping a Plejd light's brightness up or down, continuing until
+    stop_dim is called or a limit is reached. Bind this to a dimmer remote's
+    "brightness move" / "hold" action for smooth hold-to-dim.
+  target:
+    entity:
+      integration: plejd
+      domain: light
+  fields:
+    direction:
+      name: Direction
+      description: Which way to ramp the brightness.
+      required: true
+      example: up
+      selector:
+        select:
+          options:
+            - up
+            - down
+
+stop_dim:
+  name: Stop dimming
+  description: >-
+    Stop an in-progress ramp started by start_dim, holding the light at its current
+    brightness. Bind this to the remote's "stop" / "release" action.
+  target:
+    entity:
+      integration: plejd
+      domain: light

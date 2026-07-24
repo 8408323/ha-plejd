@@ -167,6 +167,7 @@ async def async_commission_device(
     firmware_build_time: int = 0,
     room_id: str | None = None,
     room_title: str | None = None,
+    room_category: str | None = None,
 ) -> NewDeviceAddresses:
     """Commission a new unprovisioned device into the Plejd site.
 
@@ -183,7 +184,8 @@ async def async_commission_device(
     # Create the room only after the checks above - a mesh_key or compatibility
     # failure must not leave an orphaned empty room behind.
     if room_title and not room_id:
-        room_id = await async_create_room(http_session, token, site.site_id, room_title)
+        create_room_kwargs = {"category": room_category} if room_category else {}
+        room_id = await async_create_room(http_session, token, site.site_id, room_title, **create_room_kwargs)
 
     device_infos = [NewDeviceInfo(title=name, output_index=i, room_id=room_id) for i in range(output_count)]
 

@@ -34,6 +34,7 @@ from .cloud import (
     PlejdCloudDevice,
     PlejdCloudInput,
     PlejdCloudMotion,
+    PlejdCloudRoom,
     PlejdCloudScene,
     async_get_available_firmware,
     async_get_site,
@@ -67,6 +68,7 @@ from .const import (
     CONF_INSTALLATION_ID,
     CONF_MOTION,
     CONF_RESOURCE_SET_ID,
+    CONF_ROOMS,
     CONF_SCENES,
     CONF_SITE_ID,
     CONF_TRANSPORT,
@@ -75,12 +77,14 @@ from .const import (
     PLEJD_SERVICE_UUID,
     RELAY_CONFIG_HARDWARE,
     RELAY_HARDWARE,
+    ROOM_DEVICE_ID_PREFIX,
     TIME_EVENT_REP_FOREVER,
     TIME_EVENT_RESULT_SCENE,
     TRANSPORT_AUTO,
     TRANSPORT_BLE,
     TRANSPORT_GATEWAY,
 )
+from .dim_ramp import PlejdDimRamp
 from .gateway_transport import PlejdGatewayConnection
 from .protocol import Command, MotionEvent, OutputSettings, OutputState, decode_motion, decode_notify_events
 
@@ -150,9 +154,16 @@ class PlejdCoordinator:
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         self.hass = hass
         self._entry = entry  # for runtime reauth (e.g. a rename hitting expired credentials)
+        # Remote hold-to-dim ramps (light.start_dim/stop_dim entity services drive this).
+        self.dim_ramp = PlejdDimRamp(hass, self)
         # Tolerate entries stored before a field existed (e.g. output_index).
         self.devices = [PlejdCloudDevice(**{"output_index": 0, **device}) for device in entry.data[CONF_DEVICES]]
         self.scenes = [PlejdCloudScene(**scene) for scene in entry.data.get(CONF_SCENES, [])]
+        self.rooms = [PlejdCloudRoom(**room) for room in entry.data.get(CONF_ROOMS, [])]
+        # CONF_ROOMS is absent (not just empty) on entries added before room-groups existed;
+        # only those need a backfill fetch (see _async_poll_faults) - a site with genuinely
+        # no rooms stores an explicit [] and must not be re-fetched every poll interval.
+        self._rooms_from_legacy_entry = CONF_ROOMS not in entry.data
         self.inputs = [PlejdCloudInput(**i) for i in entry.data.get(CONF_INPUTS, [])]
         self.motion = [PlejdCloudMotion(**m) for m in entry.data.get(CONF_MOTION, [])]
         self._motion_addresses = {m.address for m in self.motion}
@@ -284,6 +295,8 @@ class PlejdCoordinator:
     @callback
     def _on_event(self, command: Command) -> None:
         if command.command in (CMD_GROUP_STATE_AND_LEVEL, CMD_OUTPUT_STATE_AND_LEVEL):
+            if command.command == CMD_GROUP_STATE_AND_LEVEL:
+                self._fan_group_state_to_members(command)
             for update in list(self._listeners):
                 update()
         elif command.command == CMD_INPUT_BUTTON:
@@ -539,6 +552,8 @@ class PlejdCoordinator:
         name = device.name_by_user
         if plejd_id is None or not name:
             return
+        if plejd_id.startswith(ROOM_DEVICE_ID_PREFIX):
+            return  # a room pseudo-device has no Parse cloud object to rename
         try:
             await self.async_rename_device(plejd_id, name)
         except PlejdAuthError:
@@ -625,12 +640,26 @@ class PlejdCoordinator:
     async def _async_poll_faults(self, _now: object) -> None:
         # NotifyEvents belongs to the physical device, not any one output — poll the
         # device's own mesh address (may differ from an output's outputAddress).
-        if not self._device_addresses and self._email and self._password:
+        need_device_addresses = not self._device_addresses
+        need_rooms = self._rooms_from_legacy_entry
+        if (need_device_addresses or need_rooms) and self._email and self._password:
             try:
                 session = async_get_clientsession(self.hass)
                 token = await async_login(session, self._email, self._password)
                 site = await async_get_site(session, token, self.site_id)
-                self._device_addresses = dict(site.device_addresses)
+                if need_device_addresses:
+                    self._device_addresses = dict(site.device_addresses)
+                if need_rooms:
+                    self.rooms = site.rooms
+                    self._rooms_from_legacy_entry = False
+                    # Persist to entry.data, not just the in-memory coordinator: the light
+                    # platform only builds PlejdRoomLight entities from CONF_ROOMS at setup,
+                    # so an unpersisted backfill would lose room entities on the next
+                    # restart/reload if the cloud is unreachable then (#86 review).
+                    self.hass.config_entries.async_update_entry(
+                        self._entry,
+                        data={**self._entry.data, CONF_ROOMS: [asdict(r) for r in site.rooms]},
+                    )
             except Exception:  # noqa: BLE001 - fault polling is best-effort; retry next interval
                 _LOGGER.debug("Plejd fault poll: could not resolve device addresses", exc_info=True)
         for address in set(self._device_addresses.values()):
@@ -765,15 +794,111 @@ class PlejdCoordinator:
         """Delete an on-device time event."""
         await self._write_vector(protocol.remove_time_event(slot))
 
-    async def async_set_output(self, address: int, on: bool, level: int) -> None:
+    async def async_set_output(self, address: int, on: bool, level: int, *, notify: bool = True) -> None:
         """Send an on/off + level command for an output.
 
         Uses 0x0098 (`set_group_state_and_level`): the per-output cloud address alone
         identifies the target output, with no separate output byte — 0x00C8 with the
         per-output address broke every output past the first on a multi-output
         device (#71).
+
+        `notify=False` lets a caller that still has more state to record (e.g.
+        async_set_group_output's member states) defer the listener notification
+        until everything is consistent, instead of notifying mid-update.
         """
+        # Captured before the write, not after: over the gateway transport, a normal
+        # published ack is decoded into state_for() before _write_vector()'s own await
+        # returns, so reading "prior" afterward would already see this command's own
+        # echo (off, level 0) instead of the real previous level.
+        prior = self.state_for(address)
         await self._write_vector(protocol.set_group_state_and_level(address, on, level))
+        current = self.state_for(address)
+        # What our OWN command's echo literally looks like on the wire - level=0 for an
+        # off command regardless of the remembered brightness (the enriched value below
+        # is our own bookkeeping, not something the protocol's echo itself carries).
+        raw_echo = OutputState(output=address, on=on, level=level)
+        if current is not None and current != prior and current != raw_echo:
+            # Something else (a physical switch, the Plejd app, another output on this
+            # device) changed this output to a value we didn't command while our own
+            # write was in flight. Its own push already notified listeners with the
+            # real state (_on_event) - don't stomp that with our stale optimistic guess.
+            return
+        # Reflect the change immediately rather than waiting for the mesh's own echo:
+        # BLE writes are never acked, and even the gateway's ack isn't guaranteed to
+        # land before this returns. Without this, a command sent right after another
+        # (e.g. a fast on-then-off) reads stale state and computes the wrong direction.
+        # Turning off doesn't erase the remembered brightness - a real device keeps
+        # reporting its last dim position while off, so the off case preserves the
+        # prior level instead of the protocol's own off payload (always 0).
+        record_level = level if on else (prior.level if prior is not None else level)
+        self._record_output_state(address, OutputState(output=address, on=on, level=record_level))
+        if notify:
+            self._notify_outputs()
+
+    async def async_all_off(self) -> None:
+        """Turn off every light output in the site (mirrors the Plejd app's "all off")."""
+        seen: set[int] = set()
+        attempted = 0
+        succeeded = 0
+        for device in self.devices:
+            if device.category != CATEGORY_LIGHT or device.address is None or device.address in seen:
+                continue
+            seen.add(device.address)
+            attempted += 1
+            try:
+                await self.async_set_output(device.address, False, 0)
+            except Exception:  # noqa: BLE001 - one output failing must not abort turning off the rest
+                _LOGGER.warning("Plejd all_off: failed to turn off output %s", device.address, exc_info=True)
+                continue
+            succeeded += 1
+        if attempted and not succeeded:
+            raise HomeAssistantError("Plejd all_off: failed to turn off any output")
+
+    async def async_set_group_output(self, address: int, on: bool, level: int, member_addresses: list[int]) -> None:
+        """Send a group command (a Plejd room), then reflect it in each member's own state.
+
+        A group command's own ack/echo is keyed by the group address, not by any
+        member's address, so member outputs would otherwise show stale state until
+        each one separately reports its own change over the mesh/gateway.
+        """
+        await self.async_set_output(address, on, level, notify=False)
+        self._record_group_member_states(on, level, member_addresses)
+        self._notify_outputs()
+
+    def _fan_group_state_to_members(self, command: Command) -> None:
+        """Reflect an externally-initiated room broadcast (e.g. the Plejd app) in each member.
+
+        Like our own group commands (see async_set_group_output), a group broadcast is
+        keyed by the room's own group address, not by any member's address, so
+        PlejdRoomLight (which reads member state) would otherwise stay stale until each
+        member separately reports its own change.
+        """
+        room = next((r for r in self.rooms if r.address == command.address), None)
+        if room is None:
+            return
+        state = protocol.decode_output_state(command)
+        if state is None:
+            return
+        self._record_group_member_states(state.on, state.level, room.member_addresses)
+
+    def _record_group_member_states(self, on: bool, level: int, member_addresses: list[int]) -> None:
+        for member in member_addresses:
+            if on:
+                member_level = level
+            else:
+                # Turning off doesn't erase a member's remembered brightness (the level
+                # param here is just the protocol's off payload) - a real device keeps
+                # reporting its own last dim position while off, and the room's restore
+                # should too.
+                prior = self.state_for(member)
+                member_level = prior.level if prior is not None else level
+            self._record_output_state(member, OutputState(output=member, on=on, level=member_level))
+
+    def _record_output_state(self, address: int, state: OutputState) -> None:
+        if self._active == "gateway" and self._gateway is not None:
+            self._gateway.set_state(address, state)
+        elif self._connection.mesh is not None:
+            self._connection.mesh.set_state(address, state)
 
     async def async_set_output_min_level(self, address: int, output: int, fraction: float) -> None:
         """Set an output's minimum dim level (0-1 fraction)."""
@@ -828,6 +953,14 @@ class PlejdCoordinator:
         """Trigger a Plejd scene (broadcast to address 0)."""
         await self._write_vector(protocol.execute_scene(0, index))
 
+    async def async_leave_mesh_group(self, address: int, room_address: int) -> None:
+        """Remove a device from a room's mesh group, as part of moving it to another room."""
+        await self._write_vector(protocol.leave_mesh_group(address, room_address))
+
+    async def async_join_mesh_group(self, address: int, room_address: int) -> None:
+        """Add a device to a room's mesh group, as part of moving it to another room."""
+        await self._write_vector(protocol.join_mesh_group(address, room_address))
+
     async def async_set_climate_setpoint(self, address: int, celsius: float) -> None:
         """Set a thermostat target temperature."""
         await self._write_vector(protocol.set_climate_setpoint(address, celsius))
@@ -849,6 +982,7 @@ class PlejdCoordinator:
         if self._cloud_poll_unsub is not None:
             self._cloud_poll_unsub()
             self._cloud_poll_unsub = None
+        self.dim_ramp.shutdown()
         if self._clock_unsub is not None:
             self._clock_unsub()
             self._clock_unsub = None

@@ -12,20 +12,38 @@ from plejd.cloud import (
     _parse_new_device_addresses,
     async_create_device,
     async_create_room,
+    async_create_scene,
+    async_create_time_event,
     async_get_available_firmware,
     async_get_needed_output_count,
     async_get_site,
     async_get_sites,
     async_login,
+    async_remove_device,
+    async_remove_room,
+    async_remove_scene,
+    async_remove_time_event,
     async_set_device_title,
     async_set_input_setting,
+    async_update_room,
+    async_update_scene,
+    async_update_time_event,
     parse_site,
 )
 from plejd.const import (
     PLEJD_FN_COMPATIBLE_DEVICES,
     PLEJD_FN_CREATE_DEVICE,
     PLEJD_FN_CREATE_ROOM,
+    PLEJD_FN_CREATE_SCENE,
+    PLEJD_FN_CREATE_TIME_EVENT,
+    PLEJD_FN_REMOVE_DEVICE,
+    PLEJD_FN_REMOVE_ROOM,
+    PLEJD_FN_REMOVE_SCENE,
+    PLEJD_FN_REMOVE_TIME_EVENT,
     PLEJD_FN_SET_INPUT,
+    PLEJD_FN_UPDATE_ROOM,
+    PLEJD_FN_UPDATE_SCENE,
+    PLEJD_FN_UPDATE_TIME_EVENT,
     PLEJD_PARSE_URL,
 )
 
@@ -35,7 +53,16 @@ _SITE_BY_ID = PLEJD_PARSE_URL + "functions/getSiteById"
 _FIRMWARE = PLEJD_PARSE_URL + "functions/getFirmwaresByHardwareId"
 _CREATE_DEVICE = PLEJD_PARSE_URL + PLEJD_FN_CREATE_DEVICE
 _CREATE_ROOM = PLEJD_PARSE_URL + PLEJD_FN_CREATE_ROOM
+_UPDATE_ROOM = PLEJD_PARSE_URL + PLEJD_FN_UPDATE_ROOM
+_REMOVE_ROOM = PLEJD_PARSE_URL + PLEJD_FN_REMOVE_ROOM
+_CREATE_SCENE = PLEJD_PARSE_URL + PLEJD_FN_CREATE_SCENE
+_UPDATE_SCENE = PLEJD_PARSE_URL + PLEJD_FN_UPDATE_SCENE
+_REMOVE_SCENE = PLEJD_PARSE_URL + PLEJD_FN_REMOVE_SCENE
+_REMOVE_DEVICE = PLEJD_PARSE_URL + PLEJD_FN_REMOVE_DEVICE
 _SET_INPUT = PLEJD_PARSE_URL + PLEJD_FN_SET_INPUT
+_CREATE_TIME_EVENT = PLEJD_PARSE_URL + PLEJD_FN_CREATE_TIME_EVENT
+_UPDATE_TIME_EVENT = PLEJD_PARSE_URL + PLEJD_FN_UPDATE_TIME_EVENT
+_REMOVE_TIME_EVENT = PLEJD_PARSE_URL + PLEJD_FN_REMOVE_TIME_EVENT
 
 _SITE = {
     "siteId": "S1",
@@ -126,11 +153,27 @@ async def test_get_site_parses_devices():
     assert by_id["d3"].category == "cover" and by_id["d3"].model == "JAL-01"
     # scenes: only those with a sceneIndex entry are kept
     assert [(s.name, s.index) for s in site.scenes] == [("Movie", 3)]
-    # inputs: deduped by address; named from devices[]
-    assert sorted((i.address, i.name) for i in site.inputs) == [(11, "Kitchen"), (31, "Blind")]
+    # inputs: deduped by address; named from devices[]; input_index kept for later writes
+    assert sorted((i.address, i.name, i.input_index) for i in site.inputs) == [(11, "Kitchen", 0), (31, "Blind", 0)]
     # physical device addresses (for fault polling), keyed by device_id, incl. sensor w1
     assert site.device_addresses == {"d1": 1, "d2": 2, "d3": 3, "w1": 33}
     assert [(m.address, m.name) for m in site.motion] == [(33, "Motion sensor")]
+
+
+def test_parse_site_keeps_input_index_for_two_input_device():
+    # A real two-input device (distinct addresses per input, unlike d1's fixture above
+    # where both indices share one address and get deduped) must keep each input's own
+    # index, since async_set_input_setting needs it to target the right physical input.
+    site = {**_SITE, "inputAddress": {"d1": {"0": 11, "1": 12}}}
+    parsed = parse_site(site)
+    assert sorted((i.address, i.input_index) for i in parsed.inputs) == [(11, 0), (12, 1)]
+
+
+def test_parse_site_skips_malformed_input_address_entries():
+    # A non-numeric index or address must not abort the whole site parse - just that entry.
+    site = {**_SITE, "inputAddress": {"d1": {"bad": 11, "1": "also-bad", "2": 13}}}
+    parsed = parse_site(site)
+    assert [(i.address, i.input_index) for i in parsed.inputs] == [(13, 2)]
 
 
 async def test_get_site_accepts_dict_result():
@@ -316,7 +359,7 @@ def test_parse_site_device_addresses_drops_garbage_values():
     site = parse_site(
         {
             "plejdMesh": {"cryptoKey": "00" * 16},
-            "deviceAddress": {"d1": 5, "d2": "not-a-number", "d3": None},
+            "deviceAddress": {"d1": 5, "d2": "not-a-number", "d3": None, "d4": 300, "d5": -1, "d6": 0, "d7": True},
             "devices": [],
         }
     )
@@ -550,6 +593,234 @@ async def test_create_room_uses_supplied_category():
     assert captured["category"] == "Garage"
 
 
+async def test_update_room_sends_only_provided_fields():
+    from aioresponses import CallbackResult
+
+    captured: dict = {}
+
+    def _capture(url, **kwargs):
+        captured.update(kwargs.get("json", {}))
+        return CallbackResult(payload={"result": True})
+
+    with aioresponses() as m:
+        m.post(_UPDATE_ROOM, callback=_capture)
+        async with aiohttp.ClientSession() as s:
+            ok = await async_update_room(s, "tok", "site1", "room1", title="Vardagsrum")
+    assert ok is True
+    assert captured == {"siteId": "site1", "roomId": "room1", "title": "Vardagsrum"}
+
+
+async def test_update_room_sends_all_provided_fields():
+    from aioresponses import CallbackResult
+
+    captured: dict = {}
+
+    def _capture(url, **kwargs):
+        captured.update(kwargs.get("json", {}))
+        return CallbackResult(payload={"result": True})
+
+    with aioresponses() as m:
+        m.post(_UPDATE_ROOM, callback=_capture)
+        async with aiohttp.ClientSession() as s:
+            await async_update_room(s, "tok", "site1", "room1", title="Kök", order=2, category="Kitchen")
+    assert captured == {"siteId": "site1", "roomId": "room1", "title": "Kök", "order": 2, "category": "Kitchen"}
+
+
+async def test_update_room_rejects_malformed_truthy_result():
+    # A malformed but truthy `result` (not the literal True the real API sends on success)
+    # must not be treated as a successful update - reject it strictly, like device rename.
+    with aioresponses() as m:
+        m.post(_UPDATE_ROOM, payload={"result": "yes"})
+        async with aiohttp.ClientSession() as s:
+            ok = await async_update_room(s, "tok", "site1", "room1", title="X")
+    assert ok is False
+
+
+async def test_remove_room_posts_correct_payload():
+    from aioresponses import CallbackResult
+
+    captured: dict = {}
+
+    def _capture(url, **kwargs):
+        captured.update(kwargs.get("json", {}))
+        return CallbackResult(payload={"result": True})
+
+    with aioresponses() as m:
+        m.post(_REMOVE_ROOM, callback=_capture)
+        async with aiohttp.ClientSession() as s:
+            ok = await async_remove_room(s, "tok", "site1", "room1")
+    assert ok is True
+    assert captured == {"siteId": "site1", "roomId": "room1"}
+
+
+async def test_remove_room_rejects_malformed_truthy_result():
+    with aioresponses() as m:
+        m.post(_REMOVE_ROOM, payload={"result": {}})
+        async with aiohttp.ClientSession() as s:
+            ok = await async_remove_room(s, "tok", "site1", "room1")
+    assert ok is False
+
+
+_STEP = {"device_id": "d1", "output": 0, "state": "On", "value": 255}
+
+
+async def test_create_scene_posts_correct_payload_and_returns_uuid():
+    from aioresponses import CallbackResult
+
+    captured: dict = {}
+
+    def _capture(url, **kwargs):
+        captured.update(kwargs.get("json", {}))
+        return CallbackResult(payload={"result": 1})
+
+    with aioresponses() as m:
+        m.post(_CREATE_SCENE, callback=_capture)
+        async with aiohttp.ClientSession() as s:
+            scene_id = await async_create_scene(s, "tok", "site1", "Movie Night", [_STEP])
+    import uuid as _uuid
+
+    _uuid.UUID(scene_id)  # raises if not a valid UUID
+    assert captured == {
+        "siteId": "site1",
+        "sceneId": scene_id,
+        "title": "Movie Night",
+        "order": 0,
+        "sceneSteps": [
+            {"deviceId": "d1", "output": 0, "dirty": True, "dirtyRemoved": False, "state": "On", "value": 255}
+        ],
+        "hiddenFromSceneList": False,
+        "settings": "",
+    }
+
+
+async def test_create_scene_forwards_optional_step_fields():
+    from aioresponses import CallbackResult
+
+    captured: dict = {}
+
+    def _capture(url, **kwargs):
+        captured.update(kwargs.get("json", {}))
+        return CallbackResult(payload={"result": 1})
+
+    step = {**_STEP, "color_temperature": 3000, "coverable_tilt": 50, "climate_boost_time": 30}
+    with aioresponses() as m:
+        m.post(_CREATE_SCENE, callback=_capture)
+        async with aiohttp.ClientSession() as s:
+            await async_create_scene(s, "tok", "site1", "X", [step], order=2, hidden_from_scene_list=True)
+    assert captured["order"] == 2
+    assert captured["hiddenFromSceneList"] is True
+    assert captured["sceneSteps"][0]["colorTemperature"] == 3000
+    assert captured["sceneSteps"][0]["coverableTilt"] == 50
+    assert captured["sceneSteps"][0]["climateBoostTime"] == 30
+
+
+async def test_update_scene_sends_only_provided_fields():
+    from aioresponses import CallbackResult
+
+    captured: dict = {}
+
+    def _capture(url, **kwargs):
+        captured.update(kwargs.get("json", {}))
+        return CallbackResult(payload={"result": True})
+
+    with aioresponses() as m:
+        m.post(_UPDATE_SCENE, callback=_capture)
+        async with aiohttp.ClientSession() as s:
+            ok = await async_update_scene(s, "tok", "site1", "scene1", title="Renamed")
+    assert ok is True
+    assert captured == {"siteId": "site1", "sceneId": "scene1", "title": "Renamed"}
+
+
+async def test_update_scene_sends_all_provided_fields():
+    from aioresponses import CallbackResult
+
+    captured: dict = {}
+
+    def _capture(url, **kwargs):
+        captured.update(kwargs.get("json", {}))
+        return CallbackResult(payload={"result": True})
+
+    with aioresponses() as m:
+        m.post(_UPDATE_SCENE, callback=_capture)
+        async with aiohttp.ClientSession() as s:
+            await async_update_scene(
+                s,
+                "tok",
+                "site1",
+                "scene1",
+                title="X",
+                order=3,
+                scene_steps=[_STEP],
+                hidden_from_scene_list=True,
+                settings="{}",
+            )
+    assert captured["title"] == "X"
+    assert captured["order"] == 3
+    assert captured["hiddenFromSceneList"] is True
+    assert captured["settings"] == "{}"
+    assert captured["sceneSteps"] == [
+        {"deviceId": "d1", "output": 0, "dirty": True, "dirtyRemoved": False, "state": "On", "value": 255}
+    ]
+
+
+async def test_update_scene_rejects_malformed_truthy_result():
+    with aioresponses() as m:
+        m.post(_UPDATE_SCENE, payload={"result": "yes"})
+        async with aiohttp.ClientSession() as s:
+            ok = await async_update_scene(s, "tok", "site1", "scene1", title="X")
+    assert ok is False
+
+
+async def test_remove_scene_posts_correct_payload():
+    from aioresponses import CallbackResult
+
+    captured: dict = {}
+
+    def _capture(url, **kwargs):
+        captured.update(kwargs.get("json", {}))
+        return CallbackResult(payload={"result": True})
+
+    with aioresponses() as m:
+        m.post(_REMOVE_SCENE, callback=_capture)
+        async with aiohttp.ClientSession() as s:
+            ok = await async_remove_scene(s, "tok", "site1", "scene1")
+    assert ok is True
+    assert captured == {"siteId": "site1", "sceneId": "scene1"}
+
+
+async def test_remove_scene_rejects_malformed_truthy_result():
+    with aioresponses() as m:
+        m.post(_REMOVE_SCENE, payload={"result": {}})
+        async with aiohttp.ClientSession() as s:
+            ok = await async_remove_scene(s, "tok", "site1", "scene1")
+    assert ok is False
+
+
+async def test_remove_device_posts_correct_payload():
+    from aioresponses import CallbackResult
+
+    captured: dict = {}
+
+    def _capture(url, **kwargs):
+        captured.update(kwargs.get("json", {}))
+        return CallbackResult(payload={"result": True})
+
+    with aioresponses() as m:
+        m.post(_REMOVE_DEVICE, callback=_capture)
+        async with aiohttp.ClientSession() as s:
+            ok = await async_remove_device(s, "tok", "site1", "d1")
+    assert ok is True
+    assert captured == {"siteId": "site1", "deviceId": "d1"}
+
+
+async def test_remove_device_rejects_malformed_truthy_result():
+    with aioresponses() as m:
+        m.post(_REMOVE_DEVICE, payload={"result": {}})
+        async with aiohttp.ClientSession() as s:
+            ok = await async_remove_device(s, "tok", "site1", "d1")
+    assert ok is False
+
+
 async def test_set_input_setting_posts_toggle():
     from aioresponses import CallbackResult
 
@@ -567,3 +838,671 @@ async def test_set_input_setting_posts_toggle():
     assert captured["input"] == 0
     assert captured["buttonType"] == "Toggle"
     assert captured["doubleSidedDirectionButton"] is False
+
+
+def test_parse_site_parses_rooms_with_group_addresses():
+    site = {
+        **_SITE,
+        "rooms": [
+            {"roomId": "r1", "title": "Kitchen"},
+            {"roomId": "r3", "title": "Empty room"},
+        ],
+        # r2 is absent from rooms[] -> name falls back to "Room"; r4's address is non-int
+        # -> skipped; r5's is a bool (int subclass) -> also skipped, not silently coerced.
+        "roomAddress": {"r1": 14, "r2": 16, "r3": 99, "r4": "bad", "r5": True},
+        # d1 (a LIGHT) belongs to both groups; both groups have only light members.
+        "outputGroups": {"d1": {"0": [14, 16]}},
+    }
+    rooms = parse_site(site).rooms
+    by_addr = {r.address: r for r in rooms}
+    assert set(by_addr) == {14, 16}  # r3 (no members) and r4 (bad address) are dropped
+    assert by_addr[14].name == "Kitchen"
+    assert by_addr[14].member_addresses == [11]
+    assert by_addr[14].dimmable is True
+    assert by_addr[16].name == "Room"  # fallback when the room has no title entry
+    assert by_addr[16].member_addresses == [11]  # d1.out0 also belongs to group 16
+
+
+def test_parse_site_all_rooms_includes_empty_and_non_light_rooms():
+    # all_rooms (for room management) must not share `rooms`'s light-grouping filtering:
+    # an empty room (r3, no group members) and a room with only a non-light member would
+    # both be silently dropped from `rooms`, which is exactly wrong for "does this room
+    # exist" / "is it safe to delete" (see PR #114 review).
+    site = {
+        **_SITE,
+        "rooms": [
+            {"roomId": "r1", "title": "Kitchen"},
+            {"roomId": "r3", "title": "Empty room"},
+        ],
+        "roomAddress": {"r1": 14, "r3": 99},
+        "outputGroups": {"d1": {"0": [14]}},
+    }
+    parsed = parse_site(site)
+    assert [r.address for r in parsed.rooms] == [14]  # r3 still excluded from the light-group list
+    by_id = {r.room_id: r for r in parsed.all_rooms}
+    assert set(by_id) == {"r1", "r3"}
+    assert by_id["r1"].name == "Kitchen"
+    assert by_id["r1"].has_devices is True  # d1/d2 (from _SITE's devices[]) have roomId "r1"
+    assert by_id["r1"].address == 14
+    assert by_id["r3"].name == "Empty room"
+    assert by_id["r3"].has_devices is False
+    # r3 has no light-group members so it's excluded from `rooms`, but move_device_to_room
+    # still needs its address to target the room even though it has no light entity.
+    assert by_id["r3"].address == 99
+
+
+def test_parse_site_all_rooms_address_is_none_for_a_malformed_room_address():
+    site = {
+        **_SITE,
+        "rooms": [{"roomId": "r1", "title": "Kitchen"}],
+        "roomAddress": {"r1": "not-a-number"},
+    }
+    all_rooms = parse_site(site).all_rooms
+    assert all_rooms[0].address is None
+
+
+def test_parse_site_all_rooms_skips_malformed_room_entries():
+    site = {**_SITE, "rooms": [{"roomId": "r1", "title": "Kitchen"}, "not-a-dict", {"title": "no id"}, None]}
+    all_rooms = parse_site(site).all_rooms
+    assert [r.room_id for r in all_rooms] == ["r1"]
+
+
+def test_parse_site_all_rooms_includes_a_room_with_no_matching_rooms_entry():
+    # roomAddress/outputGroups can carry a room_id absent from rooms[] itself (e.g. after
+    # a partial deletion) - all_rooms's whole purpose is "every room on the site", so it
+    # must include that room too, not silently omit it.
+    site = {
+        **_SITE,
+        "rooms": [{"roomId": "r1", "title": "Kitchen"}],
+        "roomAddress": {"r1": 14, "r99": 16},  # r99 has no entry in rooms[] at all
+    }
+    all_rooms = parse_site(site).all_rooms
+    by_id = {r.room_id: r for r in all_rooms}
+    assert set(by_id) == {"r1", "r99"}
+    assert by_id["r99"].name == "Room"
+    assert by_id["r99"].address == 16
+    assert by_id["r99"].has_devices is False
+
+
+def test_parse_site_all_scenes_includes_scenes_missing_from_scene_index():
+    # all_scenes (for scene management) must not share `scenes`'s mesh-index filtering:
+    # _SITE's sc2 has no sceneIndex entry, so it's excluded from `scenes` (used for
+    # execution - a broadcast needs a real index), which is exactly wrong for "does this
+    # scene exist" (same issue as PlejdCloudRoom vs all_rooms, #114).
+    parsed = parse_site(_SITE)
+    assert [s.scene_id for s in parsed.scenes] == ["sc1"]  # sc2 still excluded (no index)
+    by_id = {s.scene_id: s for s in parsed.all_scenes}
+    assert set(by_id) == {"sc1", "sc2"}
+    assert by_id["sc1"].name == "Movie"
+    assert by_id["sc2"].name == "NoIndex"
+
+
+def test_parse_site_all_scenes_skips_malformed_scene_entries():
+    site = {**_SITE, "scenes": [{"sceneId": "sc1", "title": "Movie"}, "not-a-dict", {"title": "no id"}, None]}
+    all_scenes = parse_site(site).all_scenes
+    assert [s.scene_id for s in all_scenes] == ["sc1"]
+
+
+def test_parse_site_excludes_room_with_non_light_member():
+    site = {
+        **_SITE,
+        "roomAddress": {"r1": 14},
+        # d1 (a LIGHT) and d2 (a RELAY) both belong to group 14 - a 0x0098 group command
+        # would also toggle the relay, so the whole room is excluded rather than silently
+        # dropping the non-light member from an otherwise-created room.
+        "outputGroups": {"d1": {"0": [14]}, "d2": {"0": [14]}},
+    }
+    assert parse_site(site).rooms == []
+
+
+def test_parse_site_rejects_out_of_range_group_address():
+    site = {
+        **_SITE,
+        # mesh addresses are single-byte (encode_command masks with & 0xFF); 0, negative,
+        # and >255 group addresses must not silently wrap onto a real device's address.
+        "roomAddress": {"r1": 0, "r2": -1, "r3": 256, "r4": 14},
+        "outputGroups": {"d1": {"0": [0, -1, 256, 14]}},
+    }
+    rooms = parse_site(site).rooms
+    assert [r.room_id for r in rooms] == ["r4"]
+
+
+def test_parse_site_skips_malformed_output_group_entries():
+    site = {
+        **_SITE,
+        "roomAddress": {"r1": 14},
+        # d1's own group list has one malformed (non-int) group id alongside the valid one;
+        # d5 (not in devices[], so its own outputAddress cast can't crash devices-parsing)
+        # has a malformed (non-int) output address for an otherwise-valid group. Neither
+        # entry may abort the whole site parse - both are skipped like a bad roomAddress.
+        "outputGroups": {"d1": {"0": [14, "bad-group"]}, "d5": {"0": [14]}},
+        "outputAddress": {**_SITE["outputAddress"], "d5": {"0": "bad-address"}},
+    }
+    rooms = parse_site(site).rooms
+    assert len(rooms) == 1
+    assert rooms[0].member_addresses == [11]  # only d1.out0 survives
+
+
+def test_parse_site_skips_non_list_output_group_value():
+    site = {
+        **_SITE,
+        "roomAddress": {"r1": 14},
+        # d1's own group membership is a scalar, not a list of group addresses -> must be
+        # skipped instead of raising (an int isn't iterable; a dict would silently iterate
+        # its keys instead of the intended group addresses).
+        "outputGroups": {"d1": {"0": 14}},
+    }
+    rooms = parse_site(site).rooms
+    assert rooms == []  # the malformed membership yields no members -> room dropped
+
+
+def test_parse_site_tolerates_non_dict_room_and_group_fields():
+    site = {**_SITE, "roomAddress": ["not", "a", "dict"], "outputGroups": ["also", "not", "a", "dict"]}
+    assert parse_site(site).rooms == []  # both malformed top-level fields are treated as absent
+
+
+def test_parse_site_skips_non_dict_room_entry():
+    site = {
+        **_SITE,
+        # a stray non-dict entry alongside a valid one must not abort parsing
+        "rooms": [{"roomId": "r1", "title": "Kitchen"}, "not-a-dict", None],
+        "roomAddress": {"r1": 14},
+        "outputGroups": {"d1": {"0": [14]}},
+    }
+    rooms = parse_site(site).rooms
+    assert len(rooms) == 1 and rooms[0].name == "Kitchen"
+
+
+def test_parse_site_tolerates_non_list_rooms_field():
+    site = {
+        **_SITE,
+        # rooms is a scalar (untrusted cloud data), not a list -> treated as absent
+        # instead of raising when building room_titles.
+        "rooms": "not-a-list",
+        "roomAddress": {"r1": 14},
+        "outputGroups": {"d1": {"0": [14]}},
+    }
+    rooms = parse_site(site).rooms
+    assert len(rooms) == 1 and rooms[0].name == "Room"  # falls back like a missing title does
+
+
+def test_parse_site_skips_non_dict_output_group_membership_map():
+    site = {
+        **_SITE,
+        "roomAddress": {"r1": 14},
+        # d1's whole membership map is a scalar, not {outputIdx: [groups]} -> skipped
+        # entirely instead of raising on a bad .items() call.
+        "outputGroups": {"d1": "not-a-dict"},
+    }
+    assert parse_site(site).rooms == []
+
+
+def test_parse_site_ignores_non_string_room_title():
+    site = {
+        **_SITE,
+        # a non-string title must not crash the .strip() call -> falls back like a
+        # missing title does ("Room")
+        "rooms": [{"roomId": "r1", "title": 123}],
+        "roomAddress": {"r1": 14},
+        "outputGroups": {"d1": {"0": [14]}},
+    }
+    rooms = parse_site(site).rooms
+    assert len(rooms) == 1 and rooms[0].name == "Room"
+
+
+def test_parse_site_tolerates_non_dict_output_address_fields():
+    site = {
+        **_SITE,
+        "roomAddress": {"r1": 14},
+        "outputGroups": {"d1": {"0": [14]}},
+        # the whole outputAddress map is malformed (untrusted cloud data) -> treated as
+        # empty rather than raising when the room-membership loop calls .get() on it;
+        # d1 is still resolved via the deviceAddress fallback (mirrors the device
+        # parser's own fallback for a single-output light)
+        "outputAddress": ["not", "a", "dict"],
+    }
+    rooms = parse_site(site).rooms
+    assert len(rooms) == 1
+    assert rooms[0].member_addresses == [1]  # d1's deviceAddress (1), not its missing outputAddress
+
+
+def test_parse_site_skips_non_dict_per_device_output_address():
+    site = {
+        **_SITE,
+        "roomAddress": {"r1": 14},
+        # d5 doesn't appear in devices[] (so its malformed entry can't crash the
+        # unrelated device-parsing loop); its own outputAddress value is a scalar, not
+        # {outputIdx: address} -> its membership must be skipped, not raise.
+        "outputGroups": {"d5": {"0": [14]}},
+        "outputAddress": {**_SITE["outputAddress"], "d5": "not-a-dict"},
+    }
+    assert parse_site(site).rooms == []
+
+
+def test_parse_site_room_membership_falls_back_to_device_address():
+    site = {
+        **_SITE,
+        "roomAddress": {"r1": 14},
+        "outputGroups": {"d1": {"0": [14]}},
+        # d1 has no entry in outputAddress at all (a valid dict, just missing this key)
+        # -> falls back to deviceAddress, mirroring the device parser's own fallback
+        # for a single-output light whose outputAddress the cloud omits.
+        "outputAddress": {"d2": _SITE["outputAddress"]["d2"]},
+    }
+    rooms = parse_site(site).rooms
+    assert len(rooms) == 1
+    assert rooms[0].member_addresses == [1]  # d1's deviceAddress
+
+
+def test_parse_site_room_not_dimmable_when_no_member_is_dimmable():
+    site = {
+        **_SITE,
+        "roomAddress": {"r1": 14},
+        "outputGroups": {"d1": {"0": [14]}},
+        # d1 is a LIGHT but explicitly lacks the Dimmable trait -> on/off only.
+        "devices": [
+            {"deviceId": "d1", "title": "Kitchen", "roomId": "r1", "outputType": "LIGHT", "traits": 0},
+        ],
+    }
+    rooms = parse_site(site).rooms
+    assert len(rooms) == 1
+    assert rooms[0].dimmable is False
+
+
+def test_parse_site_room_dimmable_addresses_excludes_on_off_only_members():
+    site = {
+        **_SITE,
+        "roomAddress": {"r1": 14},
+        "outputGroups": {"d1": {"0": [14]}, "d6": {"0": [14]}},
+        "outputAddress": {**_SITE["outputAddress"], "d6": {"0": 61}},
+        "plejdDevices": [*_SITE["plejdDevices"], {"deviceId": "d6", "hardwareId": "1"}],
+        "devices": [
+            *_SITE["devices"],
+            {"deviceId": "d6", "title": "Lamp", "roomId": "r1", "outputType": "LIGHT", "traits": 0},
+        ],
+    }
+    rooms = parse_site(site).rooms
+    assert len(rooms) == 1
+    room = rooms[0]
+    assert set(room.member_addresses) == {11, 61}
+    assert room.dimmable_addresses == [11]  # d1 is dimmable; d6 (traits=0) is on/off only
+
+
+async def test_update_time_event_sends_minimal_payload_without_night_reduction():
+    from aioresponses import CallbackResult
+
+    captured: dict = {}
+
+    def _capture(url, **kwargs):
+        captured.update(kwargs.get("json", {}))
+        return CallbackResult(payload={"result": {"targetDevices": [{"deviceId": "d1", "index": 0}], "eventId": "te1"}})
+
+    with aioresponses() as m:
+        m.post(_UPDATE_TIME_EVENT, callback=_capture)
+        async with aiohttp.ClientSession() as s:
+            result = await async_update_time_event(
+                s,
+                "tok",
+                "site1",
+                "te1",
+                "scene1",
+                scheduled_days=[0, 1, 2, 3, 4, 5, 6],
+                fade_time=0,
+                activated=True,
+                start_event="sunset",
+                start_offset=15,
+                end_event="sunrise",
+                end_offset=0,
+            )
+    assert result == {"targetDevices": [{"deviceId": "d1", "index": 0}], "eventId": "te1"}
+    assert captured == {
+        "siteId": "site1",
+        "timeEventId": "te1",
+        "sceneId": "scene1",
+        "scheduledDays": [0, 1, 2, 3, 4, 5, 6],
+        "fadeTime": 0,
+        "activated": True,
+        "dirtyDevices": [],
+        "dirtyRemovedDevices": [],
+        "dirtyRemove": False,
+        "mode": "astro",
+        "version": 2,
+        "start": {"event": "sunset", "offset": 15},
+        "end": {"event": "sunrise", "offset": 0},
+        "pauseStart": "00:00",
+        "pauseEnd": "00:00",
+    }
+
+
+async def test_update_time_event_sends_dirty_devices_and_night_reduction():
+    from aioresponses import CallbackResult
+
+    captured: dict = {}
+
+    def _capture(url, **kwargs):
+        captured.update(kwargs.get("json", {}))
+        return CallbackResult(payload={"result": {"targetDevices": [], "eventId": "te1"}})
+
+    with aioresponses() as m:
+        m.post(_UPDATE_TIME_EVENT, callback=_capture)
+        async with aiohttp.ClientSession() as s:
+            await async_update_time_event(
+                s,
+                "tok",
+                "site1",
+                "te1",
+                "scene1",
+                scheduled_days=[0],
+                fade_time=2,
+                activated=False,
+                start_event="sunset",
+                start_offset=15,
+                end_event="sunrise",
+                end_offset=0,
+                dirty_devices=["d1"],
+                night_reduction={
+                    "scene_id": "night1",
+                    "start_time": "23:15",
+                    "end_time": "05:30",
+                    "weekend_start_time": "23:59",
+                    "weekend_end_time": "06:50",
+                },
+            )
+    assert captured["dirtyDevices"] == ["d1"]
+    assert captured["version"] == 3  # night_reduction present -> version 3, not 2
+    assert "pauseStart" not in captured and "pauseEnd" not in captured
+    assert captured["nightReduction"] == {
+        "startTime": "23:15",
+        "endTime": "05:30",
+        "sceneId": "night1",
+        "weekendDeviation": {"startTime": "23:59", "endTime": "06:50"},
+    }
+
+
+async def test_update_time_event_night_reduction_without_weekend_deviation():
+    from aioresponses import CallbackResult
+
+    captured: dict = {}
+
+    def _capture(url, **kwargs):
+        captured.update(kwargs.get("json", {}))
+        return CallbackResult(payload={"result": {"targetDevices": [], "eventId": "te1"}})
+
+    with aioresponses() as m:
+        m.post(_UPDATE_TIME_EVENT, callback=_capture)
+        async with aiohttp.ClientSession() as s:
+            await async_update_time_event(
+                s,
+                "tok",
+                "site1",
+                "te1",
+                "scene1",
+                scheduled_days=[0],
+                fade_time=0,
+                activated=True,
+                start_event="sunset",
+                start_offset=15,
+                end_event="sunrise",
+                end_offset=0,
+                night_reduction={"scene_id": "night1", "start_time": "23:15", "end_time": "05:30"},
+            )
+    assert captured["nightReduction"] == {"startTime": "23:15", "endTime": "05:30", "sceneId": "night1"}
+    assert "weekendDeviation" not in captured["nightReduction"]
+
+
+async def test_update_time_event_rejects_malformed_result():
+    with aioresponses() as m:
+        m.post(_UPDATE_TIME_EVENT, payload={"result": True})
+        async with aiohttp.ClientSession() as s:
+            result = await async_update_time_event(
+                s,
+                "tok",
+                "site1",
+                "te1",
+                "scene1",
+                scheduled_days=[0],
+                fade_time=0,
+                activated=True,
+                start_event="sunset",
+                start_offset=15,
+                end_event="sunrise",
+                end_offset=0,
+            )
+    assert result is None
+
+
+async def test_update_time_event_rejects_missing_event_id():
+    with aioresponses() as m:
+        m.post(_UPDATE_TIME_EVENT, payload={"result": {"targetDevices": []}})
+        async with aiohttp.ClientSession() as s:
+            result = await async_update_time_event(
+                s,
+                "tok",
+                "site1",
+                "te1",
+                "scene1",
+                scheduled_days=[0],
+                fade_time=0,
+                activated=True,
+                start_event="sunset",
+                start_offset=15,
+                end_event="sunrise",
+                end_offset=0,
+            )
+    assert result is None
+
+
+async def test_update_time_event_rejects_mismatched_event_id():
+    # A response confirming a DIFFERENT TimeEvent than the one asked for must not be
+    # mistaken for success - the caller's requested update was not actually applied.
+    with aioresponses() as m:
+        m.post(_UPDATE_TIME_EVENT, payload={"result": {"targetDevices": [], "eventId": "other-id"}})
+        async with aiohttp.ClientSession() as s:
+            result = await async_update_time_event(
+                s,
+                "tok",
+                "site1",
+                "te1",
+                "scene1",
+                scheduled_days=[0],
+                fade_time=0,
+                activated=True,
+                start_event="sunset",
+                start_offset=15,
+                end_event="sunrise",
+                end_offset=0,
+            )
+    assert result is None
+
+
+async def test_update_time_event_sends_dirty_remove():
+    from aioresponses import CallbackResult
+
+    captured: dict = {}
+
+    def _capture(url, **kwargs):
+        captured.update(kwargs.get("json", {}))
+        return CallbackResult(payload={"result": {"targetDevices": [], "eventId": "te1"}})
+
+    with aioresponses() as m:
+        m.post(_UPDATE_TIME_EVENT, callback=_capture)
+        async with aiohttp.ClientSession() as s:
+            await async_update_time_event(
+                s,
+                "tok",
+                "site1",
+                "te1",
+                "scene1",
+                scheduled_days=[0],
+                fade_time=0,
+                activated=True,
+                start_event="sunset",
+                start_offset=15,
+                end_event="sunrise",
+                end_offset=0,
+                dirty_remove=True,
+            )
+    assert captured["dirtyRemove"] is True
+
+
+async def test_create_time_event_sends_null_time_event_id_and_target_devices():
+    from aioresponses import CallbackResult
+
+    captured: dict = {}
+
+    def _capture(url, **kwargs):
+        captured.update(kwargs.get("json", {}))
+        return CallbackResult(payload={"result": {"targetDevices": [{"deviceId": "d1", "index": 0}], "eventId": "te1"}})
+
+    with aioresponses() as m:
+        m.post(_CREATE_TIME_EVENT, callback=_capture)
+        async with aiohttp.ClientSession() as s:
+            result = await async_create_time_event(
+                s,
+                "tok",
+                "site1",
+                "scene1",
+                scheduled_days=[0, 1, 2, 3, 4, 5, 6],
+                fade_time=0,
+                activated=True,
+                start_event="sunset",
+                start_offset=15,
+                end_event="sunrise",
+                end_offset=0,
+                dirty_devices=["d1"],
+            )
+    assert result == {"targetDevices": [{"deviceId": "d1", "index": 0}], "eventId": "te1"}
+    assert captured == {
+        "siteId": "site1",
+        "timeEventId": None,
+        "sceneId": "scene1",
+        "scheduledDays": [0, 1, 2, 3, 4, 5, 6],
+        "fadeTime": 0,
+        "activated": True,
+        "dirtyDevices": ["d1"],
+        "dirtyRemovedDevices": [],
+        "dirtyRemove": False,
+        "mode": "astro",
+        "version": 2,
+        "start": {"event": "sunset", "offset": 15},
+        "end": {"event": "sunrise", "offset": 0},
+        "pauseStart": "00:00",
+        "pauseEnd": "00:00",
+        "targetDevices": ["d1"],
+    }
+
+
+async def test_create_time_event_with_night_reduction_uses_version_3():
+    from aioresponses import CallbackResult
+
+    captured: dict = {}
+
+    def _capture(url, **kwargs):
+        captured.update(kwargs.get("json", {}))
+        return CallbackResult(payload={"result": {"targetDevices": [], "eventId": "te1"}})
+
+    with aioresponses() as m:
+        m.post(_CREATE_TIME_EVENT, callback=_capture)
+        async with aiohttp.ClientSession() as s:
+            await async_create_time_event(
+                s,
+                "tok",
+                "site1",
+                "scene1",
+                scheduled_days=[0],
+                fade_time=0,
+                activated=True,
+                start_event="sunset",
+                start_offset=15,
+                end_event="sunrise",
+                end_offset=0,
+                night_reduction={"scene_id": "night1", "start_time": "23:15", "end_time": "05:30"},
+            )
+    assert captured["version"] == 3
+    assert "pauseStart" not in captured and "pauseEnd" not in captured
+    assert captured["nightReduction"] == {"startTime": "23:15", "endTime": "05:30", "sceneId": "night1"}
+
+
+async def test_create_time_event_rejects_malformed_result():
+    with aioresponses() as m:
+        m.post(_CREATE_TIME_EVENT, payload={"result": True})
+        async with aiohttp.ClientSession() as s:
+            result = await async_create_time_event(
+                s,
+                "tok",
+                "site1",
+                "scene1",
+                scheduled_days=[0],
+                fade_time=0,
+                activated=True,
+                start_event="sunset",
+                start_offset=15,
+                end_event="sunrise",
+                end_offset=0,
+            )
+    assert result is None
+
+
+async def test_create_time_event_rejects_missing_event_id():
+    with aioresponses() as m:
+        m.post(_CREATE_TIME_EVENT, payload={"result": {"targetDevices": []}})
+        async with aiohttp.ClientSession() as s:
+            result = await async_create_time_event(
+                s,
+                "tok",
+                "site1",
+                "scene1",
+                scheduled_days=[0],
+                fade_time=0,
+                activated=True,
+                start_event="sunset",
+                start_offset=15,
+                end_event="sunrise",
+                end_offset=0,
+            )
+    assert result is None
+
+
+async def test_create_time_event_rejects_non_string_event_id():
+    with aioresponses() as m:
+        m.post(_CREATE_TIME_EVENT, payload={"result": {"targetDevices": [], "eventId": 12345}})
+        async with aiohttp.ClientSession() as s:
+            result = await async_create_time_event(
+                s,
+                "tok",
+                "site1",
+                "scene1",
+                scheduled_days=[0],
+                fade_time=0,
+                activated=True,
+                start_event="sunset",
+                start_offset=15,
+                end_event="sunrise",
+                end_offset=0,
+            )
+    assert result is None
+
+
+async def test_remove_time_event_posts_correct_payload():
+    from aioresponses import CallbackResult
+
+    captured: dict = {}
+
+    def _capture(url, **kwargs):
+        captured.update(kwargs.get("json", {}))
+        return CallbackResult(payload={"result": True})
+
+    with aioresponses() as m:
+        m.post(_REMOVE_TIME_EVENT, callback=_capture)
+        async with aiohttp.ClientSession() as s:
+            ok = await async_remove_time_event(s, "tok", "site1", "te1", device_ids=["d1"])
+    assert ok is True
+    assert captured == {"siteId": "site1", "timeEventId": "te1", "mode": "astro", "deviceIds": ["d1"]}
+
+
+async def test_remove_time_event_rejects_malformed_truthy_result():
+    with aioresponses() as m:
+        m.post(_REMOVE_TIME_EVENT, payload={"result": "yes"})
+        async with aiohttp.ClientSession() as s:
+            ok = await async_remove_time_event(s, "tok", "site1", "te1", device_ids=["d1"])
+    assert ok is False

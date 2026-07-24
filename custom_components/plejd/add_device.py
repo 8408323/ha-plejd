@@ -32,6 +32,7 @@ from .const import (
     CONF_INPUTS,
     CONF_MOTION,
     CONF_RESOURCE_SET_ID,
+    CONF_ROOMS,
     CONF_SCENES,
     CONF_SITE_ID,
 )
@@ -49,6 +50,7 @@ async def async_add_device(
     hardware_id: str = "0",
     room_id: str | None = None,
     room_title: str | None = None,
+    room_category: str | None = None,
     firmware_build_time: int = 0,
     input_settings: list[dict] | None = None,
 ) -> None:
@@ -98,7 +100,16 @@ async def async_add_device(
     device_id = address.replace(":", "").lower()
     try:
         await async_commission_device(
-            http_session, token, site, ble_device, name, hardware_id, firmware_build_time, room_id, room_title
+            http_session,
+            token,
+            site,
+            ble_device,
+            name,
+            hardware_id,
+            firmware_build_time,
+            room_id,
+            room_title,
+            room_category,
         )
     except Exception as err:
         raise HomeAssistantError(f"Plejd commissioning failed: {err}") from err
@@ -129,6 +140,7 @@ async def async_add_device(
             CONF_INPUTS: [asdict(i) for i in fresh_site.inputs],
             CONF_MOTION: [asdict(m) for m in fresh_site.motion],
             CONF_SCENES: [asdict(s) for s in fresh_site.scenes],
+            CONF_ROOMS: [asdict(r) for r in fresh_site.rooms],
             CONF_GATEWAYS: fresh_site.gateways,
             CONF_RESOURCE_SET_ID: fresh_site.resource_set_id,
             CONF_DEVICE_ADDRESSES: fresh_site.device_addresses,

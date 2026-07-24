@@ -33,3 +33,6 @@ jobs:
 
       - name: Run tests
         run: uv run pytest tests/ -v --tb=short --cov=custom_components/plejd --cov-report=term-missing --cov-fail-under=100
+
+      - name: Run panel JS tests
+        run: node --test tests/test_panel_js.mjs

@@ -23,6 +23,9 @@ from plejd.const import (
     CONF_DEVICE_ADDRESSES,
     CONF_DEVICES,
     CONF_GATEWAYS,
+    CONF_HOLIDAY_LIGHTS,
+    CONF_HOLIDAY_WINDOW_END,
+    CONF_HOLIDAY_WINDOW_START,
     CONF_INSTALLATION_ID,
     CONF_RESOURCE_SET_ID,
     CONF_SITE_ID,
@@ -483,7 +486,7 @@ async def test_options_no_free_slots_errors():
 async def test_options_init_shows_menu():
     res = await _opt_flow().async_step_init()
     assert res["type"] == "menu" and res["step_id"] == "init"
-    assert res["menu_options"] == ["schedules", "add_device"]
+    assert res["menu_options"] == ["schedules", "dashboard", "holiday_mode", "add_device"]
 
 
 # ── Options flow: add a device ─────────────────────────────────────────────────
@@ -569,6 +572,24 @@ async def test_add_device_details_success_finishes_flow(monkeypatch):
     assert res["type"] == "create_entry" and res["data"] == {"schedules": []}
 
 
+async def test_add_device_details_passes_room_category_through(monkeypatch):
+    added = []
+
+    async def _fake_add_device(hass, entry, *, address, name, room_title=None, room_category=None, **kwargs):
+        added.append((address, name, room_title, room_category))
+
+    monkeypatch.setattr(cf, "async_add_device", _fake_add_device)
+
+    flow = _opt_flow(options={"schedules": []})
+    flow._new_device_address = "AA:BB:CC:DD:EE:FF"
+    res = await flow.async_step_add_device_details(
+        {"name": "Taklampa", "room_title": "Garage", "room_category": "Garage"}
+    )
+
+    assert added == [("AA:BB:CC:DD:EE:FF", "Taklampa", "Garage", "Garage")]
+    assert res["type"] == "create_entry" and res["data"] == {"schedules": []}
+
+
 async def test_add_device_details_shows_error_on_failure(monkeypatch):
     from homeassistant.exceptions import HomeAssistantError
 
@@ -583,3 +604,73 @@ async def test_add_device_details_shows_error_on_failure(monkeypatch):
 
     assert res["errors"] == {"base": "add_device_failed"}
     assert res["description_placeholders"]["error"] == "Plejd device not found in Bluetooth range"
+
+
+# ── Options: dashboard show/hide ──────────────────────────────────────────────
+
+
+async def test_options_init_menu_includes_dashboard():
+    res = await _opt_flow().async_step_init()
+    assert "dashboard" in res["menu_options"]
+
+
+async def test_options_dashboard_shows_toggle():
+    res = await _opt_flow(options={"show_panel": True}).async_step_dashboard()
+    assert res["type"] == "form" and res["step_id"] == "dashboard"
+    assert "show_panel" in _schema_keys(res)
+
+
+async def test_options_dashboard_saves_and_preserves_other_options():
+    res = await _opt_flow(
+        options={"schedules": [{"slot": 0}], "transport": "gateway", "show_panel": True}
+    ).async_step_dashboard({"show_panel": False})
+    assert res["type"] == "create_entry"
+    assert res["data"]["show_panel"] is False
+    assert res["data"]["schedules"] == [{"slot": 0}]  # other options preserved
+    assert res["data"]["transport"] == "gateway"
+
+
+async def test_options_schedules_preserves_show_panel():
+    res = await _opt_flow(options={"show_panel": False, "schedules": []}).async_step_schedules(
+        {"name": "", "delete": []}
+    )
+    assert res["type"] == "create_entry"
+    assert res["data"]["show_panel"] is False  # kept through an unrelated (schedules) save
+
+
+# ── Options: holiday mode (presence simulation) ────────────────────────────────
+
+
+async def test_options_init_menu_includes_holiday_mode():
+    res = await _opt_flow().async_step_init()
+    assert "holiday_mode" in res["menu_options"]
+
+
+async def test_options_holiday_mode_shows_form_with_defaults():
+    res = await _opt_flow().async_step_holiday_mode()
+    assert res["type"] == "form" and res["step_id"] == "holiday_mode"
+    assert set(_schema_keys(res)) == {"lights", "window_start", "window_end"}
+
+
+async def test_options_holiday_mode_saves_lights_and_window():
+    res = await _opt_flow().async_step_holiday_mode(
+        {"lights": ["light.kitchen"], "window_start": "19:00", "window_end": "23:30"}
+    )
+    assert res["type"] == "create_entry"
+    assert res["data"][CONF_HOLIDAY_LIGHTS] == ["light.kitchen"]
+    assert res["data"][CONF_HOLIDAY_WINDOW_START] == "19:00"
+    assert res["data"][CONF_HOLIDAY_WINDOW_END] == "23:30"
+
+
+async def test_options_holiday_mode_defaults_lights_to_empty_meaning_all():
+    res = await _opt_flow().async_step_holiday_mode({"window_start": "18:00", "window_end": "23:00"})
+    assert res["data"][CONF_HOLIDAY_LIGHTS] == []
+
+
+async def test_options_holiday_mode_preserves_other_options():
+    res = await _opt_flow(options={"show_panel": False, "schedules": [{"slot": 0}]}).async_step_holiday_mode(
+        {"window_start": "18:00", "window_end": "23:00"}
+    )
+    assert res["type"] == "create_entry"
+    assert res["data"]["show_panel"] is False
+    assert res["data"]["schedules"] == [{"slot": 0}]

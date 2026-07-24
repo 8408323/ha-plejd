@@ -15,11 +15,13 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
 from .const import (
+    CONF_CLOUD_SCHEDULES,
     CONF_CRYPTO_KEY,
     CONF_DEVICE_ADDRESSES,
     CONF_DISCOVERED_ADDRESS,
     CONF_GATEWAYS,
     CONF_INSTALLATION_ID,
+    CONF_PENDING_ROOM_MOVES,
     CONF_RESOURCE_SET_ID,
     CONF_SCHEDULES,
     CONF_SITE_ID,
@@ -42,11 +44,19 @@ TO_REDACT = {
     "object_id",
     "address",
     "outputs",
+    "member_addresses",
+    "dimmable_addresses",
     "name",
     "room_id",
     "scene_id",
     # Schedule timings reveal occupancy/routine — redact wholesale (count reported below).
     CONF_SCHEDULES,
+    CONF_CLOUD_SCHEDULES,
+    # move_device_to_room's own pending-moves cache is keyed BY device_id (a dict key,
+    # which async_redact_data can't redact - only values under a matching key name) and
+    # its values carry mesh addresses too - redact the whole structure wholesale rather
+    # than trying to name every nested field individually.
+    CONF_PENDING_ROOM_MOVES,
 }
 
 
@@ -65,6 +75,7 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: ConfigE
             "motion": len(coordinator.motion),
             "gateways": len(entry.data.get(CONF_GATEWAYS) or []),
             "schedules": len(entry.options.get(CONF_SCHEDULES) or []),
+            "cloud_schedules": len(entry.data.get(CONF_CLOUD_SCHEDULES) or []),
         },
         "models": sorted({device.model for device in coordinator.devices}),
     }

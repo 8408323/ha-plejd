@@ -9,6 +9,12 @@ from __future__ import annotations
 
 DOMAIN = "plejd"
 
+# Prefix for a room's pseudo-device identifier/unique_id (PlejdRoomLight). Rooms live in the
+# same (DOMAIN, id) identifier namespace as real Plejd devices but have no Parse cloud object
+# of their own — anything that mirrors HA device state back to the Plejd cloud by device_id
+# must recognize and skip this prefix.
+ROOM_DEVICE_ID_PREFIX = "room_"
+
 # BLE address of the mesh device discovered during the config flow.
 CONF_DISCOVERED_ADDRESS = "discovered_address"
 
@@ -18,8 +24,10 @@ CONF_CRYPTO_KEY = "crypto_key"  # hex string of the 16-byte site key
 CONF_DEVICES = "devices"  # cached device list (so HA works offline after setup)
 CONF_DEVICE_ADDRESSES = "device_addresses"  # device_id -> physical mesh address, for fault polling
 CONF_SCENES = "scenes"  # cached scene list
+CONF_ROOMS = "rooms"  # cached room list (name + group mesh address + member output addresses)
 CONF_INPUTS = "inputs"  # cached button-input list
 CONF_MOTION = "motion"  # cached motion-sensor list
+CONF_PENDING_ROOM_MOVES = "pending_room_moves"  # move_device_to_room's own not-yet-cloud-confirmed moves
 HARDWARE_WMS_01 = 70  # motion sensor
 HARDWARE_GWY_01 = 4  # gateway
 CONF_GATEWAYS = "gateways"  # gateway (GWY-01) device ids; remote control is available when non-empty
@@ -123,6 +131,25 @@ TIME_EVENT_RESULT_SCENE = 0
 TIME_EVENT_REP_FOREVER = 0xFFFFFFFF
 WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 CONF_SCHEDULES = "schedules"  # entry.options: list of time-event schedule dicts
+CONF_SHOW_PANEL = "show_panel"  # entry.options: show the Plejd dashboard in the sidebar (default True)
+
+# Plejd-cloud schedules (the app's "Schemaläggning": astro-relative sunset/sunrise triggers
+# plus an optional night-reduction quiet-hours window) — a separate, cloud-only feature from
+# the on-device weekly time-events above (CONF_SCHEDULES, CMD_TIME_EVENT_*): confirmed via a
+# live capture to never touch the BLE mesh, instead updating one TimeEvent Parse object plus
+# one or two ordinary (hidden) scenes it runs. Only "astro" mode was captured; a fixed-clock
+# trigger mode's wire shape is unconfirmed and not implemented.
+CONF_CLOUD_SCHEDULES = "cloud_schedules"  # entry.data: schedules created via this integration
+SCHEDULE_ASTRO_EVENTS = ("sunset", "sunrise")
+SCHEDULE_OFFSET_MIN = -120
+SCHEDULE_OFFSET_MAX = 120
+
+# Holiday mode (presence simulation, the Plejd app's "Semesterläge") — entry.options.
+CONF_HOLIDAY_LIGHTS = "holiday_lights"  # target light entity_ids; empty/absent = all Plejd lights
+CONF_HOLIDAY_WINDOW_START = "holiday_window_start"  # "HH:MM", start of the active window
+CONF_HOLIDAY_WINDOW_END = "holiday_window_end"  # "HH:MM", end of the window (may be < start = crosses midnight)
+HOLIDAY_WINDOW_START_DEFAULT = "18:00"
+HOLIDAY_WINDOW_END_DEFAULT = "23:00"
 CMD_INPUT_STATE_AND_LEVEL = 0x0195  # state notification: channel, state, level[2]
 CMD_SYSTEM_TIME = 0x001B
 CMD_DEVICE_TYPE = 0x0000
@@ -143,6 +170,10 @@ CMD_HARDFAULT_REASON = 0x001D  # struct: code(u32 le), line(u16 le), message(asc
 CMD_TRM_SETPOINT = 0x045C  # thermostat target temperature: u16le = round(C*10)
 CMD_TRM_MODE = 0x045F  # thermostat operating mode (OperatingMode enum)
 CMD_TRM_TEMP_READING = 0x045B  # temperature reading [sensor] -> u16le C*10
+# Join/leave a room's mesh group (confirmed via a live capture of the app's own "move
+# device to room" action - the device's own address, not its output address, is the
+# command's target). data=[0x01, room_group_address] to leave, +[0x01] appended to join.
+CMD_MESH_GROUP_MEMBERSHIP = 0x0008
 
 # Thermostat operating modes (Plejd OperatingMode enum) -> HA presets.
 TRM_MODE_VACATION = 2
@@ -167,11 +198,55 @@ PLEJD_PARSE_LOGIN = "login"  # POST {username, password} -> {sessionToken}
 PLEJD_FN_SITE_LIST = "functions/getSiteList"  # -> [{siteId, ...}]
 PLEJD_FN_SITE_BY_ID = "functions/getSiteById"  # {siteId} -> site w/ cryptoKey + devices
 PLEJD_FN_FIRMWARE_BY_HW = "functions/getFirmwaresByHardwareId"  # {hardwareId, faceplateId} -> [] when up to date
-PLEJD_FN_UPDATE_DEVICE = "functions/updateDevice_V2"  # {siteId, deviceId, deviceParseId, title} -> rename in the app
+PLEJD_FN_UPDATE_DEVICE = (
+    "functions/updateDevice_V2"  # {siteId, deviceId, deviceParseId, title|traits|hiddenFromRoomList}
+)
 PLEJD_FN_CREATE_DEVICE = "functions/createPlejdDevice_V2"  # register new device to site
 PLEJD_FN_COMPATIBLE_DEVICES = "functions/getCompatibleDevices"  # {devices:[{hardwareId,...}]} -> neededAddresses
 PLEJD_FN_CREATE_ROOM = "functions/createRoom"  # {siteId, roomId, title, category, imageHash} -> int
+PLEJD_FN_UPDATE_ROOM = "functions/updateRoom"  # {siteId, roomId, title?, order?, category?, imageHash?} -> bool
+PLEJD_FN_REMOVE_ROOM = "functions/removeRoom"  # {siteId, roomId} -> bool; cloud requires the room to be empty
 PLEJD_FN_SET_INPUT = "functions/setPlejdDeviceInputSetting"  # {siteId, deviceId, input, buttonType, ...} -> bool
+PLEJD_FN_CREATE_SCENE = (
+    "functions/createScene"  # {siteId, sceneId, title, order, sceneSteps, hiddenFromSceneList, settings} -> int
+)
+PLEJD_FN_UPDATE_SCENE = (
+    "functions/updateScene"  # {siteId, sceneId, title?|order?|sceneSteps?|hiddenFromSceneList?|settings?} -> bool
+)
+PLEJD_FN_REMOVE_SCENE = "functions/removeScene"  # {siteId, sceneId} -> bool
+PLEJD_FN_REMOVE_DEVICE = "functions/removeDevice"  # {siteId, deviceId} -> bool
+PLEJD_FN_CREATE_TIME_EVENT = (
+    "functions/createTimeEvent_V3"  # {siteId, timeEventId: null, sceneId, scheduledDays, fadeTime,
+    # activated, dirtyDevices, dirtyRemovedDevices: [], dirtyRemove: false, mode, version, start,
+    # end, pauseStart?, pauseEnd?, nightReduction?, targetDevices} -> {targetDevices, eventId};
+    # timeEventId is server-generated - the response's eventId is the real id, confirmed distinct
+    # from updateTimeEvent_V3 (this integration wrongly used update for create until this was
+    # captured)
+)
+PLEJD_FN_UPDATE_TIME_EVENT = (
+    "functions/updateTimeEvent_V3"  # {siteId, timeEventId, sceneId, scheduledDays, fadeTime,
+    # activated, dirtyDevices, dirtyRemovedDevices, dirtyRemove, mode, version, start, end,
+    # pauseStart?, pauseEnd?, nightReduction?} -> {targetDevices, eventId}; whole-state call,
+    # resent in full each edit
+)
+PLEJD_FN_REMOVE_TIME_EVENT = "functions/removeTimeEvent_V3"  # {siteId, timeEventId, mode, deviceIds} -> bool
+
+# Room.RoomCategory enum values, sent to createRoom/updateRoom's "category" field as-is
+# (the app does `.ToString()` on the enum). Excludes KidsRoom - the app itself marks it
+# obsolete ("old KidsRoom rooms now use Bedroom instead") and hides it from the picker.
+ROOM_CATEGORIES = (
+    "LivingRoom",
+    "Kitchen",
+    "Outdoor",
+    "Bedroom",
+    "Hallway",
+    "Bathroom",
+    "Office",
+    "Laundry",
+    "Storage",
+    "Other",
+    "Garage",
+)
 
 # ── Device types (Plejd.Shared HardwareType enum: id -> product name) ──
 HARDWARE_TYPES: dict[int, str] = {

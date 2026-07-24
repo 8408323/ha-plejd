@@ -58,6 +58,13 @@ class PlejdClimate(ClimateEntity):
             model=device.model,
         )
         self._attr_preset_mode = TRM_PRESETS[TRM_MODE_NORMAL]
+        # The real setpoint isn't readable without a capture (see module docstring), but
+        # leaving this unset until the first successful async_set_temperature makes the
+        # entity report no target at all - callers (including our own panel) can't tell
+        # "no reading yet" from "off", and a UI that disables its controls on a null target
+        # can never send the very first setpoint. A reasonable room-temperature default
+        # is a starting point to adjust from, not a claim about the device's real state.
+        self._attr_target_temperature = 21.0
 
     @property
     def available(self) -> bool:

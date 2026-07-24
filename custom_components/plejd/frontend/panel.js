@@ -1,0 +1,1696 @@
+// Plejd dashboard — a custom Home Assistant sidebar panel (not a Lovelace view).
+// Home Assistant sets `hass`, `narrow`, `route`, and `panel` properties on this element.
+// It lists the site's Plejd lights (tap to toggle, drag to dim), thermostats, and
+// scenes, and hosts the remote → light dim-binding editor: map a dimmer remote's
+// hold/release device triggers to smooth dimming of a light or area.
+
+const CARD = `
+  background: var(--card-background-color, #fff);
+  border-radius: 12px;
+  box-shadow: var(--ha-card-box-shadow, 0 2px 4px rgba(0,0,0,.1));
+  padding: 16px;
+`;
+const INPUT = `
+  width: 100%; box-sizing: border-box; padding: 8px 10px; border-radius: 8px;
+  border: 1px solid var(--divider-color, #e0e0e0);
+  background: var(--secondary-background-color, #fafafa);
+  color: var(--primary-text-color, #212121); font-size: .95rem;
+`;
+const BTN = `
+  border: none; border-radius: 8px; padding: 8px 16px; font-size: .95rem; cursor: pointer;
+  background: var(--primary-color, #03a9f4); color: var(--text-primary-color, #fff);
+`;
+const LABEL = "display:block;font-size:.8rem;color:var(--secondary-text-color,#727272);margin:0 0 4px";
+// Minimum gap between live brightness commands while dragging a slider — matches
+// DIM_INTERVAL in dim_ramp.py, the same pacing the hold-to-dim ramp uses per tick.
+const DRAG_SEND_INTERVAL_MS = 100;
+
+// Entity/area/device names are user-controlled; escape before interpolating into innerHTML.
+const esc = (s) =>
+  String(s).replace(
+    /[&<>"']/g,
+    (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c],
+  );
+
+// One human label for a device automation trigger (type, optionally its subtype).
+const triggerLabel = (t) => {
+  const type = (t.type || "trigger").replace(/_/g, " ");
+  return t.subtype ? `${type} · ${t.subtype}` : type;
+};
+
+// A cover's current_position comes off hass state, which can be missing, out of range, or
+// (for any entity claiming Plejd attribution) outright hostile — clamp/validate to a safe
+// 0-100 integer before it ever reaches an HTML attribute; anything else is "unknown".
+const clampPosition = (value) => {
+  if (value == null) return null;
+  // Number("") and Number("   ") coerce to 0 — without this check a blank/malformed
+  // current_position would render as "0%" (closed) instead of "unknown".
+  if (typeof value === "string" && value.trim() === "") return null;
+  const n = Math.round(Number(value));
+  return Number.isFinite(n) ? Math.min(100, Math.max(0, n)) : null;
+};
+
+// CoverEntityFeature.SET_POSITION bit (homeassistant.components.cover) — mirrors cover.py's
+// supported_features so the panel can tell a position-capable cover apart without importing HA.
+const COVER_FEATURE_SET_POSITION = 4;
+
+// Instantaneous press-action types a trigger can map to (mirrors bindings.py PRESS_ACTIONS).
+const PRESS_ACTIONS = ["toggle", "on", "off", "scene", "service"];
+const PRESS_ACTION_LABELS = {
+  toggle: "Toggle",
+  on: "Turn on",
+  off: "Turn off",
+  scene: "Activate scene",
+  service: "Call service",
+};
+
+// Weekday labels for the schedule day picker (index 0=Mon..6=Sun, mirrors const.py WEEKDAYS).
+const WEEKDAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+class PlejdPanel extends HTMLElement {
+  constructor() {
+    super();
+    this._bindings = null; // loaded list, null until the first WS list resolves (or a failed load)
+    this._loadFailed = false; // a list load errored — block saving so it can't overwrite storage
+    this._triggers = {}; // device_id -> its device triggers (only successful loads are cached)
+    this._deviceKinds = {}; // device_id -> "remote" | "door_window" | "motion" (cached alongside triggers)
+    this._areasById = {};
+    this._devicesById = {};
+    this._registriesLoaded = false;
+    this._registriesPromise = null;
+    this._form = { target: "", device: "", up: "", down: "", stop: "", presses: [] };
+    this._error = "";
+    this._notice = "";
+    this._busy = false;
+    this._schedules = null; // loaded list, null until the first WS list resolves (or a failed load)
+    this._schedulesLoadFailed = false;
+    this._scheduleScenes = []; // on-device scenes (index + name), for the scene picker
+    this._scheduleForm = { name: "", days: [], time: "07:00", scene: "", fade: 0 };
+    this._scheduleError = "";
+    this._scheduleNotice = "";
+    this._scheduleBusy = false;
+    this._scenesError = "";
+    this._lightsFrame = null;
+    this._coversFrame = null;
+    // entity_id -> last position we commanded via the slider. PlejdCover is assumed_state
+    // (cover.py has no position read-back), so hass never reports current_position; without
+    // this the slider would forget the user's last input and fall back to "unknown" again.
+    this._coverPositionOverrides = {};
+    // entity_id -> integer, bumped on every cover command (open/close/stop/position). Lets
+    // a resolved command tell whether a newer command has since superseded it, so an older
+    // reply resolving after a newer one can't overwrite the override with a stale position.
+    this._coverCommandTokens = {};
+    // entity_id of a position slider mid-drag, else null — guards _updateCovers so a hass
+    // state push mid-drag can't replace the <input> before its release "change" handler runs.
+    this._draggingCoverEntity = null;
+    this._draggingEntity = null; // entity_id of a brightness slider mid-drag, else null
+    // entity_id -> optimistic on/off from a just-sent toggle, until hass's own push catches
+    // up. Repeated clicks arrive well within the round-trip to the backend (mesh/gateway
+    // ack plus the websocket push back to this tab), so reading hass.states directly on
+    // every click reads the same pre-toggle value each time and sends the same command
+    // repeatedly instead of alternating - this is what a click actually just did.
+    this._toggleOverrides = {};
+    // entity_id -> optimistic brightness pct from a just-sent slider command, until hass's
+    // own push catches up. Mirrors _toggleOverrides: the catch-up render scheduled on slider
+    // release fires well before the real state push arrives, and without this it would
+    // redraw the slider back to the stale pre-drag value for a moment.
+    this._brightnessOverrides = {};
+    // entity_id -> integer, bumped on every toggle/brightness command for that light. Lets
+    // an async command's own failure handler tell whether a newer command has since
+    // superseded it (by value alone, the same true/pct can recur - e.g. off/on/off/on -
+    // so a stale rejection could otherwise clear an unrelated, newer optimistic override).
+    this._commandTokens = {};
+    // entity_id -> { sending, queuedPct } - brightness-send serialization, kept on the
+    // panel instance rather than a per-render closure so a mid-drag re-render (a new
+    // DOM element, a fresh _wireLights closure) doesn't lose track of a send already in
+    // flight and let a new drag's send overlap it.
+    this._brightnessSendState = {};
+    // entity_id -> optimistic target temperature from a just-sent setpoint tap, until
+    // hass's own push catches up. Repeated taps arrive well within that round-trip, so
+    // reading hass.states directly on every tap would recompute from the same pre-tap
+    // snapshot each time instead of accumulating (two quick + taps both landing on the
+    // same +1 step instead of reaching +2).
+    this._climateOverrides = {};
+    const useAnimationFrame = Boolean(
+      globalThis.requestAnimationFrame && globalThis.cancelAnimationFrame,
+    );
+    this._scheduleLightsFrame = useAnimationFrame
+      ? globalThis.requestAnimationFrame.bind(globalThis)
+      : (cb) => globalThis.setTimeout(cb, 0);
+    this._cancelLightsFrame = useAnimationFrame
+      ? globalThis.cancelAnimationFrame.bind(globalThis)
+      : globalThis.clearTimeout.bind(globalThis);
+  }
+
+  set hass(hass) {
+    const first = !this._hass;
+    this._hass = hass;
+    if (first) {
+      this._renderShell();
+      this._loadBindings();
+      this._loadRegistries();
+      this._loadSchedules();
+    }
+    // Only the live lists (lights/climate/motion/scenes/health/covers) track state; leave
+    // the editor DOM (and any in-progress form entry) untouched on the frequent hass updates.
+    this._scheduleLightsUpdate();
+    this._scheduleCoversUpdate();
+  }
+
+  set panel(panel) {
+    this._panel = panel;
+  }
+
+  connectedCallback() {
+    // On (re)connect, rebuild only if the shell is gone; otherwise refresh the live lists
+    // and leave the editor DOM — and any in-progress form entry — untouched.
+    if (!this._hass) return;
+    if (!this.querySelector("#plejd-lights")) this._renderShell();
+    this._scheduleLightsUpdate();
+    this._scheduleCoversUpdate();
+  }
+
+  disconnectedCallback() {
+    if (this._lightsFrame !== null) {
+      this._cancelLightsFrame(this._lightsFrame);
+      this._lightsFrame = null;
+    }
+    if (this._coversFrame !== null) {
+      this._cancelLightsFrame(this._coversFrame);
+      this._coversFrame = null;
+    }
+    // A drag in progress when the panel is torn down (e.g. navigating away) will never
+    // fire its release "change" event on this detached node; clear the guard so a future
+    // reconnect's render isn't skipped forever.
+    this._draggingCoverEntity = null;
+    this._draggingEntity = null;
+  }
+
+  // ── data ──────────────────────────────────────────────────────────────────
+
+  async _callWS(message) {
+    return this._hass.callWS(message);
+  }
+
+  async _callService(domain, service, data) {
+    return this._hass.callService(domain, service, data);
+  }
+
+  async _loadBindings() {
+    this._loadFailed = false;
+    try {
+      const res = await this._callWS({ type: "plejd/dim_bindings/list" });
+      this._bindings = res.bindings || [];
+    } catch (err) {
+      // Keep _bindings unset (not []): a save sends the full list as a replacement, so a
+      // wrong empty baseline could wipe stored bindings. Offer a retry instead of saving.
+      this._bindings = null;
+      this._loadFailed = true;
+      this._error = `Could not load bindings: ${err.message || err}`;
+    }
+    this._renderEditor();
+  }
+
+  _retryLoad() {
+    this._error = "";
+    this._bindings = null;
+    this._loadFailed = false;
+    this._renderEditor(); // back to the "Loading…" state
+    this._loadBindings();
+  }
+
+  async _loadTriggers(deviceId) {
+    if (!deviceId || this._triggers[deviceId]) return;
+    try {
+      const res = await this._callWS({ type: "plejd/device_triggers", device_id: deviceId });
+      this._triggers[deviceId] = res.triggers || []; // cache only on success (even if empty)
+      this._deviceKinds[deviceId] = res.device_kind || "remote";
+    } catch (err) {
+      // Don't cache a failed load — leave it unset so re-selecting the remote retries.
+      this._error = `Could not load triggers: ${err.message || err}`;
+    }
+  }
+
+  async _loadRegistries() {
+    if (typeof this._hass?.callWS !== "function") return;
+    if (this._registriesLoaded) return;
+    if (this._registriesPromise) return this._registriesPromise;
+    this._registriesPromise = (async () => {
+      try {
+        const [areas, devices] = await Promise.all([
+          this._callWS({ type: "config/area_registry/list" }),
+          this._callWS({ type: "config/device_registry/list" }),
+        ]);
+        this._areasById = Object.fromEntries(
+          (areas || []).map((a) => [a.area_id, a.name || a.area_id]),
+        );
+        this._devicesById = Object.fromEntries(
+          (devices || []).map((d) => [d.id, d.name_by_user || d.name || d.id]),
+        );
+        this._registriesLoaded = true;
+      } catch (err) {
+        this._areasById = {};
+        this._devicesById = {};
+        console.warn("Plejd panel: failed to load area/device registries", err);
+      } finally {
+        this._registriesPromise = null;
+        this._renderEditor();
+        // The motion/health cards may have rendered device ids as a placeholder before
+        // this resolved (see _deviceName); refresh them now that names are available.
+        this._updateMotion();
+        this._updateHealth();
+      }
+    })();
+    return this._registriesPromise;
+  }
+
+  async _save(bindings, resetForm = false) {
+    this._busy = true;
+    this._error = "";
+    this._notice = "";
+    this._renderEditor();
+    try {
+      const res = await this._callWS({ type: "plejd/dim_bindings/save", bindings });
+      this._bindings = res.bindings || [];
+      this._notice = "Saved.";
+      // Clear the add form only after an add; a delete must not wipe an in-progress add.
+      if (resetForm) this._form = { target: "", device: "", up: "", down: "", stop: "", presses: [] };
+    } catch (err) {
+      // Surface whatever the backend returns. Invalid input (e.g. a missing stop trigger)
+      // is already caught client-side before saving; the backend validates too and returns
+      // a specific reason for it (a generic message for unexpected failures).
+      this._error = err.message || String(err);
+    } finally {
+      this._busy = false;
+      this._renderEditor();
+    }
+  }
+
+  // A fresh token for entityId, so this command's own failure handler can later tell
+  // whether a newer command has since superseded it (see _commandTokens above).
+  _nextCommandToken(entityId) {
+    const token = (this._commandTokens[entityId] || 0) + 1;
+    this._commandTokens[entityId] = token;
+    return token;
+  }
+
+  async _toggleLight(entityId, turnOn) {
+    const token = this._nextCommandToken(entityId);
+    this._toggleOverrides[entityId] = turnOn;
+    try {
+      await this._hass.callService("light", turnOn ? "turn_on" : "turn_off", { entity_id: entityId });
+    } catch (err) {
+      console.warn("Plejd panel: failed to toggle light", entityId, err);
+      // The command never went out - don't keep claiming it did. Drop the optimistic
+      // override, but only if no newer command for this entity has superseded it.
+      if (this._commandTokens[entityId] === token) {
+        delete this._toggleOverrides[entityId];
+        this._updateLights();
+      }
+    }
+  }
+
+  // Records the optimistic on/pct intent immediately - even when the actual send below
+  // ends up queued behind an in-flight one - so a render in the meantime (e.g. the
+  // catch-up render on slider release) shows the truly-latest requested value instead of
+  // whatever was last actually sent.
+  _recordBrightnessIntent(entityId, pct) {
+    const token = this._nextCommandToken(entityId);
+    this._toggleOverrides[entityId] = true; // brightness_pct always turns the light on
+    this._brightnessOverrides[entityId] = pct;
+    return token;
+  }
+
+  async _setLightBrightness(entityId, pct) {
+    const token = this._recordBrightnessIntent(entityId, pct);
+    let state = this._brightnessSendState[entityId];
+    if (!state) {
+      state = { sending: false, queuedPct: null };
+      this._brightnessSendState[entityId] = state;
+    }
+    // One send in flight at a time: a slow round-trip can otherwise overlap sends, and
+    // since they aren't guaranteed to land in the order they were sent, an older one
+    // could reach the transport after a newer one and leave the light at a stale
+    // brightness. While a send is in flight, remember only the latest requested pct
+    // (like PlejdDimRamp._run's own coalescing) and fire that once it completes.
+    if (state.sending) {
+      state.queuedPct = pct;
+      return;
+    }
+    state.sending = true;
+    try {
+      await this._hass.callService("light", "turn_on", { entity_id: entityId, brightness_pct: pct });
+    } catch (err) {
+      console.warn("Plejd panel: failed to set brightness", entityId, err);
+      // Only roll back if no newer command for this entity (toggle or brightness) has
+      // superseded this one - it may have already succeeded, or still be in flight.
+      if (this._commandTokens[entityId] === token) {
+        delete this._brightnessOverrides[entityId];
+        delete this._toggleOverrides[entityId];
+        this._updateLights();
+      }
+    } finally {
+      state.sending = false;
+      if (state.queuedPct !== null) {
+        const next = state.queuedPct;
+        state.queuedPct = null;
+        this._setLightBrightness(entityId, next);
+      }
+    }
+  }
+
+  _lights() {
+    const hass = this._hass;
+    if (!hass) return [];
+    return Object.values(hass.states)
+      .filter(
+        (s) =>
+          s.entity_id.startsWith("light.") &&
+          (hass.entities?.[s.entity_id]?.platform === "plejd" ||
+            s.attributes.attribution === "Plejd"),
+      )
+      .sort((a, b) =>
+        (a.attributes.friendly_name || a.entity_id).localeCompare(
+          b.attributes.friendly_name || b.entity_id,
+        ),
+      );
+  }
+
+  _covers() {
+    const hass = this._hass;
+    if (!hass) return [];
+    return Object.values(hass.states)
+      .filter(
+        (s) =>
+          s.entity_id.startsWith("cover.") &&
+          (hass.entities?.[s.entity_id]?.platform === "plejd" ||
+            s.attributes.attribution === "Plejd"),
+      )
+      .sort((a, b) =>
+        (a.attributes.friendly_name || a.entity_id).localeCompare(
+          b.attributes.friendly_name || b.entity_id,
+        ),
+      );
+  }
+
+  _climateEntities() {
+    const hass = this._hass;
+    if (!hass) return [];
+    return Object.values(hass.states)
+      .filter(
+        (s) =>
+          s.entity_id.startsWith("climate.") &&
+          (hass.entities?.[s.entity_id]?.platform === "plejd" ||
+            s.attributes.attribution === "Plejd"),
+      )
+      .sort((a, b) =>
+        (a.attributes.friendly_name || a.entity_id).localeCompare(
+          b.attributes.friendly_name || b.entity_id,
+        ),
+      );
+  }
+
+  // Per-device WMS-01 motion binary_sensors, the same domain-and-platform filtering
+  // approach as _lights() but for binary_sensor.* motion entities instead of light.*.
+  _motionSensors() {
+    const hass = this._hass;
+    if (!hass) return [];
+    return Object.values(hass.states)
+      .filter(
+        (s) =>
+          s.entity_id.startsWith("binary_sensor.") &&
+          s.attributes.device_class === "motion" &&
+          (hass.entities?.[s.entity_id]?.platform === "plejd" ||
+            s.attributes.attribution === "Plejd"),
+      )
+      .sort((a, b) =>
+        (a.attributes.friendly_name || a.entity_id).localeCompare(
+          b.attributes.friendly_name || b.entity_id,
+        ),
+      );
+  }
+
+  // Per-device Fault (problem) binary_sensors, the same domain-and-platform filtering
+  // approach as _lights() but for binary_sensor.* health entities instead of light.*.
+  _faults() {
+    const hass = this._hass;
+    if (!hass) return [];
+    return Object.values(hass.states).filter(
+      (s) =>
+        s.entity_id.startsWith("binary_sensor.") &&
+        s.attributes.device_class === "problem" &&
+        (hass.entities?.[s.entity_id]?.platform === "plejd" ||
+          s.attributes.attribution === "Plejd"),
+    );
+  }
+
+  _allLights() {
+    const hass = this._hass;
+    return Object.values(hass.states)
+      .filter((s) => s.entity_id.startsWith("light."))
+      .map((s) => ({ id: s.entity_id, name: s.attributes.friendly_name || s.entity_id }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  _areas() {
+    if (this._registriesLoaded) {
+      return Object.entries(this._areasById)
+        .map(([id, name]) => ({ id, name }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+    }
+    const hass = this._hass;
+    return Object.values(hass?.areas || {})
+      .map((a) => ({ id: a.area_id, name: a.name || a.area_id }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  _devices() {
+    if (this._registriesLoaded) {
+      return Object.entries(this._devicesById)
+        .map(([id, name]) => ({ id, name }))
+        .filter((d) => d.name)
+        .sort((a, b) => a.name.localeCompare(b.name));
+    }
+    const hass = this._hass;
+    return Object.values(hass?.devices || {})
+      .map((d) => ({ id: d.id, name: d.name_by_user || d.name || d.id }))
+      .filter((d) => d.name)
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  _scenes() {
+    const hass = this._hass;
+    if (!hass) return [];
+    return Object.values(hass.states)
+      .filter((s) => s.entity_id.startsWith("scene."))
+      .map((s) => ({ id: s.entity_id, name: s.attributes.friendly_name || s.entity_id }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  // This site's own Plejd scenes for the Scenes list, filtered the same way _lights()
+  // restricts to Plejd lights — unlike _scenes() above, which lists every HA scene for
+  // the press-action picker (a binding can activate any scene, not just a Plejd one).
+  _plejdScenes() {
+    const hass = this._hass;
+    if (!hass) return [];
+    return Object.values(hass.states)
+      .filter(
+        (s) =>
+          s.entity_id.startsWith("scene.") &&
+          (hass.entities?.[s.entity_id]?.platform === "plejd" ||
+            s.attributes.attribution === "Plejd"),
+      )
+      .sort((a, b) =>
+        (a.attributes.friendly_name || a.entity_id).localeCompare(
+          b.attributes.friendly_name || b.entity_id,
+        ),
+      );
+  }
+
+  async _activateScene(entityId) {
+    this._scenesError = "";
+    try {
+      await this._callService("scene", "turn_on", { entity_id: entityId });
+    } catch (err) {
+      this._scenesError = `Could not activate scene: ${err.message || err}`;
+    }
+    this._updateScenes();
+  }
+
+  _entityName(entityId) {
+    return this._hass.states[entityId]?.attributes.friendly_name || entityId;
+  }
+
+  _areaName(areaId) {
+    return this._areasById[areaId] || this._hass.areas?.[areaId]?.name || areaId;
+  }
+
+  _deviceName(deviceId) {
+    if (this._devicesById[deviceId]) return this._devicesById[deviceId];
+    const d = this._hass.devices?.[deviceId];
+    return d?.name_by_user || d?.name || deviceId;
+  }
+
+  // A motion sensor's physical device, resolved the same way binding targets are (registry
+  // name over entity name) so the row shows "Hallway", not "Hallway Motion".
+  _motionDeviceName(state) {
+    const deviceId = this._hass.entities?.[state.entity_id]?.device_id;
+    return deviceId ? this._deviceName(deviceId) : state.attributes.friendly_name || state.entity_id;
+  }
+
+  // A fault sensor's physical device, resolved the same way binding targets are (registry
+  // name over entity name) so the widget shows "Kitchen dimmer", not "Kitchen dimmer Fault".
+  _faultDeviceName(state) {
+    const deviceId = this._hass.entities?.[state.entity_id]?.device_id;
+    return deviceId ? this._deviceName(deviceId) : state.attributes.friendly_name || state.entity_id;
+  }
+
+  // The illuminance sensor sharing a motion sensor's device, if the platform exposes one.
+  _illuminanceFor(deviceId) {
+    const hass = this._hass;
+    if (!deviceId) return null;
+    return Object.values(hass.states).find(
+      (s) =>
+        s.entity_id.startsWith("sensor.") &&
+        s.attributes.device_class === "illuminance" &&
+        hass.entities?.[s.entity_id]?.device_id === deviceId,
+    );
+  }
+
+  // A stored binding's target(s) -> a human string. Lists every target (a binding can
+  // hold multiple entities/areas/devices) so a Delete's scope isn't misread.
+  _targetName(binding) {
+    const t = binding.targets || {};
+    const names = [
+      ...[].concat(t.entity_id || []).map((id) => this._entityName(id)),
+      ...[].concat(t.area_id || []).map((id) => this._areaName(id)),
+      ...[].concat(t.device_id || []).map((id) => this._deviceName(id)),
+    ];
+    return names.length ? names.join(", ") : "—";
+  }
+
+  // The remote device behind a binding's triggers (up/down/stop/press triggers are
+  // device-trigger dicts). A press-only binding has no up/down/stop, so fall back to
+  // its first press trigger.
+  _bindingDevice(binding) {
+    const t = binding.up || binding.down || binding.stop || binding.presses?.[0]?.trigger;
+    return t?.device_id ? this._deviceName(t.device_id) : "—";
+  }
+
+  // ── rendering ───────────────────────────────────────────────────────────────
+
+  _renderShell() {
+    this.innerHTML = `
+      <div style="padding:16px 16px 48px;max-width:760px;margin:0 auto;color:var(--primary-text-color,#212121);font-family:var(--paper-font-body1_-_font-family,Roboto,sans-serif)">
+        <h1 style="font-weight:400;margin:8px 4px 20px">Plejd</h1>
+        <div id="plejd-lights" style="${CARD}"></div>
+        <div id="plejd-climate" style="${CARD};margin-top:16px"></div>
+        <div id="plejd-motion" style="${CARD};margin-top:16px"></div>
+        <div id="plejd-scenes" style="${CARD};margin-top:16px"></div>
+        <div id="plejd-health" style="${CARD};margin-top:16px"></div>
+        <div id="plejd-covers" style="${CARD};margin-top:16px"></div>
+        <div id="plejd-schedules" style="${CARD};margin-top:16px"></div>
+        <div id="plejd-bindings" style="${CARD};margin-top:16px"></div>
+      </div>`;
+    this._updateScenes();
+    this._updateHealth();
+    this._renderEditor();
+    this._renderSchedules();
+  }
+
+  _scheduleLightsUpdate() {
+    if (this._lightsFrame !== null) return;
+    this._lightsFrame = this._scheduleLightsFrame(() => {
+      this._lightsFrame = null;
+      this._updateLights();
+      this._updateMotion();
+      this._updateScenes();
+      this._updateHealth();
+    });
+  }
+
+  _updateLights() {
+    const el = this.querySelector("#plejd-lights");
+    if (!el) return;
+    // A slider mid-drag owns its own DOM node (native pointer capture); replacing the
+    // whole list via innerHTML would kill the drag. Skip this refresh and pick it back
+    // up once the drag ends and the next hass update schedules one.
+    if (this._draggingEntity) return;
+    const lights = this._lights();
+    const rows = lights
+      .map((s) => {
+        const name = s.attributes.friendly_name || s.entity_id;
+        const unavailable = s.state === "unavailable";
+        const override = this._toggleOverrides[s.entity_id];
+        const realOn = s.state === "on";
+        if (override !== undefined && override === realOn) delete this._toggleOverrides[s.entity_id];
+        const on = override !== undefined ? override : realOn;
+        const bri = s.attributes.brightness;
+        const realPct = bri != null ? Math.round((bri / 255) * 100) : 100;
+        const briOverride = this._brightnessOverrides[s.entity_id];
+        if (briOverride !== undefined && briOverride === realPct) delete this._brightnessOverrides[s.entity_id];
+        const pct = briOverride !== undefined ? briOverride : realPct;
+        const level = unavailable ? "unavailable" : on && bri != null ? `${pct}%` : on ? "on" : "off";
+        const dimmable = Array.isArray(s.attributes.supported_color_modes)
+          ? s.attributes.supported_color_modes.includes("brightness")
+          : bri != null;
+        const slider = dimmable
+          ? `<input type="range" min="1" max="100" value="${pct}" data-brightness="${esc(s.entity_id)}" ${unavailable ? "disabled" : ""} style="width:100%;margin-top:6px;accent-color:var(--primary-color,#03a9f4)">`
+          : "";
+        // An explicit switch (not just a plain dot) so on/off is an obvious, discoverable
+        // control rather than "click the name and hope" - the name stays clickable too
+        // as a larger, redundant hit target. Disabled (not just dimmed) when unavailable:
+        // clicking can't succeed, so don't invite an optimistic render nothing will confirm.
+        const toggle = `
+          <button type="button" data-toggle="${esc(s.entity_id)}" role="switch" aria-checked="${on}" aria-label="${on ? "Turn off" : "Turn on"} ${esc(name)}" ${unavailable ? "disabled" : ""}
+            style="width:34px;height:20px;flex:none;padding:0;border:none;border-radius:10px;cursor:${unavailable ? "not-allowed" : "pointer"};position:relative;opacity:${unavailable ? ".5" : "1"};background:${on ? "var(--primary-color, #03a9f4)" : "var(--disabled-text-color, #9e9e9e)"}">
+            <span style="position:absolute;top:2px;left:${on ? "16px" : "2px"};width:16px;height:16px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.3)"></span>
+          </button>`;
+        return `
+          <div style="padding:10px 4px;border-bottom:1px solid var(--divider-color,#e0e0e0)">
+            <div style="display:flex;align-items:center;gap:12px">
+              ${toggle}
+              <span data-toggle="${esc(s.entity_id)}" style="flex:1;${unavailable ? "cursor:not-allowed;opacity:.5" : "cursor:pointer"}">${esc(name)}</span>
+              <span data-level="${esc(s.entity_id)}" style="color:var(--secondary-text-color,#727272)">${level}</span>
+            </div>
+            ${slider}
+          </div>`;
+      })
+      .join("");
+    el.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px">
+        <h2 style="font-weight:500;font-size:1.05rem;margin:0">Lights</h2>
+        <span style="color:var(--secondary-text-color,#727272);font-size:.9rem">${lights.length}</span>
+      </div>
+      ${rows || '<p style="color:var(--secondary-text-color,#727272)">No Plejd lights found.</p>'}`;
+    this._wireLights(el);
+    // Climate rides the same coalesced hass-update frame as the lights list above.
+    this._updateClimate();
+  }
+
+  _wireLights(el) {
+    el.querySelectorAll("[data-toggle]").forEach((span) => {
+      const entityId = span.getAttribute("data-toggle");
+      span.addEventListener("click", () => {
+        // The toggle <button> respects `disabled`, but the name <span> is a plain element -
+        // guard it here too so an unavailable light can't get an optimistic render for a
+        // service call that can't succeed.
+        if (this._hass.states[entityId]?.state === "unavailable") return;
+        // Prefer our own optimistic override over hass.states: a repeated click well
+        // within the round-trip to the backend must alternate off the last click's
+        // intent, not the pre-click state hass hasn't caught up to yet.
+        const isOn =
+          entityId in this._toggleOverrides ? this._toggleOverrides[entityId] : this._hass.states[entityId]?.state === "on";
+        const nextOn = !isOn;
+        this._toggleLight(entityId, nextOn);
+        this._updateLights();
+      });
+    });
+    el.querySelectorAll("[data-brightness]").forEach((slider) => {
+      const entityId = slider.getAttribute("data-brightness");
+      let lastSent = 0;
+      let pendingTimer = null;
+      // _setLightBrightness serializes/coalesces the actual send itself (state kept on
+      // the panel instance, not here) - this closure only throttles how often it's asked
+      // to send during a drag.
+      const sendNow = (pct) => {
+        lastSent = Date.now();
+        this._setLightBrightness(entityId, pct);
+      };
+      // 'input' fires on every drag tick — send live so the light tracks the slider for
+      // direct feedback, but throttled to DRAG_SEND_INTERVAL_MS (matches the hold-to-dim
+      // ramp's own tick pacing, DIM_INTERVAL in dim_ramp.py) so a fast drag doesn't flood
+      // the mesh; a trailing timer guarantees the final position mid-pause still ships.
+      slider.addEventListener("input", () => {
+        this._draggingEntity = entityId;
+        const levelEl = el.querySelector(`[data-level="${entityId}"]`);
+        if (levelEl) levelEl.textContent = `${slider.value}%`;
+        if (pendingTimer !== null) {
+          clearTimeout(pendingTimer);
+          pendingTimer = null;
+        }
+        const elapsed = Date.now() - lastSent;
+        if (elapsed >= DRAG_SEND_INTERVAL_MS) {
+          sendNow(Number(slider.value));
+        } else {
+          pendingTimer = setTimeout(() => {
+            pendingTimer = null;
+            sendNow(Number(slider.value));
+          }, DRAG_SEND_INTERVAL_MS - elapsed);
+        }
+      });
+      // 'change' fires once on release/keystroke — always send the exact final value,
+      // canceling any still-pending throttled send so it can't overwrite it afterward.
+      slider.addEventListener("change", () => {
+        this._draggingEntity = null;
+        if (pendingTimer !== null) {
+          clearTimeout(pendingTimer);
+          pendingTimer = null;
+        }
+        sendNow(Number(slider.value));
+        // A hass push that arrived mid-drag was skipped (_updateLights() no-ops while
+        // _draggingEntity is set) and _lightsFrame is already clear by then, so nothing
+        // would otherwise re-render until some later, unrelated push happens to arrive -
+        // catch up now instead of leaving the rest of the list stale.
+        this._scheduleLightsUpdate();
+      });
+    });
+  }
+
+  _updateClimate() {
+    const el = this.querySelector("#plejd-climate");
+    if (!el) return;
+    const climates = this._climateEntities();
+    const rows = climates
+      .map((s) => {
+        const name = s.attributes.friendly_name || s.entity_id;
+        const override = this._climateOverrides[s.entity_id];
+        const realTarget = s.attributes.temperature;
+        if (override !== undefined && override === realTarget) delete this._climateOverrides[s.entity_id];
+        const target = override !== undefined ? override : realTarget;
+        const disabled = target == null || s.state === "unavailable";
+        return `
+          <div style="display:flex;align-items:center;gap:12px;padding:10px 4px;border-bottom:1px solid var(--divider-color,#e0e0e0)">
+            <span style="flex:1">${esc(name)}</span>
+            <button data-climate-dec="${esc(s.entity_id)}" type="button" style="${BTN};padding:4px 12px" ${disabled ? "disabled" : ""} aria-label="Decrease target temperature">−</button>
+            <span style="min-width:56px;text-align:center">${target != null ? `${target}°C` : "—"}</span>
+            <button data-climate-inc="${esc(s.entity_id)}" type="button" style="${BTN};padding:4px 12px" ${disabled ? "disabled" : ""} aria-label="Increase target temperature">+</button>
+          </div>`;
+      })
+      .join("");
+    el.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px">
+        <h2 style="font-weight:500;font-size:1.05rem;margin:0">Climate</h2>
+        <span style="color:var(--secondary-text-color,#727272);font-size:.9rem">${climates.length}</span>
+      </div>
+      ${rows || '<p style="color:var(--secondary-text-color,#727272)">No Plejd thermostats found.</p>'}`;
+    this._wireClimate(el, climates);
+  }
+
+  _wireClimate(el, climates) {
+    const byId = Object.fromEntries(climates.map((s) => [s.entity_id, s]));
+    el.querySelectorAll("[data-climate-inc]").forEach((btn) =>
+      btn.addEventListener("click", () => {
+        this._stepClimate(byId[btn.getAttribute("data-climate-inc")], 1);
+        this._updateClimate();
+      }),
+    );
+    el.querySelectorAll("[data-climate-dec]").forEach((btn) =>
+      btn.addEventListener("click", () => {
+        this._stepClimate(byId[btn.getAttribute("data-climate-dec")], -1);
+        this._updateClimate();
+      }),
+    );
+  }
+
+  // A thermostat setpoint change is a low-frequency tap, unlike a dimmer drag — call the
+  // service straight away, no debounce/ramp pacing needed.
+  _stepClimate(state, direction) {
+    if (!state) return;
+    // Prefer our own optimistic override over hass.states: a repeated tap well within
+    // the round-trip to the backend must accumulate from the last tap's intent, not the
+    // pre-tap state hass hasn't caught up to yet.
+    const override = this._climateOverrides[state.entity_id];
+    const target = override !== undefined ? override : state.attributes.temperature;
+    if (target == null) return;
+    const step = state.attributes.target_temp_step || 0.5;
+    let next = Math.round((target + direction * step) * 100) / 100;
+    const { min_temp: min, max_temp: max } = state.attributes;
+    if (min != null) next = Math.max(min, next);
+    if (max != null) next = Math.min(max, next);
+    this._climateOverrides[state.entity_id] = next;
+    this._callService("climate", "set_temperature", {
+      entity_id: state.entity_id,
+      temperature: next,
+    }).catch((err) => {
+      console.warn("Plejd panel: failed to set climate temperature", err);
+      if (this._climateOverrides[state.entity_id] === next) delete this._climateOverrides[state.entity_id];
+      this._updateClimate();
+    });
+  }
+
+  _updateMotion() {
+    const el = this.querySelector("#plejd-motion");
+    if (!el) return;
+    const sensors = this._motionSensors();
+    const rows = sensors
+      .map((s) => {
+        const name = this._motionDeviceName(s);
+        const unavailable = ["unavailable", "unknown"].includes(s.state);
+        const detected = s.state === "on";
+        const deviceId = this._hass.entities?.[s.entity_id]?.device_id;
+        const illuminance = this._illuminanceFor(deviceId);
+        const lux =
+          illuminance && !["unavailable", "unknown"].includes(illuminance.state)
+            ? `${illuminance.state} lx`
+            : null;
+        const status = unavailable ? "Unavailable" : detected ? "Detected" : "Clear";
+        const dot = detected ? "var(--state-light-active-color, #fdd835)" : "var(--disabled-text-color, #9e9e9e)";
+        return `
+          <div style="display:flex;align-items:center;gap:12px;padding:10px 4px;border-bottom:1px solid var(--divider-color,#e0e0e0)">
+            <span style="width:10px;height:10px;border-radius:50%;background:${dot};flex:none"></span>
+            <span style="flex:1">${esc(name)}</span>
+            <span style="color:var(--secondary-text-color,#727272)">${status}${lux ? ` · ${esc(lux)}` : ""}</span>
+          </div>`;
+      })
+      .join("");
+    el.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px">
+        <h2 style="font-weight:500;font-size:1.05rem;margin:0">Motion & illuminance</h2>
+        <span style="color:var(--secondary-text-color,#727272);font-size:.9rem">${sensors.length}</span>
+      </div>
+      ${rows || '<p style="color:var(--secondary-text-color,#727272)">No motion sensors found.</p>'}`;
+  }
+
+  _updateScenes() {
+    const el = this.querySelector("#plejd-scenes");
+    if (!el) return;
+    const scenes = this._plejdScenes();
+    const rows = scenes
+      .map((s) => {
+        const name = s.attributes.friendly_name || s.entity_id;
+        return `
+          <div style="display:flex;align-items:center;gap:12px;padding:10px 4px;border-bottom:1px solid var(--divider-color,#e0e0e0)">
+            <span style="flex:1">${esc(name)}</span>
+            <button data-activate-scene="${esc(s.entity_id)}" style="${BTN}">Activate</button>
+          </div>`;
+      })
+      .join("");
+    const error = this._scenesError
+      ? `<p style="color:var(--error-color,#db4437);margin:8px 0 0">${esc(this._scenesError)}</p>`
+      : "";
+    el.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px">
+        <h2 style="font-weight:500;font-size:1.05rem;margin:0">Scenes</h2>
+        <span style="color:var(--secondary-text-color,#727272);font-size:.9rem">${scenes.length}</span>
+      </div>
+      ${rows || '<p style="color:var(--secondary-text-color,#727272)">No Plejd scenes found.</p>'}
+      ${error}`;
+    el.querySelectorAll("[data-activate-scene]").forEach((btn) =>
+      btn.addEventListener("click", () => this._activateScene(btn.getAttribute("data-activate-scene"))),
+    );
+  }
+
+  _updateHealth() {
+    const el = this.querySelector("#plejd-health");
+    if (!el) return;
+    const faulted = this._faults()
+      .filter((s) => s.state === "on")
+      .map((s) => ({
+        name: this._faultDeviceName(s),
+        flags: (s.attributes.active_faults || []).map((f) => f.replace(/_/g, " ")).join(", "),
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    const rows = faulted
+      .map(
+        (f) => `
+          <div style="display:flex;align-items:center;gap:12px;padding:10px 4px;border-bottom:1px solid var(--divider-color,#e0e0e0)">
+            <span style="width:10px;height:10px;border-radius:50%;background:var(--error-color,#db4437);flex:none"></span>
+            <span style="flex:1">${esc(f.name)}</span>
+            <span style="color:var(--secondary-text-color,#727272)">${esc(f.flags)}</span>
+          </div>`,
+      )
+      .join("");
+    el.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px">
+        <h2 style="font-weight:500;font-size:1.05rem;margin:0">Device health</h2>
+        <span style="color:var(--secondary-text-color,#727272);font-size:.9rem">${faulted.length}</span>
+      </div>
+      ${rows || '<p style="color:var(--secondary-text-color,#727272)">All devices healthy.</p>'}`;
+  }
+
+  _scheduleCoversUpdate() {
+    if (this._coversFrame !== null) return;
+    this._coversFrame = this._scheduleLightsFrame(() => {
+      this._coversFrame = null;
+      this._updateCovers();
+    });
+  }
+
+  _updateCovers() {
+    const el = this.querySelector("#plejd-covers");
+    if (!el) return;
+    // A slider mid-drag owns its own DOM node (native pointer capture); replacing the whole
+    // list via innerHTML would kill the drag before its release "change" handler can run.
+    // Skip this refresh and pick it back up once the drag ends.
+    if (this._draggingCoverEntity) return;
+    const covers = this._covers();
+    const rows = covers
+      .map((s) => {
+        const name = s.attributes.friendly_name || s.entity_id;
+        const unavailable = s.state === "unavailable";
+        const canSetPosition = Boolean((s.attributes.supported_features || 0) & COVER_FEATURE_SET_POSITION);
+        const position = clampPosition(s.attributes.current_position);
+        const positionLabel = unavailable ? "unavailable" : position != null ? `${position}%` : s.state;
+        // Prefer our own optimistic override over hass.states: cover.py never reports a
+        // real current_position, so falling back to a fixed number (e.g. 0) would render
+        // every unknown-position cover as if it were closed. Omitting the value attribute
+        // when nothing is known yet leaves the slider at its native, non-committal midpoint.
+        const knownPosition = position != null ? position : this._coverPositionOverrides[s.entity_id];
+        const slider = canSetPosition
+          ? `<input type="range" min="0" max="100"${knownPosition != null ? ` value="${knownPosition}"` : ""} data-cover-position="${esc(s.entity_id)}" ${unavailable ? "disabled" : ""} style="flex:1">`
+          : "";
+        // Disabled (not just dimmed) when unavailable: a click/drag can only fail/no-op,
+        // and these Plejd covers never report current_position to correct a stale render.
+        const btnStyle = `${BTN}${unavailable ? ";opacity:.5;cursor:not-allowed" : ""}`;
+        return `
+          <div style="padding:10px 4px;border-bottom:1px solid var(--divider-color,#e0e0e0)">
+            <div style="display:flex;align-items:center;gap:12px">
+              <span style="flex:1">${esc(name)}</span>
+              <span style="color:var(--secondary-text-color,#727272)">${esc(positionLabel)}</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;margin-top:8px">
+              <button data-cover-open="${esc(s.entity_id)}" type="button" style="${btnStyle}" ${unavailable ? "disabled" : ""}>Open</button>
+              <button data-cover-stop="${esc(s.entity_id)}" type="button" style="${btnStyle};background:var(--secondary-text-color,#727272)" ${unavailable ? "disabled" : ""}>Stop</button>
+              <button data-cover-close="${esc(s.entity_id)}" type="button" style="${btnStyle}" ${unavailable ? "disabled" : ""}>Close</button>
+              ${slider}
+            </div>
+          </div>`;
+      })
+      .join("");
+    el.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px">
+        <h2 style="font-weight:500;font-size:1.05rem;margin:0">Covers</h2>
+        <span style="color:var(--secondary-text-color,#727272);font-size:.9rem">${covers.length}</span>
+      </div>
+      ${rows || '<p style="color:var(--secondary-text-color,#727272)">No Plejd covers found.</p>'}`;
+    this._wireCovers(el);
+  }
+
+  _wireCovers(el) {
+    el.querySelectorAll("[data-cover-open]").forEach((btn) =>
+      btn.addEventListener("click", () => this._onCoverAction(btn.getAttribute("data-cover-open"), "open_cover")),
+    );
+    el.querySelectorAll("[data-cover-close]").forEach((btn) =>
+      btn.addEventListener("click", () => this._onCoverAction(btn.getAttribute("data-cover-close"), "close_cover")),
+    );
+    el.querySelectorAll("[data-cover-stop]").forEach((btn) =>
+      btn.addEventListener("click", () => this._onCoverAction(btn.getAttribute("data-cover-stop"), "stop_cover")),
+    );
+    // The "change" event (not "input") only fires once the user releases the slider, so a
+    // drag sends a single command instead of flooding the mesh with one per tick. "input"
+    // fires on every drag tick purely to mark the slider active, so a hass push mid-drag
+    // (_updateCovers) can't rebuild the list and kill the in-progress drag.
+    el.querySelectorAll("[data-cover-position]").forEach((input) => {
+      const entityId = input.getAttribute("data-cover-position");
+      input.addEventListener("input", () => {
+        this._draggingCoverEntity = entityId;
+      });
+      input.addEventListener("change", (e) => {
+        this._draggingCoverEntity = null;
+        const position = Number(e.target.value);
+        const token = this._nextCoverCommandToken(entityId);
+        // Only remember the override once HA actually accepts the command — recording it
+        // unconditionally would keep showing the requested position even after a rejected
+        // call (e.g. mesh/gateway unavailable), since PlejdCover never reports a real one.
+        this._callService("cover", "set_cover_position", {
+          entity_id: entityId,
+          position,
+        })
+          .then(() => {
+            // Only apply if no newer command for this entity has superseded this one - an
+            // older reply resolving after a newer one must not overwrite it with a stale
+            // position.
+            if (this._coverCommandTokens[entityId] === token) this._coverPositionOverrides[entityId] = position;
+            this._scheduleCoversUpdate();
+          })
+          .catch((err) => {
+            console.warn(`Plejd panel: set_cover_position failed for ${entityId}`, err);
+            // Nothing was recorded - re-render so the slider falls back to the last known
+            // good value instead of silently keeping the rejected one shown.
+            this._scheduleCoversUpdate();
+          });
+      });
+      // "change" only fires when a drag ends normally; a touch drag interrupted by the OS
+      // (e.g. a system gesture) fires "pointercancel" instead, with no "change" to follow.
+      // Without this, the guard would stay set forever and freeze the Covers card.
+      input.addEventListener("pointercancel", () => {
+        if (this._draggingCoverEntity === entityId) {
+          this._draggingCoverEntity = null;
+          // A hass push skipped while dragging is never replayed otherwise - catch up now,
+          // same as the normal "change" (release) path does.
+          this._scheduleCoversUpdate();
+        }
+      });
+    });
+  }
+
+  // A fresh token for entityId, so a resolved cover command can later tell whether a
+  // newer command has since superseded it (see _coverCommandTokens above).
+  _nextCoverCommandToken(entityId) {
+    const token = (this._coverCommandTokens[entityId] || 0) + 1;
+    this._coverCommandTokens[entityId] = token;
+    return token;
+  }
+
+  _onCoverAction(entityId, service) {
+    // Open/Close are themselves position commands (0/100) for position-capable covers, so
+    // the slider override must track them too — otherwise a stale slider value (e.g. from
+    // an earlier drag) would keep rendering after Close/Open supersedes it.
+    const commandedPosition = service === "open_cover" ? 100 : service === "close_cover" ? 0 : null;
+    const token = this._nextCoverCommandToken(entityId);
+    this._callService("cover", service, { entity_id: entityId })
+      .then(() => {
+        if (commandedPosition != null && this._coverCommandTokens[entityId] === token) {
+          this._coverPositionOverrides[entityId] = commandedPosition;
+        }
+        this._scheduleCoversUpdate();
+      })
+      .catch((err) => {
+        console.warn(`Plejd panel: ${service} failed for ${entityId}`, err);
+        this._scheduleCoversUpdate();
+      });
+  }
+
+  _triggerOptions(deviceId, selected) {
+    const triggers = this._triggers[deviceId] || [];
+    const opts = triggers
+      .map(
+        (t, i) =>
+          `<option value="${i}" ${String(i) === String(selected) ? "selected" : ""}>${esc(triggerLabel(t))}</option>`,
+      )
+      .join("");
+    return `<option value="">(none)</option>${opts}`;
+  }
+
+  _pressActionOptions(selected) {
+    const opts = PRESS_ACTIONS.map(
+      (type) => `<option value="${type}" ${type === selected ? "selected" : ""}>${PRESS_ACTION_LABELS[type]}</option>`,
+    ).join("");
+    return `<option value="">Select an action…</option>${opts}`;
+  }
+
+  // One "press action" row: a trigger picker (same device-trigger data as up/down/stop)
+  // plus an action-type picker and that type's own fields (scene entity, or service +
+  // domain + optional JSON data).
+  _pressRowHtml(row, i) {
+    const extra =
+      row.type === "scene"
+        ? `
+        <div style="margin-top:8px">
+          <label for="f-press-entity-${i}" style="${LABEL}">Scene</label>
+          <select id="f-press-entity-${i}" style="${INPUT}">
+            <option value="">Select a scene…</option>
+            ${this._scenes()
+              .map(
+                (s) =>
+                  `<option value="${esc(s.id)}" ${row.entity_id === s.id ? "selected" : ""}>${esc(s.name)}</option>`,
+              )
+              .join("")}
+          </select>
+        </div>`
+        : row.type === "service"
+          ? `
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">
+          <div><label for="f-press-domain-${i}" style="${LABEL}">Domain</label><input id="f-press-domain-${i}" style="${INPUT}" value="${esc(row.domain)}" placeholder="light"></div>
+          <div><label for="f-press-service-${i}" style="${LABEL}">Service</label><input id="f-press-service-${i}" style="${INPUT}" value="${esc(row.service)}" placeholder="turn_on"></div>
+        </div>
+        <div style="margin-top:8px">
+          <label for="f-press-data-${i}" style="${LABEL}">Data (JSON, optional)</label>
+          <textarea id="f-press-data-${i}" style="${INPUT};min-height:56px;font-family:monospace">${esc(row.data)}</textarea>
+        </div>`
+          : "";
+    return `
+      <div style="border:1px solid var(--divider-color,#e0e0e0);border-radius:8px;padding:10px;margin-top:8px">
+        <div style="display:grid;grid-template-columns:1fr 1fr auto;gap:8px;align-items:end">
+          <div><label for="f-press-trigger-${i}" style="${LABEL}">Trigger</label><select id="f-press-trigger-${i}" style="${INPUT}">${this._triggerOptions(this._form.device, row.trigger)}</select></div>
+          <div><label for="f-press-type-${i}" style="${LABEL}">Action</label><select id="f-press-type-${i}" style="${INPUT}">${this._pressActionOptions(row.type)}</select></div>
+          <button data-remove-press="${i}" type="button" style="${BTN};background:var(--error-color,#db4437)" aria-label="Remove press action">✕</button>
+        </div>
+        ${extra}
+      </div>`;
+  }
+
+  _renderEditor() {
+    const el = this.querySelector("#plejd-bindings");
+    if (!el) return;
+
+    if (this._bindings === null) {
+      // Failed load: show the error + Retry, and no editor — saving now could overwrite
+      // stored bindings from an unknown baseline. Otherwise it's the initial load.
+      el.innerHTML = this._loadFailed
+        ? `
+          <h2 style="font-weight:500;font-size:1.05rem;margin:0 0 8px">Remote dim bindings</h2>
+          <p style="color:var(--error-color,#db4437);margin:0 0 12px">${esc(this._error)}</p>
+          <button id="f-retry" style="${BTN}">Retry</button>`
+        : `
+          <h2 style="font-weight:500;font-size:1.05rem;margin:0 0 8px">Remote dim bindings</h2>
+          <p style="color:var(--secondary-text-color,#727272);margin:0">Loading…</p>`;
+      el.querySelector("#f-retry")?.addEventListener("click", () => this._retryLoad());
+      return;
+    }
+
+    const list = this._bindings.length
+      ? this._bindings
+          .map((b) => {
+            const dirs = ["up", "down", "stop"].filter((k) => b[k]).join(" / ");
+            const pressCount = (b.presses || []).length;
+            const parts = [];
+            if (dirs) parts.push(dirs);
+            if (pressCount) parts.push(`${pressCount} press action${pressCount === 1 ? "" : "s"}`);
+            const summary = parts.length ? parts.join(", ") : "—";
+            return `
+              <div style="display:flex;align-items:center;gap:12px;padding:10px 4px;border-bottom:1px solid var(--divider-color,#e0e0e0)">
+                <div style="flex:1">
+                  <div>${esc(this._targetName(b))}</div>
+                  <div style="font-size:.8rem;color:var(--secondary-text-color,#727272)">
+                    ${esc(this._bindingDevice(b))} · ${esc(summary)}
+                  </div>
+                </div>
+                <button data-del="${esc(b.id)}" style="${BTN};background:var(--error-color,#db4437)">Delete</button>
+              </div>`;
+          })
+          .join("")
+      : '<p style="color:var(--secondary-text-color,#727272);margin:0 0 12px">No bindings yet.</p>';
+
+    const lightOpts = this._allLights()
+      .map(
+        (l) =>
+          `<option value="light:${esc(l.id)}" ${this._form.target === `light:${l.id}` ? "selected" : ""}>${esc(l.name)}</option>`,
+      )
+      .join("");
+    const areaOpts = this._areas()
+      .map(
+        (a) =>
+          `<option value="area:${esc(a.id)}" ${this._form.target === `area:${a.id}` ? "selected" : ""}>${esc(a.name)}</option>`,
+      )
+      .join("");
+    const deviceOpts = this._devices()
+      .map(
+        (d) =>
+          `<option value="${esc(d.id)}" ${this._form.device === d.id ? "selected" : ""}>${esc(d.name)}</option>`,
+      )
+      .join("");
+
+    const pressRows = this._form.presses.map((row, i) => this._pressRowHtml(row, i)).join("");
+
+    const deviceKind = this._deviceKinds[this._form.device] || "remote";
+    const isRemote = deviceKind === "remote";
+    const dimGrid = isRemote
+      ? `
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:12px">
+          <div><label for="f-up" style="${LABEL}">Dim up (hold)</label><select id="f-up" style="${INPUT}">${this._triggerOptions(this._form.device, this._form.up)}</select></div>
+          <div><label for="f-down" style="${LABEL}">Dim down (hold)</label><select id="f-down" style="${INPUT}">${this._triggerOptions(this._form.device, this._form.down)}</select></div>
+          <div><label for="f-stop" style="${LABEL}">Release (stop)</label><select id="f-stop" style="${INPUT}">${this._triggerOptions(this._form.device, this._form.stop)}</select></div>
+        </div>
+        ${this._form.device in this._triggers && this._triggers[this._form.device].length === 0 ? '<p style="color:var(--secondary-text-color,#727272);font-size:.85rem;margin:8px 0 0">This device exposes no triggers.</p>' : ""}`
+      : `<p style="color:var(--secondary-text-color,#727272);font-size:.85rem;margin:12px 0 0">
+          This is a ${deviceKind === "door_window" ? "door/window" : "motion"} sensor, not a dimmer remote — use a press action below to react to it.
+        </p>`;
+    const triggerRow = this._form.device
+      ? `
+        ${dimGrid}
+        <div style="margin-top:16px">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <span style="${LABEL};margin:0">Press actions</span>
+            <button id="f-press-add" type="button" style="${BTN}">+ Add press action</button>
+          </div>
+          ${pressRows || '<p style="color:var(--secondary-text-color,#727272);font-size:.85rem;margin:6px 0 0">No press actions yet.</p>'}
+        </div>`
+      : "";
+
+    const feedback = this._error
+      ? `<p style="color:var(--error-color,#db4437);margin:12px 0 0">${esc(this._error)}</p>`
+      : this._notice
+        ? `<p style="color:var(--secondary-text-color,#727272);margin:12px 0 0">${esc(this._notice)}</p>`
+        : "";
+
+    el.innerHTML = `
+      <h2 style="font-weight:500;font-size:1.05rem;margin:0 0 4px">Remote dim bindings</h2>
+      <p style="color:var(--secondary-text-color,#727272);margin:0 0 12px">
+        Bind a dimmer remote's hold/release to smooth dimming of a light or a whole room,
+        and/or map any of its other triggers to an instant press action.
+      </p>
+      ${list}
+      <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--divider-color,#e0e0e0)">
+        <h3 style="font-weight:500;font-size:.95rem;margin:0 0 12px">Add a binding</h3>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div>
+            <label for="f-target" style="${LABEL}">Light or room</label>
+            <select id="f-target" style="${INPUT}">
+              <option value="">Select a target…</option>
+              <optgroup label="Lights">${lightOpts}</optgroup>
+              <optgroup label="Rooms">${areaOpts}</optgroup>
+            </select>
+          </div>
+          <div>
+            <label for="f-device" style="${LABEL}">Remote</label>
+            <select id="f-device" style="${INPUT}">
+              <option value="">Select a remote…</option>
+              ${deviceOpts}
+            </select>
+          </div>
+        </div>
+        ${triggerRow}
+        ${feedback}
+        <div style="margin-top:16px;text-align:right">
+          <button id="f-save" style="${BTN}" ${this._busy ? "disabled" : ""}>${this._busy ? "Saving…" : "Add binding"}</button>
+        </div>
+      </div>`;
+
+    this._wire(el);
+  }
+
+  _wire(el) {
+    el.querySelectorAll("[data-del]").forEach((btn) =>
+      btn.addEventListener("click", () => this._onDelete(el, btn.getAttribute("data-del"))),
+    );
+    el.querySelector("#f-target")?.addEventListener("change", (e) => {
+      this._form.target = e.target.value;
+    });
+    el.querySelector("#f-device")?.addEventListener("change", async (e) => {
+      this._readForm(el);
+      this._form.device = e.target.value;
+      this._form.up = this._form.down = this._form.stop = "";
+      // A press row's trigger index is only meaningful for the previously selected
+      // device's trigger list; clear it, but keep the rest of the row (action type, etc).
+      this._form.presses = this._form.presses.map((row) => ({ ...row, trigger: "" }));
+      this._notice = this._error = "";
+      await this._loadTriggers(this._form.device);
+      this._renderEditor();
+    });
+    el.querySelector("#f-up")?.addEventListener("change", (e) => {
+      this._form.up = e.target.value;
+    });
+    el.querySelector("#f-down")?.addEventListener("change", (e) => {
+      this._form.down = e.target.value;
+    });
+    el.querySelector("#f-stop")?.addEventListener("change", (e) => {
+      this._form.stop = e.target.value;
+    });
+    el.querySelector("#f-press-add")?.addEventListener("click", () => {
+      this._readForm(el);
+      this._form.presses.push({ trigger: "", type: "", entity_id: "", domain: "", service: "", data: "" });
+      this._renderEditor();
+    });
+    this._form.presses.forEach((_row, i) => {
+      el.querySelector(`#f-press-trigger-${i}`)?.addEventListener("change", (e) => {
+        this._form.presses[i].trigger = e.target.value;
+      });
+      el.querySelector(`#f-press-type-${i}`)?.addEventListener("change", (e) => {
+        // The visible fields differ per action type, so redraw (unlike the up/down/stop
+        // pickers, whose options never change shape).
+        this._readForm(el);
+        this._form.presses[i].type = e.target.value;
+        this._renderEditor();
+      });
+      el.querySelector(`#f-press-entity-${i}`)?.addEventListener("change", (e) => {
+        this._form.presses[i].entity_id = e.target.value;
+      });
+      el.querySelector(`#f-press-domain-${i}`)?.addEventListener("input", (e) => {
+        this._form.presses[i].domain = e.target.value;
+      });
+      el.querySelector(`#f-press-service-${i}`)?.addEventListener("input", (e) => {
+        this._form.presses[i].service = e.target.value;
+      });
+      el.querySelector(`#f-press-data-${i}`)?.addEventListener("input", (e) => {
+        this._form.presses[i].data = e.target.value;
+      });
+      el.querySelector(`[data-remove-press="${i}"]`)?.addEventListener("click", () => {
+        this._readForm(el);
+        this._form.presses.splice(i, 1);
+        this._renderEditor();
+      });
+    });
+    el.querySelector("#f-save")?.addEventListener("click", () => this._onSave(el));
+  }
+
+  _readForm(el) {
+    const val = (id) => el.querySelector(id)?.value ?? "";
+    this._form.target = val("#f-target");
+    this._form.device = val("#f-device");
+    this._form.up = val("#f-up");
+    this._form.down = val("#f-down");
+    this._form.stop = val("#f-stop");
+    // A press row's action-type-specific fields aren't all rendered at once (e.g. the
+    // scene picker only exists in the DOM when type is "scene"); fall back to the
+    // in-memory value for any field currently hidden, so switching type and back keeps it.
+    this._form.presses = this._form.presses.map((row, i) => ({
+      trigger: el.querySelector(`#f-press-trigger-${i}`)?.value ?? row.trigger,
+      type: el.querySelector(`#f-press-type-${i}`)?.value ?? row.type,
+      entity_id: el.querySelector(`#f-press-entity-${i}`)?.value ?? row.entity_id,
+      domain: el.querySelector(`#f-press-domain-${i}`)?.value ?? row.domain,
+      service: el.querySelector(`#f-press-service-${i}`)?.value ?? row.service,
+      data: el.querySelector(`#f-press-data-${i}`)?.value ?? row.data,
+    }));
+  }
+
+  _targetFromForm() {
+    const idx = this._form.target.indexOf(":");
+    if (idx < 0) return null;
+    const kind = this._form.target.slice(0, idx);
+    const id = this._form.target.slice(idx + 1);
+    if (kind === "light") return { entity_id: [id] };
+    if (kind === "area") return { area_id: [id] };
+    return null;
+  }
+
+  _triggerByIndex(deviceId, index) {
+    if (index === "" || index == null) return null;
+    return (this._triggers[deviceId] || [])[Number(index)] || null;
+  }
+
+  // Assemble the configured press rows into {trigger, action} pairs, mirroring the
+  // backend's _validate_presses so obvious mistakes are caught before a round-trip.
+  // A row left entirely empty is skipped; a partially filled one throws so _onSave can
+  // surface it via _fail instead of silently dropping it.
+  _pressesFromForm() {
+    const presses = [];
+    this._form.presses.forEach((row, i) => {
+      const trigger = this._triggerByIndex(this._form.device, row.trigger);
+      const type = row.type;
+      // _readForm deliberately keeps a hidden field's last value when the row's type
+      // changes away from it (so switching back doesn't lose it) — only count a field
+      // as "input" when it's the one the currently selected type actually shows, so a
+      // row a user visibly cleared back to blank isn't treated as still filled in.
+      const relevantExtra =
+        type === "scene"
+          ? row.entity_id
+          : type === "service"
+            ? row.domain || row.service || (row.data && row.data.trim())
+            : false;
+      const hasAnyInput = trigger || type || relevantExtra;
+      if (!hasAnyInput) return;
+
+      if (!trigger) throw new Error(`Press action ${i + 1}: pick a trigger.`);
+      if (!PRESS_ACTIONS.includes(type)) throw new Error(`Press action ${i + 1}: pick an action.`);
+
+      const action = { type };
+      if (type === "scene") {
+        if (!row.entity_id) throw new Error(`Press action ${i + 1}: pick a scene.`);
+        action.entity_id = row.entity_id;
+      } else if (type === "service") {
+        if (!row.domain || !row.service) {
+          throw new Error(`Press action ${i + 1}: service actions need a domain and a service.`);
+        }
+        action.domain = row.domain.trim();
+        action.service = row.service.trim();
+        if (row.data && row.data.trim()) {
+          let data;
+          try {
+            data = JSON.parse(row.data);
+          } catch {
+            throw new Error(`Press action ${i + 1}: data must be valid JSON.`);
+          }
+          // The backend merges this into the service call with `**data`, which needs a
+          // mapping — a JSON array/string/number would raise there instead of calling
+          // the service when the trigger fires.
+          if (typeof data !== "object" || data === null || Array.isArray(data)) {
+            throw new Error(`Press action ${i + 1}: data must be a JSON object.`);
+          }
+          action.data = data;
+        }
+      }
+      presses.push({ trigger, action });
+    });
+    return presses;
+  }
+
+  _onSave(el) {
+    if (this._busy) return;
+    this._readForm(el);
+    this._error = this._notice = "";
+
+    if (!this._form.device) return this._fail("Pick a remote.");
+
+    const up = this._triggerByIndex(this._form.device, this._form.up);
+    const down = this._triggerByIndex(this._form.device, this._form.down);
+    const stop = this._triggerByIndex(this._form.device, this._form.stop);
+    if ((up || down) && !stop) return this._fail("Pick a release (stop) trigger.");
+
+    let presses;
+    try {
+      presses = this._pressesFromForm();
+    } catch (err) {
+      return this._fail(err.message);
+    }
+    if (!up && !down && !presses.length) {
+      return this._fail("Pick a dim up/down trigger or add at least one press action.");
+    }
+
+    // A target (light/room) only matters to the actions that actually need it: dim
+    // up/down and toggle/on/off no-op without one (bindings.py's toggle/on/off path
+    // and DimRamp both bail out on an empty target). Scene and service never require
+    // one — scene.turn_on only uses the scene's own entity_id, and a service call
+    // merges {**target, **data} with an empty target fine. Some services take no
+    // target at all (persistent_notification.create, homeassistant.restart, ...); the
+    // client can't know which, so it's on the user to supply what their service needs.
+    const pressNeedsTarget = (press) => !["scene", "service"].includes(press.action.type);
+    const needsTarget = Boolean(up || down) || presses.some(pressNeedsTarget);
+    const targets = this._targetFromForm();
+    if (needsTarget && !targets) return this._fail("Pick a light or room.");
+
+    const binding = {};
+    if (targets) binding.targets = targets;
+    if (up) binding.up = up;
+    if (down) binding.down = down;
+    // A stop trigger only matters alongside a start (up/down already required it above);
+    // a stray one attached to a press-only binding would still fire plejd.stop_dim for a
+    // single-Plejd-light target and could cancel an unrelated binding's ramp on that light.
+    if (up || down) binding.stop = stop;
+    if (presses.length) binding.presses = presses;
+    this._save([...this._bindings, binding], true); // reset the add form after a successful add
+  }
+
+  _onDelete(el, id) {
+    if (this._busy) return;
+    this._readForm(el); // keep any in-progress add entry across the delete's re-render
+    this._save(this._bindings.filter((b) => String(b.id) !== String(id)));
+  }
+
+  _fail(message) {
+    this._error = message;
+    this._renderEditor();
+  }
+
+  // ── schedules ─────────────────────────────────────────────────────────────
+  //
+  // On-device weekly time -> scene schedules (mirrors the config-flow "Configure ->
+  // Schedules" dialog). Self-contained: its own load/save calls, form state, and render,
+  // independent of the dim-binding editor above.
+
+  async _loadSchedules() {
+    this._schedulesLoadFailed = false;
+    try {
+      const res = await this._callWS({ type: "plejd/schedules/list" });
+      this._schedules = res.schedules || [];
+      this._scheduleScenes = res.scenes || [];
+    } catch (err) {
+      // Keep _schedules unset (not []): mirrors _loadBindings — offer a retry rather than
+      // risk rendering an add form with no valid scene baseline.
+      this._schedules = null;
+      this._schedulesLoadFailed = true;
+      this._scheduleError = `Could not load schedules: ${err.message || err}`;
+    }
+    this._renderSchedules();
+  }
+
+  _retryScheduleLoad() {
+    this._scheduleError = "";
+    this._schedules = null;
+    this._schedulesLoadFailed = false;
+    this._renderSchedules();
+    this._loadSchedules();
+  }
+
+  async _saveSchedule(payload) {
+    this._scheduleBusy = true;
+    this._scheduleError = "";
+    this._scheduleNotice = "";
+    this._renderSchedules();
+    try {
+      const res = await this._callWS({ type: "plejd/schedules/add", ...payload });
+      this._schedules = res.schedules || [];
+      // Saved but the integration didn't reload (see schedule_ws._async_persist) - the
+      // switch may not exist/be programmed yet, so this needs a warning, not "Saved.".
+      this._scheduleNotice = res.reload_failed || "Saved.";
+      this._scheduleForm = { name: "", days: [], time: "07:00", scene: "", fade: 0 };
+    } catch (err) {
+      this._scheduleError = err.message || String(err);
+    } finally {
+      this._scheduleBusy = false;
+      this._renderSchedules();
+    }
+  }
+
+  async _deleteSchedule(scheduleId) {
+    this._scheduleBusy = true;
+    this._scheduleError = "";
+    this._scheduleNotice = "";
+    this._renderSchedules();
+    try {
+      const res = await this._callWS({ type: "plejd/schedules/delete", schedule_id: Number(scheduleId) });
+      this._schedules = res.schedules || [];
+      // Deleted but the integration didn't reload - the removed schedule may still be
+      // programmed on the device, so this needs a warning, not silence.
+      if (res.reload_failed) this._scheduleNotice = res.reload_failed;
+    } catch (err) {
+      this._scheduleError = err.message || String(err);
+    } finally {
+      this._scheduleBusy = false;
+      this._renderSchedules();
+    }
+  }
+
+  _sceneName(index) {
+    return this._scheduleScenes.find((s) => s.index === index)?.name || `Scene ${index}`;
+  }
+
+  _renderSchedules() {
+    const el = this.querySelector("#plejd-schedules");
+    if (!el) return;
+
+    if (this._schedules === null) {
+      el.innerHTML = this._schedulesLoadFailed
+        ? `
+          <h2 style="font-weight:500;font-size:1.05rem;margin:0 0 8px">Schedules</h2>
+          <p style="color:var(--error-color,#db4437);margin:0 0 12px">${esc(this._scheduleError)}</p>
+          <button id="sched-retry" style="${BTN}">Retry</button>`
+        : `
+          <h2 style="font-weight:500;font-size:1.05rem;margin:0 0 8px">Schedules</h2>
+          <p style="color:var(--secondary-text-color,#727272);margin:0">Loading…</p>`;
+      el.querySelector("#sched-retry")?.addEventListener("click", () => this._retryScheduleLoad());
+      return;
+    }
+
+    const list = this._schedules.length
+      ? this._schedules
+          .map((s) => {
+            const days = s.days?.length ? s.days.map((d) => WEEKDAY_LABELS[d]).join(", ") : "—";
+            const fade = s.fade ? ` · ${s.fade}s fade` : "";
+            return `
+              <div style="display:flex;align-items:center;gap:12px;padding:10px 4px;border-bottom:1px solid var(--divider-color,#e0e0e0)">
+                <div style="flex:1">
+                  <div>${esc(s.name)}</div>
+                  <div style="font-size:.8rem;color:var(--secondary-text-color,#727272)">
+                    ${esc(days)} · ${esc(s.time)} · ${esc(this._sceneName(s.scene))}${fade}
+                  </div>
+                </div>
+                <button data-sched-del="${s.id}" style="${BTN};background:var(--error-color,#db4437)">Delete</button>
+              </div>`;
+          })
+          .join("")
+      : '<p style="color:var(--secondary-text-color,#727272);margin:0 0 12px">No schedules yet.</p>';
+
+    const sceneOpts = this._scheduleScenes
+      .map(
+        (s) =>
+          `<option value="${s.index}" ${String(this._scheduleForm.scene) === String(s.index) ? "selected" : ""}>${esc(s.name)}</option>`,
+      )
+      .join("");
+
+    const dayBoxes = WEEKDAY_LABELS.map(
+      (label, i) => `
+        <label style="display:flex;align-items:center;gap:4px;font-size:.9rem">
+          <input type="checkbox" data-sched-day="${i}" ${this._scheduleForm.days.includes(i) ? "checked" : ""}>
+          ${label}
+        </label>`,
+    ).join("");
+
+    const feedback = this._scheduleError
+      ? `<p style="color:var(--error-color,#db4437);margin:12px 0 0">${esc(this._scheduleError)}</p>`
+      : this._scheduleNotice
+        ? `<p style="color:var(--secondary-text-color,#727272);margin:12px 0 0">${esc(this._scheduleNotice)}</p>`
+        : "";
+
+    el.innerHTML = `
+      <h2 style="font-weight:500;font-size:1.05rem;margin:0 0 4px">Schedules</h2>
+      <p style="color:var(--secondary-text-color,#727272);margin:0 0 12px">
+        Run a scene automatically on a weekly schedule, straight from the mesh — no automation needed.
+      </p>
+      ${list}
+      <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--divider-color,#e0e0e0)">
+        <h3 style="font-weight:500;font-size:.95rem;margin:0 0 12px">Add a schedule</h3>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div>
+            <label for="sched-name" style="${LABEL}">Name</label>
+            <input id="sched-name" style="${INPUT}" value="${esc(this._scheduleForm.name)}" placeholder="Evening lights">
+          </div>
+          <div>
+            <label for="sched-scene" style="${LABEL}">Scene</label>
+            <select id="sched-scene" style="${INPUT}">
+              <option value="">Select a scene…</option>
+              ${sceneOpts}
+            </select>
+          </div>
+        </div>
+        <div style="margin-top:12px">
+          <span style="${LABEL}">Days</span>
+          <div style="display:flex;gap:12px;flex-wrap:wrap">${dayBoxes}</div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px">
+          <div>
+            <label for="sched-time" style="${LABEL}">Time</label>
+            <input id="sched-time" type="time" style="${INPUT}" value="${esc(this._scheduleForm.time)}">
+          </div>
+          <div>
+            <label for="sched-fade" style="${LABEL}">Fade (seconds, optional)</label>
+            <input id="sched-fade" type="number" min="0" style="${INPUT}" value="${esc(String(this._scheduleForm.fade))}">
+          </div>
+        </div>
+        ${feedback}
+        <div style="margin-top:16px;text-align:right">
+          <button id="sched-save" style="${BTN}" ${this._scheduleBusy ? "disabled" : ""}>${this._scheduleBusy ? "Saving…" : "Add schedule"}</button>
+        </div>
+      </div>`;
+
+    this._wireSchedules(el);
+  }
+
+  _wireSchedules(el) {
+    el.querySelectorAll("[data-sched-del]").forEach((btn) =>
+      btn.addEventListener("click", () => this._onScheduleDelete(el, btn.getAttribute("data-sched-del"))),
+    );
+    el.querySelector("#sched-name")?.addEventListener("input", (e) => {
+      this._scheduleForm.name = e.target.value;
+    });
+    el.querySelector("#sched-scene")?.addEventListener("change", (e) => {
+      this._scheduleForm.scene = e.target.value;
+    });
+    el.querySelector("#sched-time")?.addEventListener("input", (e) => {
+      this._scheduleForm.time = e.target.value;
+    });
+    el.querySelector("#sched-fade")?.addEventListener("input", (e) => {
+      this._scheduleForm.fade = e.target.value;
+    });
+    el.querySelectorAll("[data-sched-day]").forEach((cb) => {
+      cb.addEventListener("change", (e) => {
+        const day = Number(cb.getAttribute("data-sched-day"));
+        this._scheduleForm.days = e.target.checked
+          ? [...this._scheduleForm.days, day]
+          : this._scheduleForm.days.filter((d) => d !== day);
+      });
+    });
+    el.querySelector("#sched-save")?.addEventListener("click", () => this._onScheduleSave(el));
+  }
+
+  _readScheduleForm(el) {
+    const val = (id) => el.querySelector(id)?.value ?? "";
+    this._scheduleForm.name = val("#sched-name");
+    this._scheduleForm.scene = val("#sched-scene");
+    this._scheduleForm.time = val("#sched-time");
+    this._scheduleForm.fade = val("#sched-fade");
+    const days = [];
+    el.querySelectorAll("[data-sched-day]").forEach((cb) => {
+      if (cb.checked) days.push(Number(cb.getAttribute("data-sched-day")));
+    });
+    this._scheduleForm.days = days;
+  }
+
+  _onScheduleSave(el) {
+    if (this._scheduleBusy) return;
+    this._readScheduleForm(el);
+    this._scheduleError = this._scheduleNotice = "";
+
+    const name = this._scheduleForm.name.trim();
+    if (!name) return this._failSchedule("Name is required.");
+    if (!this._scheduleForm.days.length) return this._failSchedule("Pick at least one day.");
+    if (!/^\d{2}:\d{2}$/.test(this._scheduleForm.time)) return this._failSchedule("Pick a valid time.");
+    if (this._scheduleForm.scene === "") return this._failSchedule("Pick a scene.");
+    const fade = Number(this._scheduleForm.fade === "" ? 0 : this._scheduleForm.fade);
+    if (!Number.isFinite(fade) || fade < 0) {
+      return this._failSchedule("Fade must be zero or a positive number of seconds.");
+    }
+
+    this._saveSchedule({
+      name,
+      days: [...this._scheduleForm.days].sort((a, b) => a - b),
+      time: this._scheduleForm.time,
+      scene: Number(this._scheduleForm.scene),
+      fade,
+    });
+  }
+
+  _onScheduleDelete(el, id) {
+    if (this._scheduleBusy) return;
+    this._readScheduleForm(el); // keep any in-progress add entry across the delete's re-render
+    this._deleteSchedule(id);
+  }
+
+  _failSchedule(message) {
+    this._scheduleError = message;
+    this._renderSchedules();
+  }
+}
+
+customElements.define("plejd-panel", PlejdPanel);

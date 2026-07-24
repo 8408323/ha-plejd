@@ -6,12 +6,12 @@
   ],
   "codeowners": ["@8408323"],
   "config_flow": true,
-  "dependencies": ["bluetooth"],
+  "dependencies": ["bluetooth", "device_automation", "frontend", "http", "panel_custom", "websocket_api"],
   "documentation": "https://github.com/8408323/ha-plejd",
   "integration_type": "hub",
   "iot_class": "local_push",
   "issue_tracker": "https://github.com/8408323/ha-plejd/issues",
   "requirements": [],
   "single_config_entry": true,
-  "version": "0.7.0"
+  "version": "0.11.0"
 }

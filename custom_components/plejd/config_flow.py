@@ -13,7 +13,13 @@ from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResu
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from homeassistant.helpers.selector import SelectSelector, SelectSelectorConfig
+from homeassistant.helpers.selector import (
+    EntitySelector,
+    EntitySelectorConfig,
+    SelectSelector,
+    SelectSelectorConfig,
+    TimeSelector,
+)
 
 from .add_device import async_add_device
 from .cloud import (
@@ -29,15 +35,23 @@ from .const import (
     CONF_DEVICES,
     CONF_DISCOVERED_ADDRESS,
     CONF_GATEWAYS,
+    CONF_HOLIDAY_LIGHTS,
+    CONF_HOLIDAY_WINDOW_END,
+    CONF_HOLIDAY_WINDOW_START,
     CONF_INPUTS,
     CONF_INSTALLATION_ID,
     CONF_MOTION,
     CONF_RESOURCE_SET_ID,
+    CONF_ROOMS,
     CONF_SCENES,
     CONF_SCHEDULES,
+    CONF_SHOW_PANEL,
     CONF_SITE_ID,
     CONF_TRANSPORT,
     DOMAIN,
+    HOLIDAY_WINDOW_END_DEFAULT,
+    HOLIDAY_WINDOW_START_DEFAULT,
+    ROOM_CATEGORIES,
     TIME_EVENT_SLOTS,
     TRANSPORT_AUTO,
     TRANSPORT_BLE,
@@ -160,6 +174,7 @@ class PlejdConfigFlow(ConfigFlow, domain=DOMAIN):
                     CONF_INPUTS: [asdict(i) for i in site.inputs],
                     CONF_MOTION: [asdict(m) for m in site.motion],
                     CONF_SCENES: [asdict(s) for s in site.scenes],
+                    CONF_ROOMS: [asdict(r) for r in site.rooms],
                     CONF_GATEWAYS: site.gateways,
                     CONF_RESOURCE_SET_ID: site.resource_set_id,
                     CONF_DEVICE_ADDRESSES: site.device_addresses,
@@ -226,6 +241,7 @@ class PlejdConfigFlow(ConfigFlow, domain=DOMAIN):
                 CONF_INPUTS: [asdict(i) for i in site.inputs],
                 CONF_MOTION: [asdict(m) for m in site.motion],
                 CONF_SCENES: [asdict(s) for s in site.scenes],
+                CONF_ROOMS: [asdict(r) for r in site.rooms],
                 CONF_GATEWAYS: site.gateways,
                 CONF_RESOURCE_SET_ID: site.resource_set_id,
                 CONF_DEVICE_ADDRESSES: site.device_addresses,
@@ -243,7 +259,48 @@ class PlejdOptionsFlow(OptionsFlow):
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Entry point: a menu, not tied to any particular device (works with or without a gateway)."""
-        return self.async_show_menu(step_id="init", menu_options=["schedules", "add_device"])
+        return self.async_show_menu(
+            step_id="init", menu_options=["schedules", "dashboard", "holiday_mode", "add_device"]
+        )
+
+    async def async_step_dashboard(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """Show or hide the Plejd dashboard in the sidebar."""
+        if user_input is not None:
+            return self.async_create_entry(
+                title="", data={**self._entry.options, CONF_SHOW_PANEL: user_input[CONF_SHOW_PANEL]}
+            )
+        show = self._entry.options.get(CONF_SHOW_PANEL, True)
+        return self.async_show_form(
+            step_id="dashboard", data_schema=vol.Schema({vol.Required(CONF_SHOW_PANEL, default=show): bool})
+        )
+
+    async def async_step_holiday_mode(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """Configure holiday mode (presence simulation): target lights + active window."""
+        if user_input is not None:
+            return self.async_create_entry(
+                title="",
+                data={
+                    **self._entry.options,
+                    CONF_HOLIDAY_LIGHTS: user_input.get("lights", []),
+                    CONF_HOLIDAY_WINDOW_START: user_input["window_start"],
+                    CONF_HOLIDAY_WINDOW_END: user_input["window_end"],
+                },
+            )
+        options = self._entry.options
+        schema = vol.Schema(
+            {
+                vol.Optional("lights", default=options.get(CONF_HOLIDAY_LIGHTS, [])): EntitySelector(
+                    EntitySelectorConfig(domain="light", multiple=True)
+                ),
+                vol.Optional(
+                    "window_start", default=options.get(CONF_HOLIDAY_WINDOW_START, HOLIDAY_WINDOW_START_DEFAULT)
+                ): TimeSelector(),
+                vol.Optional(
+                    "window_end", default=options.get(CONF_HOLIDAY_WINDOW_END, HOLIDAY_WINDOW_END_DEFAULT)
+                ): TimeSelector(),
+            }
+        )
+        return self.async_show_form(step_id="holiday_mode", data_schema=schema)
 
     async def async_step_schedules(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         schedules: list[dict] = list(self._entry.options.get(CONF_SCHEDULES, []))
@@ -290,6 +347,7 @@ class PlejdOptionsFlow(OptionsFlow):
                 return self.async_create_entry(
                     title="",
                     data={
+                        **self._entry.options,  # preserve other options (e.g. show_panel)
                         CONF_SCHEDULES: kept,
                         "next_schedule_id": next_id,
                         # Reset a stale gateway-only preference to auto when there's no usable gateway.
@@ -356,19 +414,33 @@ class PlejdOptionsFlow(OptionsFlow):
         if user_input is not None:
             name = (user_input.get("name") or "").strip()
             room_title = (user_input.get("room_title") or "").strip() or None
+            room_category = (user_input.get("room_category") or "").strip() or None
             if not name:
                 errors["name"] = "name_required"
             else:
                 try:
                     await async_add_device(
-                        self.hass, self._entry, address=self._new_device_address, name=name, room_title=room_title
+                        self.hass,
+                        self._entry,
+                        address=self._new_device_address,
+                        name=name,
+                        room_title=room_title,
+                        room_category=room_category,
                     )
                 except HomeAssistantError as err:
                     errors["base"] = "add_device_failed"
                     description_placeholders["error"] = str(err)
                 else:
                     return self.async_create_entry(title="", data=dict(self._entry.options))
-        schema = vol.Schema({vol.Required("name"): str, vol.Optional("room_title", default=""): str})
+        schema = vol.Schema(
+            {
+                vol.Required("name"): str,
+                vol.Optional("room_title", default=""): str,
+                vol.Optional("room_category", default=""): SelectSelector(
+                    SelectSelectorConfig(options=["", *ROOM_CATEGORIES])
+                ),
+            }
+        )
         return self.async_show_form(
             step_id="add_device_details",
             data_schema=schema,
