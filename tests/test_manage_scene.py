@@ -107,7 +107,7 @@ async def test_create_scene_forwards_fields_and_reloads(monkeypatch):
     )
     assert entry.data["scenes"] == []  # refreshed from fresh_site.scenes
     hass.config_entries.async_reload.assert_awaited_once_with("e1")
-    assert schedule_ws.DATA_MANUAL_RELOAD not in hass.data
+    assert not schedule_ws.async_get_reload_lock(hass, entry.entry_id).locked()
 
 
 async def test_create_scene_raises_on_cloud_error_during_refresh(monkeypatch):
@@ -134,6 +134,7 @@ async def test_create_scene_runs_a_follow_up_reload_for_a_concurrent_change(monk
         calls.append(entry_id)
         if len(calls) == 1:  # only the first reload race-loses to the concurrent change
             hass.data[schedule_ws.DATA_RELOAD_PENDING] = entry_id
+        return True
 
     hass.config_entries.async_reload = AsyncMock(side_effect=_reload_sets_pending)
 

@@ -61,48 +61,49 @@ async def _async_refresh_and_reload(hass: HomeAssistant, entry: ConfigEntry, htt
         fresh_site = await async_get_site(http_session, token, entry.data[CONF_SITE_ID])
     except PlejdCloudError as err:
         raise HomeAssistantError(f"Plejd cloud error refreshing site: {err}") from err
-    # Claim the manual-reload so the entry's update listener (_async_reload_entry) doesn't
-    # also reload for this same data change, racing this one - same guard schedule_ws's
-    # own _async_persist uses for the identical async_update_entry -> listener race.
-    hass.data[schedule_ws.DATA_MANUAL_RELOAD] = entry.entry_id
+    # Mirrors the config-flow/schedule_ws guard: drop a forced gateway-only
+    # preference once there's no usable gateway left, or removing the gateway
+    # device would leave the coordinator stuck raising ConfigEntryNotReady forever
+    # on reload instead of falling back to BLE.
+    has_gateway = bool(fresh_site.gateways and fresh_site.resource_set_id)
+    new_transport = entry.options.get(CONF_TRANSPORT, TRANSPORT_AUTO) if has_gateway else TRANSPORT_AUTO
+    lock = schedule_ws.async_get_reload_lock(hass, entry.entry_id)
+    reloaded = True
     try:
-        # Mirrors the config-flow/schedule_ws guard: drop a forced gateway-only
-        # preference once there's no usable gateway left, or removing the gateway
-        # device would leave the coordinator stuck raising ConfigEntryNotReady forever
-        # on reload instead of falling back to BLE.
-        has_gateway = bool(fresh_site.gateways and fresh_site.resource_set_id)
-        new_transport = entry.options.get(CONF_TRANSPORT, TRANSPORT_AUTO) if has_gateway else TRANSPORT_AUTO
-        hass.config_entries.async_update_entry(
-            entry,
-            data={
-                **entry.data,
-                CONF_DEVICES: [asdict(d) for d in fresh_site.devices],
-                CONF_INPUTS: [asdict(i) for i in fresh_site.inputs],
-                CONF_MOTION: [asdict(m) for m in fresh_site.motion],
-                CONF_SCENES: [asdict(s) for s in fresh_site.scenes],
-                CONF_ROOMS: [asdict(r) for r in fresh_site.rooms],
-                CONF_GATEWAYS: fresh_site.gateways,
-                CONF_RESOURCE_SET_ID: fresh_site.resource_set_id,
-                CONF_DEVICE_ADDRESSES: fresh_site.device_addresses,
-            },
-            options={**entry.options, CONF_TRANSPORT: new_transport},
-        )
-        if not await hass.config_entries.async_reload(entry.entry_id):
-            # e.g. a platform refused to unload - the entry may still be running the old
-            # data/entities for the just-removed device, so this can't be reported as a
-            # clean success.
-            raise HomeAssistantError(
-                "Plejd device removed from the cloud, but reloading the integration failed - reload it manually"
+        async with lock:
+            schedule_ws.async_mark_expecting_self_reload(hass, entry.entry_id)
+            hass.config_entries.async_update_entry(
+                entry,
+                data={
+                    **entry.data,
+                    CONF_DEVICES: [asdict(d) for d in fresh_site.devices],
+                    CONF_INPUTS: [asdict(i) for i in fresh_site.inputs],
+                    CONF_MOTION: [asdict(m) for m in fresh_site.motion],
+                    CONF_SCENES: [asdict(s) for s in fresh_site.scenes],
+                    CONF_ROOMS: [asdict(r) for r in fresh_site.rooms],
+                    CONF_GATEWAYS: fresh_site.gateways,
+                    CONF_RESOURCE_SET_ID: fresh_site.resource_set_id,
+                    CONF_DEVICE_ADDRESSES: fresh_site.device_addresses,
+                },
+                options={**entry.options, CONF_TRANSPORT: new_transport},
             )
+            reloaded = await hass.config_entries.async_reload(entry.entry_id)
     finally:
-        hass.data.pop(schedule_ws.DATA_MANUAL_RELOAD, None)
-        hass.data.pop(schedule_ws.DATA_MANUAL_RELOAD_SEEN, None)
+        schedule_ws.async_consume_expected_self_reload(hass, entry.entry_id)
         if hass.data.get(schedule_ws.DATA_RELOAD_PENDING) == entry.entry_id:
-            # A concurrent options/data change's own reload was suppressed by the guard
+            # A concurrent options/data change's own reload was suppressed by the lock
             # above while ours was in flight; give it a reload of its own instead of
             # dropping it silently (see _async_reload_entry).
             hass.data.pop(schedule_ws.DATA_RELOAD_PENDING, None)
-            await hass.config_entries.async_reload(entry.entry_id)
+            async with lock:
+                await hass.config_entries.async_reload(entry.entry_id)
+    if not reloaded:
+        # e.g. a platform refused to unload - the entry may still be running the old
+        # data/entities for the just-removed device, so this can't be reported as a
+        # clean success.
+        raise HomeAssistantError(
+            "Plejd device removed from the cloud, but reloading the integration failed - reload it manually"
+        )
 
 
 def _device_name(site, device_id: str) -> str | None:

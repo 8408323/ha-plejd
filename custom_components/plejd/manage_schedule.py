@@ -107,30 +107,23 @@ async def _async_refresh_and_reload(
         # schedules isn't confirmed), so losing this write would orphan it permanently.
         hass.config_entries.async_update_entry(entry, data={**entry.data, CONF_CLOUD_SCHEDULES: cloud_schedules})
         raise HomeAssistantError(f"Plejd cloud error refreshing site: {err}") from err
-    hass.data[schedule_ws.DATA_MANUAL_RELOAD] = entry.entry_id
-    try:
-        hass.config_entries.async_update_entry(
-            entry,
-            data={
-                **entry.data,
-                CONF_DEVICES: [asdict(d) for d in fresh_site.devices],
-                CONF_INPUTS: [asdict(i) for i in fresh_site.inputs],
-                CONF_MOTION: [asdict(m) for m in fresh_site.motion],
-                CONF_SCENES: [asdict(s) for s in fresh_site.scenes],
-                CONF_ROOMS: [asdict(r) for r in fresh_site.rooms],
-                CONF_GATEWAYS: fresh_site.gateways,
-                CONF_RESOURCE_SET_ID: fresh_site.resource_set_id,
-                CONF_DEVICE_ADDRESSES: fresh_site.device_addresses,
-                CONF_CLOUD_SCHEDULES: cloud_schedules,
-            },
-        )
-        await hass.config_entries.async_reload(entry.entry_id)
-    finally:
-        hass.data.pop(schedule_ws.DATA_MANUAL_RELOAD, None)
-        hass.data.pop(schedule_ws.DATA_MANUAL_RELOAD_SEEN, None)
-        if hass.data.get(schedule_ws.DATA_RELOAD_PENDING) == entry.entry_id:
-            hass.data.pop(schedule_ws.DATA_RELOAD_PENDING, None)
-            await hass.config_entries.async_reload(entry.entry_id)
+    await schedule_ws.async_reload_entry_with_lock(
+        hass,
+        entry,
+        {
+            **entry.data,
+            CONF_DEVICES: [asdict(d) for d in fresh_site.devices],
+            CONF_INPUTS: [asdict(i) for i in fresh_site.inputs],
+            CONF_MOTION: [asdict(m) for m in fresh_site.motion],
+            CONF_SCENES: [asdict(s) for s in fresh_site.scenes],
+            CONF_ROOMS: [asdict(r) for r in fresh_site.rooms],
+            CONF_GATEWAYS: fresh_site.gateways,
+            CONF_RESOURCE_SET_ID: fresh_site.resource_set_id,
+            CONF_DEVICE_ADDRESSES: fresh_site.device_addresses,
+            CONF_CLOUD_SCHEDULES: cloud_schedules,
+        },
+        error_context="a schedule update",
+    )
 
 
 async def _sync_cloud_schedules_cache(hass: HomeAssistant, entry: ConfigEntry, cloud_schedules: list[dict]) -> None:
@@ -145,15 +138,17 @@ async def _sync_cloud_schedules_cache(hass: HomeAssistant, entry: ConfigEntry, c
     async_update_entry schedules the entry's update listener as a new task rather than
     running it inline, so it hasn't necessarily run by the time async_update_entry returns -
     block until it (and anything it schedules) actually has, so it's skipped while this
-    guard is still held instead of running unguarded after it's released below.
+    lock is still held instead of running unguarded after it's released below. Any pending
+    flag left by that skip is discarded (not carried forward): the imminent, immediately-
+    following _async_refresh_and_reload does its own full write+reload right after this and
+    would cover it anyway, so acting on it here would just be a redundant extra reload.
     """
-    hass.data[schedule_ws.DATA_MANUAL_RELOAD] = entry.entry_id
+    lock = schedule_ws.async_get_reload_lock(hass, entry.entry_id)
     try:
-        hass.config_entries.async_update_entry(entry, data={**entry.data, CONF_CLOUD_SCHEDULES: cloud_schedules})
-        await hass.async_block_till_done()
+        async with lock:
+            hass.config_entries.async_update_entry(entry, data={**entry.data, CONF_CLOUD_SCHEDULES: cloud_schedules})
+            await hass.async_block_till_done()
     finally:
-        hass.data.pop(schedule_ws.DATA_MANUAL_RELOAD, None)
-        hass.data.pop(schedule_ws.DATA_MANUAL_RELOAD_SEEN, None)
         hass.data.pop(schedule_ws.DATA_RELOAD_PENDING, None)
 
 

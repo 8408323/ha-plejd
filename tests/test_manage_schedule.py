@@ -854,6 +854,7 @@ async def test_create_schedule_runs_a_follow_up_reload_for_a_concurrent_change(m
         calls.append(entry_id)
         if len(calls) == 1:
             hass.data[schedule_ws.DATA_RELOAD_PENDING] = entry_id
+        return True
 
     hass.config_entries.async_reload = AsyncMock(side_effect=_reload_sets_pending)
 

@@ -134,16 +134,19 @@ async def test_add_device_commissions_and_reloads(monkeypatch):
 
     assert commissioned[0] == {"name": "Bedroom", "hw": "1", "room_id": "r1"}
     hass.config_entries.async_reload.assert_awaited_once_with("e1")
-    # the manual-reload guard must not leak past a successful call, or a later, genuinely
+    # the reload lock must not leak past a successful call, or a later, genuinely
     # concurrent options/data change would be wrongly suppressed by _async_reload_entry
-    assert schedule_ws.DATA_MANUAL_RELOAD not in hass.data
-    assert schedule_ws.DATA_MANUAL_RELOAD_SEEN not in hass.data
+    assert not schedule_ws.async_get_reload_lock(hass, entry.entry_id).locked()
 
 
 async def test_add_device_runs_a_follow_up_reload_for_a_concurrent_change(monkeypatch):
-    # _async_reload_entry sets DATA_RELOAD_PENDING when it suppressed a genuinely
-    # concurrent options/data change's own reload while ours was in flight - that change
-    # must still get its own reload afterward instead of being silently dropped.
+    # The real update listener (not an injected flag) must observe the reload lock as
+    # held and defer to add_device's own reload, then get a follow-up once that's done -
+    # this exercises the actual mechanism the guard is meant to prevent a race in.
+    import asyncio
+
+    from plejd import _async_reload_entry
+
     hass = _hass(ble_devices={_ADDR: _device()})
     entry = _entry()
     monkeypatch.setattr("plejd.add_device.async_login", AsyncMock(return_value="tok"))
@@ -156,19 +159,30 @@ async def test_add_device_runs_a_follow_up_reload_for_a_concurrent_change(monkey
 
     monkeypatch.setattr("plejd.add_device.async_commission_device", _fake_commission)
 
-    calls: list[str] = []
+    listener_tasks: list[asyncio.Task] = []
 
-    async def _reload_sets_pending(entry_id):
-        calls.append(entry_id)
-        if len(calls) == 1:  # only the first reload race-loses to the concurrent change
-            hass.data[schedule_ws.DATA_RELOAD_PENDING] = entry_id
+    def _update_entry(e, data):
+        e.data = data
+        # Real HA schedules the update listener as a new task rather than running it
+        # inline - mirror that so it actually races the reload below, not just a flag.
+        listener_tasks.append(asyncio.ensure_future(_async_reload_entry(hass, e)))
 
-    hass.config_entries.async_reload = AsyncMock(side_effect=_reload_sets_pending)
+    hass.config_entries.async_update_entry = _update_entry
+
+    real_reload = AsyncMock(return_value=True)
+
+    async def _reload(entry_id):
+        await asyncio.sleep(0)  # let the just-scheduled listener task run while still locked
+        return await real_reload(entry_id)
+
+    hass.config_entries.async_reload = AsyncMock(side_effect=_reload)
 
     await async_add_device(hass, entry, address=_ADDR, name="Bedroom")
+    await asyncio.gather(*listener_tasks)
 
-    assert calls == ["e1", "e1"]  # ours, then the follow-up - both against the right entry
-    assert schedule_ws.DATA_RELOAD_PENDING not in hass.data
+    # Only add_device's own explicit reload happened - the listener deferred to it
+    # instead of racing a second, concurrent one for the same change.
+    real_reload.assert_awaited_once_with("e1")
 
 
 async def test_add_device_refreshes_gateway_metadata(monkeypatch):
