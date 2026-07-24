@@ -480,53 +480,86 @@ class PlejdCoordinator:
         # docstring already documents and accepts for every other feature's refresh cycle,
         # now also triggered by this poll. Not solved here for the same reason: doing so
         # would need pending-move awareness plumbed through this poll too.
-        # A getSiteById response missing/omitting "devices" entirely (e.g. truncated or
-        # otherwise malformed) parses to an empty list the same as a genuinely empty site -
-        # applying that here unattended would silently remove every device entity. Skip
-        # (treat like a missed poll) rather than destructively "sync" to a suspiciously
-        # empty snapshot when the cache already knows about real devices.
-        if not site.devices and entry.data.get(CONF_DEVICES):
-            _LOGGER.warning(
-                "Plejd cloud poll: fresh site unexpectedly has no devices (cache has %d) - "
-                "skipping this poll as a likely malformed response",
-                len(entry.data[CONF_DEVICES]),
-            )
-            return
+        # getSiteById is JSON-object-keyed for several of these collections (inputAddress,
+        # roomAddress, per-output address maps, ...) - key order isn't semantically
+        # significant, but parse_site() builds these lists by iterating those objects, so
+        # the same site can produce differently-ordered lists across separate requests.
+        # Sort by each collection's own id before storing/comparing, or an unrelated
+        # ordering wobble looks like a real change and reloads the integration for nothing.
+        devices = sorted((asdict(d) for d in site.devices), key=lambda d: d["device_id"])
+        inputs = sorted((asdict(i) for i in site.inputs), key=lambda i: i["device_id"])
+        motion = sorted((asdict(m) for m in site.motion), key=lambda m: m["device_id"])
+        scenes = sorted((asdict(s) for s in site.scenes), key=lambda s: s["scene_id"])
+        rooms = sorted((asdict(r) for r in site.rooms), key=lambda r: r["room_id"])
+        gateways = sorted(site.gateways)
+        # A getSiteById response missing/omitting a collection entirely (e.g. truncated or
+        # otherwise malformed) parses the same as that collection being genuinely empty -
+        # applying that here unattended would silently remove every entity of that kind.
+        # gateways is deliberately excluded: it going empty is a real, expected state (the
+        # user removed their gateway in the app) that must be applied, not skipped - see
+        # the forced-transport reset below.
+        for label, fresh, cached_key in (
+            ("devices", devices, CONF_DEVICES),
+            ("inputs", inputs, CONF_INPUTS),
+            ("scenes", scenes, CONF_SCENES),
+            ("rooms", rooms, CONF_ROOMS),
+        ):
+            if not fresh and entry.data.get(cached_key):
+                _LOGGER.warning(
+                    "Plejd cloud poll: fresh site unexpectedly has no %s (cache has %d) - "
+                    "skipping this poll as a likely malformed response",
+                    label,
+                    len(entry.data[cached_key]),
+                )
+                return
+        # Mirrors manage_device.py's own device-removal refresh: drop a forced gateway-only
+        # preference once there's no usable gateway left, or a gateway disappearing here
+        # (removed in the app) would leave the coordinator stuck raising ConfigEntryNotReady
+        # forever on reload instead of falling back to BLE.
+        has_gateway = bool(gateways and site.resource_set_id)
+        new_transport = entry.options.get(CONF_TRANSPORT, TRANSPORT_AUTO) if has_gateway else TRANSPORT_AUTO
         new_data = {
             CONF_CRYPTO_KEY: site.crypto_key.hex(),
-            CONF_DEVICES: [asdict(d) for d in site.devices],
-            CONF_INPUTS: [asdict(i) for i in site.inputs],
-            CONF_MOTION: [asdict(m) for m in site.motion],
-            CONF_SCENES: [asdict(s) for s in site.scenes],
-            CONF_ROOMS: [asdict(r) for r in site.rooms],
-            CONF_GATEWAYS: site.gateways,
+            CONF_DEVICES: devices,
+            CONF_INPUTS: inputs,
+            CONF_MOTION: motion,
+            CONF_SCENES: scenes,
+            CONF_ROOMS: rooms,
+            CONF_GATEWAYS: gateways,
             CONF_RESOURCE_SET_ID: site.resource_set_id,
             CONF_DEVICE_ADDRESSES: site.device_addresses,
         }
         # A gateway newly appearing on an entry that predates CONF_INSTALLATION_ID (or
         # never had one) must seed it now - the gateway transport requires it and the
         # reload below would otherwise crash with a KeyError instead of applying this.
-        if site.gateways and not entry.data.get(CONF_INSTALLATION_ID):
+        if gateways and not entry.data.get(CONF_INSTALLATION_ID):
             new_data[CONF_INSTALLATION_ID] = str(uuid4())
         changed = [k for k, v in new_data.items() if entry.data.get(k) != v]
-        if not changed:
+        new_options = {**entry.options, CONF_TRANSPORT: new_transport}
+        transport_changed = new_options[CONF_TRANSPORT] != entry.options.get(CONF_TRANSPORT, TRANSPORT_AUTO)
+        if not changed and not transport_changed:
             return
         if not reload:
             # Setup-time self-heal (see async_start): persist only, no reload - the caller's
             # own re-raised ConfigEntryNotReady triggers HA's setup retry instead.
-            _LOGGER.info("Plejd site changed (%s) — persisting for the next setup retry", ", ".join(changed))
-            self.hass.config_entries.async_update_entry(entry, data={**entry.data, **new_data})
+            _LOGGER.info(
+                "Plejd site changed (%s) — persisting for the next setup retry", ", ".join(changed) or "transport"
+            )
+            self.hass.config_entries.async_update_entry(
+                entry, data={**entry.data, **new_data}, options=new_options
+            )
             return
-        _LOGGER.info("Plejd site changed (%s) — reloading to apply updates", ", ".join(changed))
+        _LOGGER.info("Plejd site changed (%s) — reloading to apply updates", ", ".join(changed) or "transport")
         # Reload explicitly (rather than relying on the entry's update listener alone) so a
         # rejected reload (e.g. a platform refused to unload) is actually noticed - otherwise
         # entry.data already matches the fresh site and the running coordinator never
         # reflects it. Guarded the same way schedule_ws's own persist is, so the listener
         # doesn't also fire a second, racing reload for this same change.
         old_data = dict(entry.data)
+        old_options = dict(entry.options)
         self.hass.data[schedule_ws.DATA_MANUAL_RELOAD] = entry.entry_id
         try:
-            self.hass.config_entries.async_update_entry(entry, data={**entry.data, **new_data})
+            self.hass.config_entries.async_update_entry(entry, data={**entry.data, **new_data}, options=new_options)
             try:
                 reload_ok = await self.hass.config_entries.async_reload(entry.entry_id)
             except Exception:  # noqa: BLE001 - treated like a rejected reload below
@@ -550,7 +583,7 @@ class PlejdCoordinator:
             )
             self.hass.data[schedule_ws.DATA_MANUAL_RELOAD] = entry.entry_id
             try:
-                self.hass.config_entries.async_update_entry(entry, data=old_data)
+                self.hass.config_entries.async_update_entry(entry, data=old_data, options=old_options)
             finally:
                 self.hass.data.pop(schedule_ws.DATA_MANUAL_RELOAD, None)
                 self.hass.data.pop(schedule_ws.DATA_MANUAL_RELOAD_SEEN, None)

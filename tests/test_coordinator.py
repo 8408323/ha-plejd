@@ -1544,6 +1544,7 @@ def _cloud_poll_entry():
     """Entry with all site-derived fields populated, used for cloud-poll tests."""
     return types.SimpleNamespace(
         entry_id="e1",
+        options={},
         data={
             CONF_CRYPTO_KEY: _KEY_HEX,
             CONF_DEVICES: [_DEV],
@@ -1599,7 +1600,7 @@ async def test_cloud_poll_no_change_does_nothing(monkeypatch):
     reloaded = []
     config_entries = types.SimpleNamespace(
         async_get_entry=lambda eid: entry,
-        async_update_entry=lambda e, data: updated.update(data),
+        async_update_entry=lambda e, data, options=None: updated.update(data),
         async_reload=lambda eid: reloaded.append(eid),
     )
     hass = _hass()
@@ -1628,7 +1629,7 @@ async def test_cloud_poll_device_added_reloads(monkeypatch):
     updated = {}
     config_entries = types.SimpleNamespace(
         async_get_entry=lambda eid: entry,
-        async_update_entry=lambda e, data: updated.update(data),
+        async_update_entry=lambda e, data, options=None: updated.update(data),
         async_reload=AsyncMock(return_value=True),
     )
     hass = _hass()
@@ -1662,7 +1663,7 @@ async def test_cloud_poll_reverts_and_logs_when_reload_is_rejected(monkeypatch, 
     entry = _cloud_poll_entry()
     config_entries = types.SimpleNamespace(
         async_get_entry=lambda eid: entry,
-        async_update_entry=lambda e, data: setattr(e, "data", data),
+        async_update_entry=lambda e, data, options=None: setattr(e, "data", data),
         async_reload=AsyncMock(return_value=False),
     )
     hass = _hass()
@@ -1694,7 +1695,7 @@ async def test_cloud_poll_reverts_and_logs_when_reload_raises(monkeypatch, caplo
     entry = _cloud_poll_entry()
     config_entries = types.SimpleNamespace(
         async_get_entry=lambda eid: entry,
-        async_update_entry=lambda e, data: setattr(e, "data", data),
+        async_update_entry=lambda e, data, options=None: setattr(e, "data", data),
         async_reload=AsyncMock(side_effect=RuntimeError("boom")),
     )
     hass = _hass()
@@ -1722,7 +1723,7 @@ async def test_cloud_poll_skips_a_suspiciously_empty_device_list(monkeypatch, ca
     entry = _cloud_poll_entry()  # cached CONF_DEVICES: [_DEV] (non-empty)
     config_entries = types.SimpleNamespace(
         async_get_entry=lambda eid: entry,
-        async_update_entry=lambda e, data: pytest.fail("must not persist a suspiciously empty snapshot"),
+        async_update_entry=lambda e, data, options=None: pytest.fail("must not persist a suspiciously empty snapshot"),
         async_reload=AsyncMock(),
     )
     hass = _hass()
@@ -1732,6 +1733,76 @@ async def test_cloud_poll_skips_a_suspiciously_empty_device_list(monkeypatch, ca
     await c._async_poll_cloud(None)  # must not raise
     assert "likely malformed response" in caplog.text
     config_entries.async_reload.assert_not_awaited()
+
+
+async def test_cloud_poll_skips_a_suspiciously_empty_room_list(monkeypatch, caplog):
+    # The empty-collection guard generalizes beyond devices - a room list that unexpectedly
+    # comes back empty while the cache has real rooms is just as suspicious.
+    from dataclasses import asdict
+
+    from plejd.cloud import PlejdCloudRoom
+
+    room = PlejdCloudRoom(
+        room_id="r1", name="Kok", address=100, member_addresses=[5], dimmable=True, dimmable_addresses=[5]
+    )
+
+    async def _login(session, email, password):
+        return "TOKEN"
+
+    async def _get_site(session, token, site_id):
+        return _fake_site(rooms=[])
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _login)
+    monkeypatch.setattr(coordinator_mod, "async_get_site", _get_site)
+
+    entry = _cloud_poll_entry()
+    entry.data[CONF_ROOMS] = [asdict(room)]  # cache has a real room
+    config_entries = types.SimpleNamespace(
+        async_get_entry=lambda eid: entry,
+        async_update_entry=lambda e, data, options=None: pytest.fail("must not persist a suspiciously empty snapshot"),
+        async_reload=AsyncMock(),
+    )
+    hass = _hass()
+    hass.session = object()
+    hass.config_entries = config_entries
+    c = PlejdCoordinator(hass, entry)
+    await c._async_poll_cloud(None)  # must not raise
+    assert "likely malformed response" in caplog.text
+    config_entries.async_reload.assert_not_awaited()
+
+
+async def test_cloud_poll_resets_forced_transport_when_gateway_disappears(monkeypatch):
+    # Mirrors manage_device.py's own device-removal refresh: a forced TRANSPORT_GATEWAY
+    # preference must be dropped when the gateway disappears, or the coordinator gets stuck
+    # raising ConfigEntryNotReady forever instead of falling back to BLE.
+    from plejd.const import TRANSPORT_AUTO, TRANSPORT_GATEWAY
+
+    async def _login(session, email, password):
+        return "TOKEN"
+
+    async def _get_site(session, token, site_id):
+        return _fake_site(gateways=[])  # gateway removed in the app
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _login)
+    monkeypatch.setattr(coordinator_mod, "async_get_site", _get_site)
+
+    entry = _cloud_poll_entry()
+    entry.data[CONF_GATEWAYS] = ["gw1"]
+    entry.data[CONF_RESOURCE_SET_ID] = "rs1"
+    entry.data[CONF_INSTALLATION_ID] = "inst1"
+    entry.options = {CONF_TRANSPORT: TRANSPORT_GATEWAY}
+    updated_options = {}
+    config_entries = types.SimpleNamespace(
+        async_get_entry=lambda eid: entry,
+        async_update_entry=lambda e, data, options=None: updated_options.update(options or {}),
+        async_reload=AsyncMock(return_value=True),
+    )
+    hass = _hass()
+    hass.session = object()
+    hass.config_entries = config_entries
+    c = PlejdCoordinator(hass, entry)
+    await c._async_poll_cloud(None)
+    assert updated_options[CONF_TRANSPORT] == TRANSPORT_AUTO
 
 
 async def test_start_self_heal_persists_without_reloading(monkeypatch):
@@ -1750,7 +1821,7 @@ async def test_start_self_heal_persists_without_reloading(monkeypatch):
     updated = {}
     config_entries = types.SimpleNamespace(
         async_get_entry=lambda eid: entry,
-        async_update_entry=lambda e, data: updated.update(data),
+        async_update_entry=lambda e, data, options=None: updated.update(data),
         async_reload=AsyncMock(),
     )
     hass = _hass()
@@ -1793,7 +1864,7 @@ async def test_cloud_poll_runs_a_follow_up_reload_for_a_concurrent_change(monkey
 
     hass.config_entries = types.SimpleNamespace(
         async_get_entry=lambda eid: entry,
-        async_update_entry=lambda e, data: setattr(e, "data", data),
+        async_update_entry=lambda e, data, options=None: setattr(e, "data", data),
         async_reload=AsyncMock(side_effect=_reload),
     )
     c = PlejdCoordinator(hass, entry)
@@ -1817,7 +1888,7 @@ async def test_cloud_poll_seeds_installation_id_for_new_gateway(monkeypatch):
     updated = {}
     config_entries = types.SimpleNamespace(
         async_get_entry=lambda eid: entry,
-        async_update_entry=lambda e, data: updated.update(data),
+        async_update_entry=lambda e, data, options=None: updated.update(data),
         async_reload=AsyncMock(return_value=True),
     )
     hass = _hass()
@@ -1845,7 +1916,7 @@ async def test_cloud_poll_persists_device_addresses(monkeypatch):
     updated = {}
     config_entries = types.SimpleNamespace(
         async_get_entry=lambda eid: entry,
-        async_update_entry=lambda e, data: updated.update(data),
+        async_update_entry=lambda e, data, options=None: updated.update(data),
         async_reload=AsyncMock(return_value=True),
     )
     hass = _hass()
@@ -1868,7 +1939,7 @@ async def test_cloud_poll_auth_error_starts_reauth(monkeypatch):
     reloaded = []
     config_entries = types.SimpleNamespace(
         async_get_entry=lambda eid: entry,
-        async_update_entry=lambda e, data: None,
+        async_update_entry=lambda e, data, options=None: None,
         async_reload=lambda eid: reloaded.append(eid),
     )
     hass = _hass()
@@ -1908,7 +1979,7 @@ async def test_cloud_poll_cloud_error_skips_reload(monkeypatch):
     reloaded = []
     config_entries = types.SimpleNamespace(
         async_get_entry=lambda eid: entry,
-        async_update_entry=lambda e, data: None,
+        async_update_entry=lambda e, data, options=None: None,
         async_reload=lambda eid: reloaded.append(eid),
     )
     hass = _hass()
@@ -1933,7 +2004,7 @@ async def test_cloud_poll_transport_error_is_treated_as_a_missed_poll(monkeypatc
     hass.session = object()
     hass.config_entries = types.SimpleNamespace(
         async_get_entry=lambda eid: entry,
-        async_update_entry=lambda e, data: None,
+        async_update_entry=lambda e, data, options=None: None,
     )
     c = PlejdCoordinator(hass, entry)
     await c._async_poll_cloud(None)  # must not raise
@@ -1960,7 +2031,7 @@ async def test_start_attempts_cloud_self_heal_before_raising_not_ready(monkeypat
     hass.session = object()
     hass.config_entries = types.SimpleNamespace(
         async_get_entry=lambda eid: entry,
-        async_update_entry=lambda e, data: updated.update(data),
+        async_update_entry=lambda e, data, options=None: updated.update(data),
         async_reload=AsyncMock(return_value=True),
     )
     c = PlejdCoordinator(hass, entry)
@@ -2016,7 +2087,7 @@ async def test_cloud_poll_persists_rooms(monkeypatch):
     updated = {}
     config_entries = types.SimpleNamespace(
         async_get_entry=lambda eid: entry,
-        async_update_entry=lambda e, data: updated.update(data),
+        async_update_entry=lambda e, data, options=None: updated.update(data),
         async_reload=AsyncMock(return_value=True),
     )
     hass = _hass()
@@ -2049,7 +2120,7 @@ async def test_cloud_poll_discards_result_after_shutdown(monkeypatch):
     updated = {}
     config_entries = types.SimpleNamespace(
         async_get_entry=lambda eid: entry,
-        async_update_entry=lambda e, data: updated.update(data),
+        async_update_entry=lambda e, data, options=None: updated.update(data),
     )
     hass = _hass()
     hass.session = object()
@@ -2071,7 +2142,7 @@ async def test_cloud_poll_auth_error_after_shutdown_does_not_start_reauth(monkey
     entry = _cloud_poll_entry()
     config_entries = types.SimpleNamespace(
         async_get_entry=lambda eid: entry,
-        async_update_entry=lambda e, data: None,
+        async_update_entry=lambda e, data, options=None: None,
     )
     hass = _hass()
     hass.session = object()
