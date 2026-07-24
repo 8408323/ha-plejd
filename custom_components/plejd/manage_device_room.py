@@ -43,6 +43,7 @@ integration.
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import asdict
 
 from homeassistant.config_entries import ConfigEntry
@@ -93,6 +94,8 @@ DATA_PENDING_ROOM_MOVES = f"{DOMAIN}_pending_room_moves"
 # concurrent moves, so a per-entry lock doesn't cost any real concurrency.
 DATA_MOVE_LOCKS = f"{DOMAIN}_move_locks"
 
+_LOGGER = logging.getLogger(__name__)
+
 
 def _pending_moves(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, dict]:
     all_pending = hass.data.setdefault(DATA_PENDING_ROOM_MOVES, {})
@@ -122,10 +125,14 @@ async def _async_persist_pending(hass: HomeAssistant, entry: ConfigEntry, pendin
             schedule_ws.async_mark_expecting_self_reload(hass, entry.entry_id)
             hass.config_entries.async_update_entry(entry, data={**entry.data, CONF_PENDING_ROOM_MOVES: dict(pending)})
             # async_update_entry schedules the entry's update listener as a new task
-            # rather than running it inline - block until it (and anything it schedules)
-            # actually has, so it's skipped while this lock is still held instead of
-            # running unguarded after it's released below.
-            await hass.async_block_till_done()
+            # rather than running it inline - yield one loop iteration so it (having no
+            # awaits of its own on the "lock held" path) has a chance to run while this
+            # lock is still held, instead of running unguarded after it's released below.
+            # Deliberately not hass.async_block_till_done(): that drains EVERY pending HA
+            # task, including any other management operation already waiting to acquire
+            # this same lock - which would deadlock (it can't finish without the lock
+            # we're still holding).
+            await asyncio.sleep(0)
     finally:
         # Defensive: clears it even if the listener never ran within this session (e.g. a
         # genuinely no-op write), so it can't leak into a later, unrelated one.
@@ -133,7 +140,10 @@ async def _async_persist_pending(hass: HomeAssistant, entry: ConfigEntry, pendin
     if hass.data.get(schedule_ws.DATA_RELOAD_PENDING) == entry.entry_id:
         hass.data.pop(schedule_ws.DATA_RELOAD_PENDING, None)
         async with lock:
-            await hass.config_entries.async_reload(entry.entry_id)
+            try:
+                await hass.config_entries.async_reload(entry.entry_id)
+            except Exception:  # noqa: BLE001 - best-effort follow-up for someone else's change
+                _LOGGER.warning("Plejd: follow-up reload for a concurrent change failed")
 
 
 async def _async_login_and_get_site(hass: HomeAssistant, entry: ConfigEntry):

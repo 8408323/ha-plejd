@@ -137,19 +137,34 @@ async def _sync_cloud_schedules_cache(hass: HomeAssistant, entry: ConfigEntry, c
 
     async_update_entry schedules the entry's update listener as a new task rather than
     running it inline, so it hasn't necessarily run by the time async_update_entry returns -
-    block until it (and anything it schedules) actually has, so it's skipped while this
-    lock is still held instead of running unguarded after it's released below. Any pending
-    flag left by that skip is discarded (not carried forward): the imminent, immediately-
-    following _async_refresh_and_reload does its own full write+reload right after this and
-    would cover it anyway, so acting on it here would just be a redundant extra reload.
+    yield one loop iteration so it (having no awaits of its own on the "lock held" path) has
+    a chance to run while this lock is still held, instead of running unguarded after it's
+    released below. Deliberately not hass.async_block_till_done(): that drains EVERY pending
+    HA task, including any other management operation already waiting to acquire this same
+    lock - which would deadlock (it can't finish without the lock we're still holding).
+    A genuinely concurrent change detected during that window still gets its own follow-up
+    reload here (not discarded): the immediately-following _async_refresh_and_reload usually
+    covers it too, but its PlejdCloudError path can persist this cache write and raise
+    without ever reloading, which would otherwise silently drop the concurrent change's
+    needed reload.
     """
     lock = schedule_ws.async_get_reload_lock(hass, entry.entry_id)
     try:
         async with lock:
+            schedule_ws.async_mark_expecting_self_reload(hass, entry.entry_id)
             hass.config_entries.async_update_entry(entry, data={**entry.data, CONF_CLOUD_SCHEDULES: cloud_schedules})
-            await hass.async_block_till_done()
+            await asyncio.sleep(0)
     finally:
+        # Defensive: clears it even if the listener never ran within this session (e.g. a
+        # genuinely no-op write), so it can't leak into a later, unrelated one.
+        schedule_ws.async_consume_expected_self_reload(hass, entry.entry_id)
+    if hass.data.get(schedule_ws.DATA_RELOAD_PENDING) == entry.entry_id:
         hass.data.pop(schedule_ws.DATA_RELOAD_PENDING, None)
+        async with lock:
+            try:
+                await hass.config_entries.async_reload(entry.entry_id)
+            except Exception:  # noqa: BLE001 - best-effort follow-up for someone else's change
+                _LOGGER.warning("Plejd: follow-up reload for a concurrent change failed")
 
 
 async def _async_cleanup_orphaned_scenes(http_session, token: str, site_id: str, scene_ids: list[str]) -> None:

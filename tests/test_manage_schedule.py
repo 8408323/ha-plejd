@@ -10,7 +10,12 @@ import pytest
 from homeassistant.exceptions import HomeAssistantError
 from plejd import schedule_ws
 from plejd.cloud import PlejdAuthError, PlejdCloudError, PlejdCloudSceneInfo, PlejdCloudSite
-from plejd.manage_schedule import async_create_schedule, async_remove_schedule, async_update_schedule
+from plejd.manage_schedule import (
+    _sync_cloud_schedules_cache,
+    async_create_schedule,
+    async_remove_schedule,
+    async_update_schedule,
+)
 
 _KEY = bytes(range(16))
 _STEP = {"device_id": "d1", "output": 0, "state": "On", "value": 255}
@@ -1659,3 +1664,25 @@ async def test_remove_schedule_serializes_via_the_lock(monkeypatch):
     await async_remove_schedule(hass, entry, schedule_id="te1")
 
     assert entry.data["cloud_schedules"] == []
+
+
+async def test_sync_cloud_schedules_cache_runs_a_follow_up_reload_for_a_concurrent_change():
+    hass = _hass()
+    entry = _entry()
+    hass.data[schedule_ws.DATA_RELOAD_PENDING] = "e1"
+
+    await _sync_cloud_schedules_cache(hass, entry, [])
+
+    hass.config_entries.async_reload.assert_awaited_once_with("e1")
+    assert schedule_ws.DATA_RELOAD_PENDING not in hass.data
+
+
+async def test_sync_cloud_schedules_cache_logs_when_the_follow_up_reload_raises(caplog):
+    hass = _hass()
+    entry = _entry()
+    hass.data[schedule_ws.DATA_RELOAD_PENDING] = "e1"
+    hass.config_entries.async_reload = AsyncMock(side_effect=RuntimeError("boom"))
+
+    await _sync_cloud_schedules_cache(hass, entry, [])
+
+    assert "follow-up reload for a concurrent change failed" in caplog.text

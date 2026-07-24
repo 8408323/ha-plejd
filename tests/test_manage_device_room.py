@@ -17,7 +17,7 @@ from plejd.cloud import (
     PlejdCloudSite,
 )
 from plejd.const import CONF_PENDING_ROOM_MOVES
-from plejd.manage_device_room import DATA_PENDING_ROOM_MOVES, async_move_device_to_room
+from plejd.manage_device_room import DATA_PENDING_ROOM_MOVES, _async_persist_pending, async_move_device_to_room
 
 _KEY = bytes(range(16))
 
@@ -214,8 +214,6 @@ async def test_move_device_does_not_double_reload_across_its_two_persists(monkey
     # persist, then the full one), each its own separate reload-lock acquisition. The real
     # update listener (not an injected flag) must recognize both as self-triggered and
     # never fire its own competing reload for either.
-    import asyncio
-
     from plejd import _async_reload_entry
 
     hass = _hass()
@@ -249,9 +247,10 @@ async def test_move_device_does_not_double_reload_across_its_two_persists(monkey
     await async_move_device_to_room(hass, entry, device_id="d1", room_id="r2")
     await asyncio.gather(*listener_tasks)
 
-    # Only the move's own two explicit reloads happened (one per persist) - the listener
-    # deferred to each instead of racing a competing reload of its own.
-    assert real_reload.await_count == 2
+    # _async_persist_pending's own write needs no reload of its own (no pending change was
+    # detected during its lock session) - only _async_refresh_and_reload's real reload runs.
+    # The listener deferred to both writes' lock sessions instead of racing a reload of its own.
+    real_reload.assert_awaited_once_with("e1")
 
 
 async def test_move_device_joins_via_the_coordinator_current_at_join_time(monkeypatch):
@@ -1538,3 +1537,16 @@ async def test_move_device_serializes_concurrent_calls_for_different_devices(mon
     assert call_order == ["login_start", "login_done", "login_start", "login_done"]
     coordinator.async_join_mesh_group.assert_any_await(39, 34)
     coordinator.async_join_mesh_group.assert_any_await(51, 34)
+
+
+async def test_persist_pending_logs_when_the_follow_up_reload_raises(caplog):
+    from plejd import schedule_ws
+
+    hass = _hass()
+    entry = _entry()
+    hass.data[schedule_ws.DATA_RELOAD_PENDING] = "e1"
+    hass.config_entries.async_reload = AsyncMock(side_effect=RuntimeError("boom"))
+
+    await _async_persist_pending(hass, entry, {})
+
+    assert "follow-up reload for a concurrent change failed" in caplog.text

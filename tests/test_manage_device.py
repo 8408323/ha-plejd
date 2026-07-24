@@ -160,7 +160,7 @@ async def test_remove_device_raises_when_reload_fails(monkeypatch):
     monkeypatch.setattr("plejd.manage_device.async_get_site", AsyncMock(side_effect=[_site([_device()]), _site([])]))
     monkeypatch.setattr("plejd.manage_device.async_cloud_remove_device", AsyncMock(return_value=True))
 
-    with pytest.raises(HomeAssistantError, match="reloading the integration failed"):
+    with pytest.raises(HomeAssistantError, match="failed to reload after removing a device"):
         await async_remove_device(hass, entry, device_id="d1")
 
 

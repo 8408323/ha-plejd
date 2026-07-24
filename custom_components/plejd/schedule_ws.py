@@ -43,7 +43,10 @@ _DATA_RELOAD_LOCKS = f"{DOMAIN}_reload_locks"
 # Set by _async_reload_entry when it finds async_get_reload_lock() already held - some
 # other operation owns an update+reload cycle for this entry right now and will pick up
 # this change; the current lock holder checks this after releasing and runs a follow-up
-# reload for it, instead of silently dropping it.
+# reload for it, instead of silently dropping it. Like _DATA_EXPECTING_SELF_RELOAD below,
+# this is a single hass.data slot holding one entry_id, not a per-entry structure - correct
+# only because manifest.json declares single_config_entry (exactly one entry_id ever
+# exists). Would need to become per-entry if that ever changes.
 DATA_RELOAD_PENDING = f"{DOMAIN}_schedule_reload_pending"
 
 # Set by a reload-lock holder right before its own single async_update_entry() call, so
@@ -78,23 +81,27 @@ def async_consume_expected_self_reload(hass: HomeAssistant, entry_id: str) -> bo
 
 
 async def async_reload_entry_with_lock(
-    hass: HomeAssistant, entry: ConfigEntry, data: dict, *, error_context: str
+    hass: HomeAssistant, entry: ConfigEntry, data: dict, *, options: dict | None = None, error_context: str
 ) -> None:
-    """Write `data` onto the entry and reload it under the shared per-entry reload lock.
+    """Write `data` (and optionally `options`) onto the entry and reload it under the
+    shared per-entry reload lock.
 
-    Shared by every management operation (room/scene/schedule services, add_device, ...)
-    that needs to persist a full entry.data overlay and reload for it to take effect.
-    Raises HomeAssistantError if the entry's own reload reports failure. A follow-up
-    reload for a genuinely concurrent change the update listener detected meanwhile (see
-    DATA_RELOAD_PENDING) is only logged on failure, since it isn't this caller's own
-    operation to fail loudly for.
+    Shared by every management operation (room/scene/schedule/device services, add_device,
+    ...) that needs to persist a full entry.data (and, for some, entry.options) overlay and
+    reload for it to take effect. Raises HomeAssistantError if the entry's own reload
+    reports failure. A follow-up reload for a genuinely concurrent change the update
+    listener detected meanwhile (see DATA_RELOAD_PENDING) is only logged on failure, since
+    it isn't this caller's own operation to fail loudly for.
     """
     lock = async_get_reload_lock(hass, entry.entry_id)
     reloaded = True
     try:
         async with lock:
             async_mark_expecting_self_reload(hass, entry.entry_id)
-            hass.config_entries.async_update_entry(entry, data=data)
+            if options is not None:
+                hass.config_entries.async_update_entry(entry, data=data, options=options)
+            else:
+                hass.config_entries.async_update_entry(entry, data=data)
             try:
                 reloaded = await hass.config_entries.async_reload(entry.entry_id)
             except Exception:  # noqa: BLE001 - surfaced below as the HomeAssistantError callers expect
