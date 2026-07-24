@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from bleak.backends.device import BLEDevice
 from homeassistant.exceptions import HomeAssistantError
+from plejd import schedule_ws
 from plejd.add_device import async_add_device
 from plejd.cloud import NewDeviceAddresses, PlejdCloudError, PlejdCloudRoom, PlejdCloudSite
 
@@ -43,6 +44,7 @@ def _hass(service_infos=None, ble_devices=None):
     if service_infos is None:
         service_infos = [_fake_service_info(_ADDR, {887: bytes([0x08, 0, 0, 1])})]
     return types.SimpleNamespace(
+        data={},
         service_infos=list(service_infos),
         ble_devices=ble_devices or {},
         config_entries=types.SimpleNamespace(
@@ -132,6 +134,41 @@ async def test_add_device_commissions_and_reloads(monkeypatch):
 
     assert commissioned[0] == {"name": "Bedroom", "hw": "1", "room_id": "r1"}
     hass.config_entries.async_reload.assert_awaited_once_with("e1")
+    # the manual-reload guard must not leak past a successful call, or a later, genuinely
+    # concurrent options/data change would be wrongly suppressed by _async_reload_entry
+    assert schedule_ws.DATA_MANUAL_RELOAD not in hass.data
+    assert schedule_ws.DATA_MANUAL_RELOAD_SEEN not in hass.data
+
+
+async def test_add_device_runs_a_follow_up_reload_for_a_concurrent_change(monkeypatch):
+    # _async_reload_entry sets DATA_RELOAD_PENDING when it suppressed a genuinely
+    # concurrent options/data change's own reload while ours was in flight - that change
+    # must still get its own reload afterward instead of being silently dropped.
+    hass = _hass(ble_devices={_ADDR: _device()})
+    entry = _entry()
+    monkeypatch.setattr("plejd.add_device.async_login", AsyncMock(return_value="tok"))
+    monkeypatch.setattr("plejd.add_device.async_get_site", AsyncMock(return_value=_site()))
+
+    async def _fake_commission(
+        http_session, token, site, ble_device, name, hw="0", fw=0, room_id=None, room_title=None, room_category=None
+    ):
+        return NewDeviceAddresses(device_address=5, output_addresses={0: 50})
+
+    monkeypatch.setattr("plejd.add_device.async_commission_device", _fake_commission)
+
+    calls: list[str] = []
+
+    async def _reload_sets_pending(entry_id):
+        calls.append(entry_id)
+        if len(calls) == 1:  # only the first reload race-loses to the concurrent change
+            hass.data[schedule_ws.DATA_RELOAD_PENDING] = entry_id
+
+    hass.config_entries.async_reload = AsyncMock(side_effect=_reload_sets_pending)
+
+    await async_add_device(hass, entry, address=_ADDR, name="Bedroom")
+
+    assert hass.config_entries.async_reload.await_count == 2  # ours, then the follow-up
+    assert schedule_ws.DATA_RELOAD_PENDING not in hass.data
 
 
 async def test_add_device_refreshes_gateway_metadata(monkeypatch):
