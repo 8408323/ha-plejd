@@ -81,7 +81,13 @@ def _hass(infos=(), ble=None):
     return types.SimpleNamespace(
         service_infos=list(infos),
         ble_devices=ble or {},
-        config_entries=types.SimpleNamespace(async_update_entry=lambda entry, data: setattr(entry, "data", data)),
+        config_entries=types.SimpleNamespace(
+            async_update_entry=lambda entry, data: setattr(entry, "data", data),
+            # async_start's ConfigEntryNotReady handler makes a best-effort cloud-poll
+            # attempt; entry_id lookup misses here so it's a clean no-op for tests that
+            # don't care about cloud-poll behavior specifically.
+            async_get_entry=lambda eid: None,
+        ),
     )
 
 
@@ -1765,6 +1771,36 @@ async def test_cloud_poll_transport_error_is_treated_as_a_missed_poll(monkeypatc
     )
     c = PlejdCoordinator(hass, entry)
     await c._async_poll_cloud(None)  # must not raise
+
+
+async def test_start_attempts_cloud_self_heal_before_raising_not_ready(monkeypatch):
+    # A stale gateway/crypto-key is exactly what the cloud poll exists to repair, but its
+    # recurring timer never gets registered when connect fails during setup - without this,
+    # a setup retry would keep reusing the same stale entry.data forever.
+    from homeassistant.exceptions import ConfigEntryNotReady
+
+    async def _login(session, email, password):
+        return "TOKEN"
+
+    async def _get_site(session, token, site_id):
+        return _fake_site(gateways=["gw-new"], resource_set_id="rs-new")
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _login)
+    monkeypatch.setattr(coordinator_mod, "async_get_site", _get_site)
+
+    entry = _cloud_poll_entry()  # no CONF_GATEWAYS/BLE device in range - connect fails
+    updated = {}
+    hass = _hass()  # no service_infos/ble_devices -> BLE connect finds nothing
+    hass.session = object()
+    hass.config_entries = types.SimpleNamespace(
+        async_get_entry=lambda eid: entry,
+        async_update_entry=lambda e, data: updated.update(data),
+    )
+    c = PlejdCoordinator(hass, entry)
+    with pytest.raises(ConfigEntryNotReady):
+        await c.async_start()
+    # The next setup retry re-reads entry.data fresh, so this is the only chance to fix it.
+    assert updated[CONF_GATEWAYS] == ["gw-new"]
 
 
 async def test_cloud_poll_persists_rooms(monkeypatch):

@@ -416,7 +416,16 @@ class PlejdCoordinator:
 
     async def async_start(self) -> None:
         """Connect to the mesh — gateway-first when one exists, else BLE."""
-        await self._async_select_and_connect()
+        try:
+            await self._async_select_and_connect()
+        except ConfigEntryNotReady:
+            # A stale gateway/crypto-key/etc is exactly what the cloud poll below exists to
+            # repair, but its recurring timer never gets registered when connect fails here,
+            # and a setup retry would otherwise keep reusing the same stale entry data
+            # forever - make one best-effort attempt to refresh it before giving up this
+            # attempt, so the next retry (which re-reads entry.data fresh) has a shot at it.
+            await self._async_poll_cloud(None)
+            raise
         self._cloud_poll_unsub = async_track_time_interval(self.hass, self._async_poll_cloud, CLOUD_POLL_INTERVAL)
         self._schedule_firmware_checks()
 
