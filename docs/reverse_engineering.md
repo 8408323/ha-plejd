@@ -173,6 +173,100 @@ This gateway/mesh-relay channel is a **different host** than the pinned
 `cloud.plejd.com` above and is not pinned — WireGuard mode was enough to capture
 it cleanly.
 
+> **2026-07-22 update — the `cloud.plejd.com` pinning wall above is now bypassable.**
+> Live-confirmed cause: the app's HttpClient on Android routes through the
+> platform's legacy `com.android.okhttp`/Conscrypt stack (not modern OkHttp3),
+> and certificate validation ultimately goes through the app's own .NET-on-Android
+> trust manager binding, `net.dot.android.crypto.DotnetProxyTrustManager`
+> (`checkServerTrusted`/`checkClientTrusted`). A Frida script hooking that class's
+> methods (plus `com.android.okhttp.CertificatePinner.check`/`check$okhttp` and
+> `com.android.org.conscrypt.TrustManagerImpl.checkTrustedRecursive`/`verifyChain`
+> defensively, since which one actually gates a given call wasn't worth narrowing
+> down further) to no-op/pass-through made the app accept mitmproxy's certificate
+> for `cloud.plejd.com`, decrypting the Parse `functions/*` calls cleanly.
+>
+> Setup: push a matching `frida-server` build to `/data/local/tmp/`, run it as
+> root (`su -c '/data/local/tmp/frida-server &'`), then either spawn the app fresh
+> (`frida -U -f com.plejd.plejdapp -l bypass.js`) or attach to an already-running
+> instance (`frida -U -n Plejd -l bypass.js`) — spawning hit an unexplained
+> "timed out while waiting for app to launch" a couple of times on this device/OS
+> combo (Android 10, SDK 29) even though the process came up fine per `ps`;
+> attaching to the already-running app worked reliably instead. Enumerate
+> `Java.enumerateLoadedClassesSync()` filtered on TLS-related names first to
+> confirm which trust-manager classes are actually loaded before writing hooks -
+> this app has no `okhttp3.*` classes loaded at all, so hooking only the modern
+> OkHttp3 API (the usual first guess for "Android SSL pinning bypass" scripts)
+> silently does nothing.
+>
+> **2026-07-22 follow-up — the bypass above wasn't enough for every call.** A
+> schedule-save specifically kept failing ("the client does not trust the
+> proxy's certificate") even with the same script attached, including a case
+> where `frida -U -f ... -l bypass.js` reported "Failed to spawn: unexpectedly
+> timed out" yet the process had actually launched (confirmed via `ps`) —
+> attaching to it (`frida -U -n Plejd -l bypass.js`) afterward worked. The
+> deeper cause: killing the Frida CLI process (even after a successful spawn)
+> detaches the injected script and reverts its hooks, so a `timeout N frida ...
+> &` wrapper that gets killed after N seconds silently undoes the bypass for
+> anything that connects afterward — the process must stay attached (run
+> detached via `nohup ... &`, never killed until the capture is done) for the
+> hooks to still apply to a later call. Separately, some calls weren't caught
+> by `DotnetProxyTrustManager` at all; adding hooks for
+> `android.security.net.config.NetworkSecurityTrustManager` (Android's own
+> Network Security Config trust manager, a separate gate from the app's own
+> TLS code) plus a generic sweep of every loaded class implementing
+> `X509TrustManager.checkServerTrusted` fixed it.
+
+## Confirmed capture: cloud schedules (2026-07-22)
+
+Live-captured while creating, then deleting, a disposable test schedule (via
+the WireGuard-mode mitmproxy + Frida setup above). Real ids below are
+placeholders.
+
+**Create** is two Parse calls, not one — `functions/createTimeEvent_V3` is a
+separate function from `functions/updateTimeEvent_V3`, confirmed distinct:
+
+```
+POST functions/createScene
+  {siteId, sceneId, title, order: 0, sceneSteps: [...],
+   hiddenFromSceneList: true, settings: "{\"SceneType\":\"AstroEventScene\"}"}
+  -> {result: <int>}                      # no CreatedById yet
+
+POST functions/createTimeEvent_V3
+  {siteId, timeEventId: null, sceneId, scheduledDays, fadeTime, activated,
+   dirtyDevices, dirtyRemovedDevices: [], dirtyRemove: false, mode: "astro",
+   version: 2, start: {event, offset}, end: {event, offset},
+   pauseStart: "00:00", pauseEnd: "00:00", targetDevices}
+  -> {result: {targetDevices, eventId}}    # server generates the real id
+
+POST functions/updateScene                # backfills CreatedById once eventId is known
+  {siteId, sceneId, ..., settings: "{\"SceneType\":\"AstroEventScene\",\"CreatedById\":\"<eventId>\"}"}
+  -> {result: true}
+```
+
+`version: 2` + `pauseStart`/`pauseEnd` (always `"00:00"` here) is what this
+capture showed for a schedule *without* night reduction. An earlier capture of
+an *existing* schedule *with* night reduction configured showed `version: 3`
+and a `nightReduction` object instead of `pauseStart`/`pauseEnd` — both are
+individually confirmed-real payloads, but which field actually controls the
+switch between them wasn't re-verified in one session (not retested: enabling
+night reduction on a fresh schedule to watch `version` change). See
+[#106](https://github.com/8408323/ha-plejd/issues/106) and
+[#121](https://github.com/8408323/ha-plejd/issues/121).
+
+**Delete** is confirmed as a 5-call sequence:
+
+```
+1. updateTimeEvent_V3   — whole-state resend with dirtyRemove: true, dirtyDevices: []
+2. updateScene          — the on-scene's step(s) resent with dirtyRemoved: true
+3. removeTimeEvent_V3   — {siteId, timeEventId, mode: "astro", deviceIds} -> {result: true}
+4. updateScene          — sceneSteps: [] (emptied)
+5. removeScene          — {siteId, sceneId} -> {result: true}
+```
+
+`removeTimeEvent_V3` (step 3) is the dedicated deletion call — the earlier
+`dirtyRemove: true` resend (step 1) isn't itself destructive, it just marks
+intent before the real removal.
+
 ## Secrets
 
 The crypto key, account credentials, session tokens, BLE addresses, and all

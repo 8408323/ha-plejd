@@ -199,6 +199,42 @@ async def test_update_scene_forwards_fields_and_reloads(monkeypatch):
     hass.config_entries.async_reload.assert_awaited_once_with("e1")
 
 
+async def test_update_scene_refuses_when_it_is_a_cloud_schedule_on_scene(monkeypatch):
+    monkeypatch.setattr("plejd.manage_scene.async_login", AsyncMock(return_value="tok"))
+    monkeypatch.setattr("plejd.manage_scene.async_get_site", AsyncMock(return_value=_site([_scene()])))
+    entry = _entry(
+        data={
+            "email": "u@x.com",
+            "password": "pw",
+            "site_id": "S1",
+            "cloud_schedules": [{"scene_id": "s1", "title": "Garage", "night_reduction": None}],
+        }
+    )
+    update_mock = AsyncMock()
+    monkeypatch.setattr("plejd.manage_scene.async_cloud_update_scene", update_mock)
+    with pytest.raises(HomeAssistantError, match="Garage"):
+        await async_update_scene(_hass(), entry, scene_id="s1", title="Hacked")
+    update_mock.assert_not_awaited()  # must not even attempt the cloud call
+
+
+async def test_update_scene_refuses_when_it_is_a_cloud_schedule_night_reduction_scene(monkeypatch):
+    monkeypatch.setattr("plejd.manage_scene.async_login", AsyncMock(return_value="tok"))
+    monkeypatch.setattr("plejd.manage_scene.async_get_site", AsyncMock(return_value=_site([_scene(scene_id="night1")])))
+    entry = _entry(
+        data={
+            "email": "u@x.com",
+            "password": "pw",
+            "site_id": "S1",
+            "cloud_schedules": [{"scene_id": "s1", "title": "Garage", "night_reduction": {"scene_id": "night1"}}],
+        }
+    )
+    update_mock = AsyncMock()
+    monkeypatch.setattr("plejd.manage_scene.async_cloud_update_scene", update_mock)
+    with pytest.raises(HomeAssistantError, match="Garage"):
+        await async_update_scene(_hass(), entry, scene_id="night1", title="Hacked")
+    update_mock.assert_not_awaited()
+
+
 async def test_remove_scene_raises_if_scene_not_found(monkeypatch):
     monkeypatch.setattr("plejd.manage_scene.async_login", AsyncMock(return_value="tok"))
     monkeypatch.setattr("plejd.manage_scene.async_get_site", AsyncMock(return_value=_site([])))
@@ -218,6 +254,42 @@ async def test_remove_scene_refuses_when_referenced_by_a_schedule(monkeypatch):
     with pytest.raises(HomeAssistantError, match="Evening"):
         await async_remove_scene(_hass(), entry, scene_id="s1")
     remove_mock.assert_not_awaited()  # must not even attempt the cloud call
+
+
+async def test_remove_scene_refuses_when_referenced_by_a_cloud_schedule_on_scene(monkeypatch):
+    monkeypatch.setattr("plejd.manage_scene.async_login", AsyncMock(return_value="tok"))
+    monkeypatch.setattr("plejd.manage_scene.async_get_site", AsyncMock(return_value=_site([_scene()])))
+    entry = _entry(
+        data={
+            "email": "u@x.com",
+            "password": "pw",
+            "site_id": "S1",
+            "cloud_schedules": [{"scene_id": "s1", "title": "Garage", "night_reduction": None}],
+        }
+    )
+    remove_mock = AsyncMock()
+    monkeypatch.setattr("plejd.manage_scene.async_cloud_remove_scene", remove_mock)
+    with pytest.raises(HomeAssistantError, match="Garage"):
+        await async_remove_scene(_hass(), entry, scene_id="s1")
+    remove_mock.assert_not_awaited()
+
+
+async def test_remove_scene_refuses_when_referenced_by_a_cloud_schedule_night_reduction(monkeypatch):
+    monkeypatch.setattr("plejd.manage_scene.async_login", AsyncMock(return_value="tok"))
+    monkeypatch.setattr("plejd.manage_scene.async_get_site", AsyncMock(return_value=_site([_scene(scene_id="night1")])))
+    entry = _entry(
+        data={
+            "email": "u@x.com",
+            "password": "pw",
+            "site_id": "S1",
+            "cloud_schedules": [{"scene_id": "s1", "title": "Garage", "night_reduction": {"scene_id": "night1"}}],
+        }
+    )
+    remove_mock = AsyncMock()
+    monkeypatch.setattr("plejd.manage_scene.async_cloud_remove_scene", remove_mock)
+    with pytest.raises(HomeAssistantError, match="Garage"):
+        await async_remove_scene(_hass(), entry, scene_id="night1")
+    remove_mock.assert_not_awaited()
 
 
 async def test_remove_scene_allows_when_no_schedule_references_it(monkeypatch):
