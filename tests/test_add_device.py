@@ -167,7 +167,7 @@ async def test_add_device_runs_a_follow_up_reload_for_a_concurrent_change(monkey
 
     await async_add_device(hass, entry, address=_ADDR, name="Bedroom")
 
-    assert hass.config_entries.async_reload.await_count == 2  # ours, then the follow-up
+    assert calls == ["e1", "e1"]  # ours, then the follow-up - both against the right entry
     assert schedule_ws.DATA_RELOAD_PENDING not in hass.data
 
 
