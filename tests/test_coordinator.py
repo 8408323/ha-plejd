@@ -1640,13 +1640,15 @@ async def test_cloud_poll_device_added_reloads(monkeypatch):
     config_entries.async_reload.assert_awaited_once_with("e1")
 
 
-async def test_cloud_poll_logs_when_reload_is_rejected(monkeypatch, caplog):
-    # If the reload itself fails (e.g. a platform refused to unload), entry.data is
-    # already updated to match the fresh site - so a later poll would never see a
-    # difference again and silently never retry. Must at least be logged, not silent.
+async def test_cloud_poll_reverts_and_logs_when_reload_is_rejected(monkeypatch, caplog):
+    # If the reload itself fails (e.g. a platform refused to unload), leaving entry.data
+    # already matching the fresh site would make every later poll's comparison find no
+    # difference and never retry, stranding the running coordinator (which never actually
+    # got the new data live) stale indefinitely. Revert instead, so the next poll retries.
     from plejd.cloud import PlejdCloudDevice
 
     new_dev = PlejdCloudDevice(**{**_DEV, "device_id": "d2", "name": "Matbord", "address": 9})
+    original_devices = list(_cloud_poll_entry().data[CONF_DEVICES])
 
     async def _login(session, email, password):
         return "TOKEN"
@@ -1669,6 +1671,7 @@ async def test_cloud_poll_logs_when_reload_is_rejected(monkeypatch, caplog):
     c = PlejdCoordinator(hass, entry)
     await c._async_poll_cloud(None)  # must not raise
     assert "reload after a site change failed" in caplog.text
+    assert entry.data[CONF_DEVICES] == original_devices
 
 
 async def test_cloud_poll_runs_a_follow_up_reload_for_a_concurrent_change(monkeypatch):

@@ -494,24 +494,37 @@ class PlejdCoordinator:
         _LOGGER.info("Plejd site changed (%s) — reloading to apply updates", ", ".join(changed))
         # Reload explicitly (rather than relying on the entry's update listener alone) so a
         # rejected reload (e.g. a platform refused to unload) is actually noticed - otherwise
-        # entry.data already matches the fresh site by the time the next poll runs, no
-        # further difference is ever detected, and the stale running coordinator would never
-        # get another chance to reload. Guarded the same way schedule_ws's own persist is, so
-        # the listener doesn't also fire a second, racing reload for this same change.
+        # entry.data already matches the fresh site and the running coordinator never
+        # reflects it. Guarded the same way schedule_ws's own persist is, so the listener
+        # doesn't also fire a second, racing reload for this same change.
+        old_data = dict(entry.data)
         self.hass.data[schedule_ws.DATA_MANUAL_RELOAD] = entry.entry_id
         try:
             self.hass.config_entries.async_update_entry(entry, data={**entry.data, **new_data})
-            if not await self.hass.config_entries.async_reload(entry.entry_id):
-                _LOGGER.warning(
-                    "Plejd cloud poll: reload after a site change failed; it will only be "
-                    "retried if the site changes again before the next poll"
-                )
+            reload_ok = await self.hass.config_entries.async_reload(entry.entry_id)
         finally:
             self.hass.data.pop(schedule_ws.DATA_MANUAL_RELOAD, None)
             self.hass.data.pop(schedule_ws.DATA_MANUAL_RELOAD_SEEN, None)
             if self.hass.data.get(schedule_ws.DATA_RELOAD_PENDING) == entry.entry_id:
                 self.hass.data.pop(schedule_ws.DATA_RELOAD_PENDING, None)
                 await self.hass.config_entries.async_reload(entry.entry_id)
+        if not reload_ok:
+            # Revert the cached snapshot rather than just logging: leaving entry.data
+            # already matching the fresh site would make every later poll's comparison
+            # find no difference and never retry, stranding the running coordinator (which
+            # never actually got the new data live) stale until an unrelated cloud change
+            # or an HA restart. Reverting means the next poll's diff naturally retries this.
+            _LOGGER.warning(
+                "Plejd cloud poll: reload after a site change failed; reverting the cached "
+                "snapshot so the next poll retries it"
+            )
+            self.hass.data[schedule_ws.DATA_MANUAL_RELOAD] = entry.entry_id
+            try:
+                self.hass.config_entries.async_update_entry(entry, data=old_data)
+            finally:
+                self.hass.data.pop(schedule_ws.DATA_MANUAL_RELOAD, None)
+                self.hass.data.pop(schedule_ws.DATA_MANUAL_RELOAD_SEEN, None)
+                self.hass.data.pop(schedule_ws.DATA_RELOAD_PENDING, None)
 
     def _schedule_firmware_checks(self) -> None:
         """Check firmware shortly after start, then daily; both are best-effort."""
