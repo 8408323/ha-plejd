@@ -24,16 +24,19 @@ from .const import (
     PLEJD_FN_CREATE_DEVICE,
     PLEJD_FN_CREATE_ROOM,
     PLEJD_FN_CREATE_SCENE,
+    PLEJD_FN_CREATE_TIME_EVENT,
     PLEJD_FN_FIRMWARE_BY_HW,
     PLEJD_FN_REMOVE_DEVICE,
     PLEJD_FN_REMOVE_ROOM,
     PLEJD_FN_REMOVE_SCENE,
+    PLEJD_FN_REMOVE_TIME_EVENT,
     PLEJD_FN_SET_INPUT,
     PLEJD_FN_SITE_BY_ID,
     PLEJD_FN_SITE_LIST,
     PLEJD_FN_UPDATE_DEVICE,
     PLEJD_FN_UPDATE_ROOM,
     PLEJD_FN_UPDATE_SCENE,
+    PLEJD_FN_UPDATE_TIME_EVENT,
     PLEJD_PARSE_APP_ID,
     PLEJD_PARSE_LOGIN,
     PLEJD_PARSE_URL,
@@ -440,15 +443,17 @@ async def async_remove_room(session: ClientSession, token: str, site_id: str, ro
 def _scene_step_to_payload(step: dict) -> dict[str, object]:
     """One scene step, in the app's own createScene/updateScene sceneSteps wire shape.
 
-    Every step passed to a create/update call is by definition being freshly pushed, so
-    dirty/dirtyRemoved are always True/False here - they track pending local edits in the
-    app's own offline cache, which this integration has no equivalent of.
+    A step passed to a create/update call is normally freshly pushed, so dirty/dirtyRemoved
+    default to True/False - they track pending local edits in the app's own offline cache,
+    which this integration has no equivalent of. A caller marking a step as no-longer-needed
+    (see async_remove_schedule's confirmed dirtyRemoved:true resend before removeTimeEvent_V3)
+    can override either via the step dict's own "dirty"/"dirty_removed" keys.
     """
     payload: dict[str, object] = {
         "deviceId": step["device_id"],
         "output": step["output"],
-        "dirty": True,
-        "dirtyRemoved": False,
+        "dirty": step.get("dirty", True),
+        "dirtyRemoved": step.get("dirty_removed", False),
         "state": step["state"],
         "value": step["value"],
     }
@@ -518,6 +523,180 @@ async def async_update_scene(
 async def async_remove_scene(session: ClientSession, token: str, site_id: str, scene_id: str) -> bool:
     """Remove a scene."""
     result = await _call_function(session, token, PLEJD_FN_REMOVE_SCENE, {"siteId": site_id, "sceneId": scene_id})
+    return result is True
+
+
+def _time_event_common_payload(
+    *,
+    scheduled_days: list[int],
+    fade_time: int,
+    activated: bool,
+    dirty_devices: list[str] | None,
+    dirty_removed_devices: list[str] | None,
+    dirty_remove: bool,
+    start_event: str,
+    start_offset: int,
+    end_event: str,
+    end_offset: int,
+    night_reduction: dict | None,
+) -> dict[str, object]:
+    """Fields shared by createTimeEvent_V3 and updateTimeEvent_V3.
+
+    version/pauseStart/pauseEnd vs nightReduction: two live captures each showed one
+    internally-consistent combination - version 2 + pauseStart/pauseEnd ("00:00" placeholders)
+    for a schedule with no night reduction, version 3 + a nightReduction object (no
+    pauseStart/pauseEnd) for one that has it. Both individual shapes are confirmed-real
+    successful calls; which field controls the switch is inferred, not independently
+    re-verified in a single session - see #121.
+    """
+    payload: dict[str, object] = {
+        "scheduledDays": scheduled_days,
+        "fadeTime": fade_time,
+        "activated": activated,
+        "dirtyDevices": dirty_devices or [],
+        "dirtyRemovedDevices": dirty_removed_devices or [],
+        "dirtyRemove": dirty_remove,
+        "mode": "astro",
+        "start": {"event": start_event, "offset": start_offset},
+        "end": {"event": end_event, "offset": end_offset},
+    }
+    if night_reduction is not None:
+        payload["version"] = 3
+        night_reduction_payload: dict[str, object] = {
+            "startTime": night_reduction["start_time"],
+            "endTime": night_reduction["end_time"],
+            "sceneId": night_reduction["scene_id"],
+        }
+        if (
+            night_reduction.get("weekend_start_time") is not None
+            and night_reduction.get("weekend_end_time") is not None
+        ):
+            night_reduction_payload["weekendDeviation"] = {
+                "startTime": night_reduction["weekend_start_time"],
+                "endTime": night_reduction["weekend_end_time"],
+            }
+        payload["nightReduction"] = night_reduction_payload
+    else:
+        payload["version"] = 2
+        payload["pauseStart"] = "00:00"
+        payload["pauseEnd"] = "00:00"
+    return payload
+
+
+async def async_create_time_event(
+    session: ClientSession,
+    token: str,
+    site_id: str,
+    scene_id: str,
+    *,
+    scheduled_days: list[int],
+    fade_time: int,
+    activated: bool,
+    start_event: str,
+    start_offset: int,
+    end_event: str,
+    end_offset: int,
+    dirty_devices: list[str] | None = None,
+    night_reduction: dict | None = None,
+) -> dict | None:
+    """Create a cloud schedule's astro trigger (createTimeEvent_V3).
+
+    Confirmed via a live capture to be a SEPARATE function from async_update_time_event -
+    timeEventId is always null here (the server assigns the real id, returned as eventId);
+    targetDevices is only present on create. Returns the cloud's {targetDevices, eventId}
+    result, or None if rejected or missing a usable eventId (callers key everything else -
+    updates, removal - off that id, so a malformed response must not be mistaken for success).
+    """
+    device_ids = dirty_devices or []
+    params: dict[str, object] = {
+        "siteId": site_id,
+        "timeEventId": None,
+        "sceneId": scene_id,
+        **_time_event_common_payload(
+            scheduled_days=scheduled_days,
+            fade_time=fade_time,
+            activated=activated,
+            dirty_devices=device_ids,
+            dirty_removed_devices=None,
+            dirty_remove=False,
+            start_event=start_event,
+            start_offset=start_offset,
+            end_event=end_event,
+            end_offset=end_offset,
+            night_reduction=night_reduction,
+        ),
+        "targetDevices": device_ids,
+    }
+    result = await _call_function(session, token, PLEJD_FN_CREATE_TIME_EVENT, params)
+    if not isinstance(result, dict) or not isinstance(result.get("eventId"), str) or not result["eventId"]:
+        return None
+    return result
+
+
+async def async_update_time_event(
+    session: ClientSession,
+    token: str,
+    site_id: str,
+    schedule_id: str,
+    scene_id: str,
+    *,
+    scheduled_days: list[int],
+    fade_time: int,
+    activated: bool,
+    start_event: str,
+    start_offset: int,
+    end_event: str,
+    end_offset: int,
+    dirty_devices: list[str] | None = None,
+    dirty_removed_devices: list[str] | None = None,
+    dirty_remove: bool = False,
+    night_reduction: dict | None = None,
+) -> dict | None:
+    """Update (or, with dirty_remove=True, mark for removal) a cloud schedule's astro trigger.
+
+    Confirmed to be a whole-state call: the caller must resend every field on each edit,
+    not just what changed. night_reduction, if given: {"scene_id", "start_time", "end_time",
+    "weekend_start_time"?, "weekend_end_time"?}. dirty_remove=True is the confirmed first
+    step of removing a schedule (see async_remove_schedule), sent before the dedicated
+    removeTimeEvent_V3 call. Returns the cloud's {targetDevices, eventId} result, or None
+    if rejected, missing an eventId, or the returned eventId doesn't match schedule_id -
+    a mismatched id would mean the cloud updated (or created) a different TimeEvent than
+    the one asked for, which callers must not treat as their own update having landed.
+    """
+    params: dict[str, object] = {
+        "siteId": site_id,
+        "timeEventId": schedule_id,
+        "sceneId": scene_id,
+        **_time_event_common_payload(
+            scheduled_days=scheduled_days,
+            fade_time=fade_time,
+            activated=activated,
+            dirty_devices=dirty_devices,
+            dirty_removed_devices=dirty_removed_devices,
+            dirty_remove=dirty_remove,
+            start_event=start_event,
+            start_offset=start_offset,
+            end_event=end_event,
+            end_offset=end_offset,
+            night_reduction=night_reduction,
+        ),
+    }
+    result = await _call_function(session, token, PLEJD_FN_UPDATE_TIME_EVENT, params)
+    if not isinstance(result, dict) or result.get("eventId") != schedule_id:
+        return None
+    return result
+
+
+async def async_remove_time_event(
+    session: ClientSession, token: str, site_id: str, schedule_id: str, *, device_ids: list[str]
+) -> bool:
+    """Remove a cloud schedule's TimeEvent (removeTimeEvent_V3), confirmed via a live capture."""
+    result = await _call_function(
+        session,
+        token,
+        PLEJD_FN_REMOVE_TIME_EVENT,
+        {"siteId": site_id, "timeEventId": schedule_id, "mode": "astro", "deviceIds": device_ids},
+    )
     return result is True
 
 
