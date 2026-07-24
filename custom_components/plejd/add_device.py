@@ -147,6 +147,11 @@ async def async_add_device(
             CONF_RESOURCE_SET_ID: fresh_site.resource_set_id,
             CONF_DEVICE_ADDRESSES: fresh_site.device_addresses,
         },
+        # Commissioning already happened and is non-idempotent by this point (the device is
+        # no longer advertising as unprovisioned) - raising on a reload failure here would
+        # report a successfully-added device as a failed add, with no way to retry through
+        # this same path. Only the reload itself needs a manual retry.
+        raise_on_reload_failure=False,
         error_context="adding a device",
     )
 

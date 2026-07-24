@@ -139,6 +139,28 @@ async def test_add_device_commissions_and_reloads(monkeypatch):
     assert not schedule_ws.async_get_reload_lock(hass, entry.entry_id).locked()
 
 
+async def test_add_device_does_not_raise_when_only_the_reload_fails(monkeypatch, caplog):
+    # Commissioning already happened (non-idempotent - the device is no longer advertising
+    # as unprovisioned) by the time the reload is attempted - raising here would report a
+    # successfully-added device as a failed add, with no way to retry through this path.
+    hass = _hass(ble_devices={_ADDR: _device()})
+    entry = _entry()
+    monkeypatch.setattr("plejd.add_device.async_login", AsyncMock(return_value="tok"))
+    monkeypatch.setattr("plejd.add_device.async_get_site", AsyncMock(return_value=_site()))
+
+    async def _fake_commission(
+        http_session, token, site, ble_device, name, hw="0", fw=0, room_id=None, room_title=None, room_category=None
+    ):
+        return NewDeviceAddresses(device_address=5, output_addresses={0: 50})
+
+    monkeypatch.setattr("plejd.add_device.async_commission_device", _fake_commission)
+    hass.config_entries.async_reload = AsyncMock(return_value=False)
+
+    await async_add_device(hass, entry, address=_ADDR, name="Bedroom")
+
+    assert "entry failed to reload after adding a device" in caplog.text
+
+
 async def test_add_device_does_not_double_reload_for_its_own_update(monkeypatch):
     # The real update listener (not an injected flag) must observe the reload lock as
     # held and defer to add_device's own reload - this exercises the actual mechanism
