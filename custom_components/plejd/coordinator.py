@@ -29,7 +29,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import async_call_later, async_track_time_interval
 from homeassistant.util import dt as dt_util
 
-from . import protocol
+from . import protocol, schedule_ws
 from .cloud import (
     PlejdAuthError,
     PlejdCloudDevice,
@@ -424,7 +424,14 @@ class PlejdCoordinator:
             # and a setup retry would otherwise keep reusing the same stale entry data
             # forever - make one best-effort attempt to refresh it before giving up this
             # attempt, so the next retry (which re-reads entry.data fresh) has a shot at it.
-            await self._async_poll_cloud(None)
+            # An unexpected failure from that attempt (e.g. a malformed cloud response) must
+            # not replace this ConfigEntryNotReady - HA's setup-retry path is keyed on this
+            # exact exception type, and the cached site may still work once BLE is back in
+            # range even if the repair attempt itself failed.
+            try:
+                await self._async_poll_cloud(None)
+            except Exception:  # noqa: BLE001 - best-effort; the original ConfigEntryNotReady below still applies
+                _LOGGER.warning("Plejd: cloud self-heal attempt during setup failed", exc_info=True)
             raise
         self._cloud_poll_unsub = async_track_time_interval(self.hass, self._async_poll_cloud, CLOUD_POLL_INTERVAL)
         self._schedule_firmware_checks()
@@ -458,6 +465,13 @@ class PlejdCoordinator:
             # timer is already unregistered, but this already-running call must not act on
             # a possibly-removed entry (start reauth, persist a stale snapshot) after that.
             return
+        # NOTE(8408323): if a move_device_to_room move is still pending (cloud not yet
+        # converged), this snapshot's device room_id/room membership can overwrite that
+        # move's local correction before it converges - the same class of "we can only
+        # protect what we ourselves touch" tradeoff manage_device_room.py's own module
+        # docstring already documents and accepts for every other feature's refresh cycle,
+        # now also triggered by this poll. Not solved here for the same reason: doing so
+        # would need pending-move awareness plumbed through this poll too.
         new_data = {
             CONF_CRYPTO_KEY: site.crypto_key.hex(),
             CONF_DEVICES: [asdict(d) for d in site.devices],
@@ -478,10 +492,26 @@ class PlejdCoordinator:
         if not changed:
             return
         _LOGGER.info("Plejd site changed (%s) — reloading to apply updates", ", ".join(changed))
-        # async_update_entry alone triggers a reload: __init__.py registers
-        # entry.add_update_listener(_async_reload_entry), which fires on this update.
-        # Calling async_reload here too would start a second, redundant reload.
-        self.hass.config_entries.async_update_entry(entry, data={**entry.data, **new_data})
+        # Reload explicitly (rather than relying on the entry's update listener alone) so a
+        # rejected reload (e.g. a platform refused to unload) is actually noticed - otherwise
+        # entry.data already matches the fresh site by the time the next poll runs, no
+        # further difference is ever detected, and the stale running coordinator would never
+        # get another chance to reload. Guarded the same way schedule_ws's own persist is, so
+        # the listener doesn't also fire a second, racing reload for this same change.
+        self.hass.data[schedule_ws.DATA_MANUAL_RELOAD] = entry.entry_id
+        try:
+            self.hass.config_entries.async_update_entry(entry, data={**entry.data, **new_data})
+            if not await self.hass.config_entries.async_reload(entry.entry_id):
+                _LOGGER.warning(
+                    "Plejd cloud poll: reload after a site change failed; it will only be "
+                    "retried if the site changes again before the next poll"
+                )
+        finally:
+            self.hass.data.pop(schedule_ws.DATA_MANUAL_RELOAD, None)
+            self.hass.data.pop(schedule_ws.DATA_MANUAL_RELOAD_SEEN, None)
+            if self.hass.data.get(schedule_ws.DATA_RELOAD_PENDING) == entry.entry_id:
+                self.hass.data.pop(schedule_ws.DATA_RELOAD_PENDING, None)
+                await self.hass.config_entries.async_reload(entry.entry_id)
 
     def _schedule_firmware_checks(self) -> None:
         """Check firmware shortly after start, then daily; both are best-effort."""

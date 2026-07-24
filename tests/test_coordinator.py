@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import types
+from unittest.mock import AsyncMock
 
 import pytest
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
@@ -79,6 +80,7 @@ def _info(address, rssi=-50):
 
 def _hass(infos=(), ble=None):
     return types.SimpleNamespace(
+        data={},
         service_infos=list(infos),
         ble_devices=ble or {},
         config_entries=types.SimpleNamespace(
@@ -1627,9 +1629,7 @@ async def test_cloud_poll_device_added_reloads(monkeypatch):
     config_entries = types.SimpleNamespace(
         async_get_entry=lambda eid: entry,
         async_update_entry=lambda e, data: updated.update(data),
-        # No async_reload here: the entry's own update-listener (registered in
-        # __init__.py) handles reloading in response to async_update_entry - an
-        # explicit reload from _async_poll_cloud itself would be a second, redundant one.
+        async_reload=AsyncMock(return_value=True),
     )
     hass = _hass()
     hass.session = object()
@@ -1637,6 +1637,79 @@ async def test_cloud_poll_device_added_reloads(monkeypatch):
     c = PlejdCoordinator(hass, entry)
     await c._async_poll_cloud(None)
     assert len(updated[CONF_DEVICES]) == 2
+    config_entries.async_reload.assert_awaited_once_with("e1")
+
+
+async def test_cloud_poll_logs_when_reload_is_rejected(monkeypatch, caplog):
+    # If the reload itself fails (e.g. a platform refused to unload), entry.data is
+    # already updated to match the fresh site - so a later poll would never see a
+    # difference again and silently never retry. Must at least be logged, not silent.
+    from plejd.cloud import PlejdCloudDevice
+
+    new_dev = PlejdCloudDevice(**{**_DEV, "device_id": "d2", "name": "Matbord", "address": 9})
+
+    async def _login(session, email, password):
+        return "TOKEN"
+
+    async def _get_site(session, token, site_id):
+        return _fake_site(devices=[PlejdCloudDevice(**_DEV), new_dev])
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _login)
+    monkeypatch.setattr(coordinator_mod, "async_get_site", _get_site)
+
+    entry = _cloud_poll_entry()
+    config_entries = types.SimpleNamespace(
+        async_get_entry=lambda eid: entry,
+        async_update_entry=lambda e, data: setattr(e, "data", data),
+        async_reload=AsyncMock(return_value=False),
+    )
+    hass = _hass()
+    hass.session = object()
+    hass.config_entries = config_entries
+    c = PlejdCoordinator(hass, entry)
+    await c._async_poll_cloud(None)  # must not raise
+    assert "reload after a site change failed" in caplog.text
+
+
+async def test_cloud_poll_runs_a_follow_up_reload_for_a_concurrent_change(monkeypatch):
+    # _async_reload_entry marks DATA_RELOAD_PENDING when it suppressed its own reload for
+    # a concurrent, unrelated change while this poll's reload was in flight - that change
+    # must still get a reload once ours is done, not be dropped.
+    from plejd import schedule_ws
+    from plejd.cloud import PlejdCloudDevice
+
+    new_dev = PlejdCloudDevice(**{**_DEV, "device_id": "d2", "name": "Matbord", "address": 9})
+
+    async def _login(session, email, password):
+        return "TOKEN"
+
+    async def _get_site(session, token, site_id):
+        return _fake_site(devices=[PlejdCloudDevice(**_DEV), new_dev])
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _login)
+    monkeypatch.setattr(coordinator_mod, "async_get_site", _get_site)
+
+    entry = _cloud_poll_entry()
+    hass = _hass()
+    hass.session = object()
+    calls: list[str] = []
+
+    async def _reload(entry_id):
+        calls.append(entry_id)
+        if len(calls) == 1:  # only the first reload race-loses to the concurrent change
+            hass.data[schedule_ws.DATA_RELOAD_PENDING] = entry_id
+        return True
+
+    hass.config_entries = types.SimpleNamespace(
+        async_get_entry=lambda eid: entry,
+        async_update_entry=lambda e, data: setattr(e, "data", data),
+        async_reload=AsyncMock(side_effect=_reload),
+    )
+    c = PlejdCoordinator(hass, entry)
+    await c._async_poll_cloud(None)
+
+    assert calls == ["e1", "e1"]  # ours, then the follow-up
+    assert schedule_ws.DATA_RELOAD_PENDING not in hass.data
 
 
 async def test_cloud_poll_seeds_installation_id_for_new_gateway(monkeypatch):
@@ -1654,6 +1727,7 @@ async def test_cloud_poll_seeds_installation_id_for_new_gateway(monkeypatch):
     config_entries = types.SimpleNamespace(
         async_get_entry=lambda eid: entry,
         async_update_entry=lambda e, data: updated.update(data),
+        async_reload=AsyncMock(return_value=True),
     )
     hass = _hass()
     hass.session = object()
@@ -1681,6 +1755,7 @@ async def test_cloud_poll_persists_device_addresses(monkeypatch):
     config_entries = types.SimpleNamespace(
         async_get_entry=lambda eid: entry,
         async_update_entry=lambda e, data: updated.update(data),
+        async_reload=AsyncMock(return_value=True),
     )
     hass = _hass()
     hass.session = object()
@@ -1795,12 +1870,34 @@ async def test_start_attempts_cloud_self_heal_before_raising_not_ready(monkeypat
     hass.config_entries = types.SimpleNamespace(
         async_get_entry=lambda eid: entry,
         async_update_entry=lambda e, data: updated.update(data),
+        async_reload=AsyncMock(return_value=True),
     )
     c = PlejdCoordinator(hass, entry)
     with pytest.raises(ConfigEntryNotReady):
         await c.async_start()
     # The next setup retry re-reads entry.data fresh, so this is the only chance to fix it.
     assert updated[CONF_GATEWAYS] == ["gw-new"]
+
+
+async def test_start_preserves_the_original_not_ready_when_self_heal_raises(monkeypatch, caplog):
+    # An unexpected failure from the best-effort self-heal attempt (e.g. a malformed cloud
+    # response) must not replace the original ConfigEntryNotReady - HA's setup-retry path
+    # is keyed on that exact exception type.
+    from homeassistant.exceptions import ConfigEntryNotReady
+
+    async def _login(session, email, password):
+        raise ValueError("malformed response")
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _login)
+
+    entry = _cloud_poll_entry()
+    hass = _hass()  # no service_infos/ble_devices -> BLE connect finds nothing
+    hass.session = object()
+    hass.config_entries = types.SimpleNamespace(async_get_entry=lambda eid: entry)
+    c = PlejdCoordinator(hass, entry)
+    with pytest.raises(ConfigEntryNotReady, match="no Plejd device"):
+        await c.async_start()
+    assert "cloud self-heal attempt during setup failed" in caplog.text
 
 
 async def test_cloud_poll_persists_rooms(monkeypatch):
@@ -1826,6 +1923,7 @@ async def test_cloud_poll_persists_rooms(monkeypatch):
     config_entries = types.SimpleNamespace(
         async_get_entry=lambda eid: entry,
         async_update_entry=lambda e, data: updated.update(data),
+        async_reload=AsyncMock(return_value=True),
     )
     hass = _hass()
     hass.session = object()
