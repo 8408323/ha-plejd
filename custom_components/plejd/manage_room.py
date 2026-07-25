@@ -7,8 +7,6 @@ Shared by the update_room and remove_room services.
 
 from __future__ import annotations
 
-from dataclasses import asdict
-
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
 from homeassistant.core import HomeAssistant
@@ -20,14 +18,6 @@ from .cloud import PlejdAuthError, PlejdCloudError, async_get_site, async_login
 from .cloud import async_remove_room as async_cloud_remove_room
 from .cloud import async_update_room as async_cloud_update_room
 from .const import (
-    CONF_DEVICE_ADDRESSES,
-    CONF_DEVICES,
-    CONF_GATEWAYS,
-    CONF_INPUTS,
-    CONF_MOTION,
-    CONF_RESOURCE_SET_ID,
-    CONF_ROOMS,
-    CONF_SCENES,
     CONF_SITE_ID,
     ROOM_CATEGORIES,
 )
@@ -61,17 +51,7 @@ async def _async_refresh_and_reload(
     await schedule_ws.async_reload_entry_with_lock(
         hass,
         entry,
-        {
-            **entry.data,
-            CONF_DEVICES: [asdict(d) for d in fresh_site.devices],
-            CONF_INPUTS: [asdict(i) for i in fresh_site.inputs],
-            CONF_MOTION: [asdict(m) for m in fresh_site.motion],
-            CONF_SCENES: [asdict(s) for s in fresh_site.scenes],
-            CONF_ROOMS: [asdict(r) for r in fresh_site.rooms],
-            CONF_GATEWAYS: fresh_site.gateways,
-            CONF_RESOURCE_SET_ID: fresh_site.resource_set_id,
-            CONF_DEVICE_ADDRESSES: fresh_site.device_addresses,
-        },
+        lambda e: schedule_ws.site_data_overlay(e, fresh_site),
         # A remove's cloud mutation has already happened and isn't safely retryable by the
         # time this runs - raising on a reload failure here would make the whole service
         # call look failed, and retrying just gets "not found". Only the reload itself

@@ -190,5 +190,11 @@
       "add_device_failed": "Failed to add the device: {error}",
       "no_bluetooth": "Bluetooth is not available on this Home Assistant instance. Add a local Bluetooth adapter or an ESPHome Bluetooth proxy (in active mode), then try again."
     }
+  },
+  "issues": {
+    "malformed_cloud_site": {
+      "title": "Plejd cloud is returning unusable site data",
+      "description": "Home Assistant has skipped the daily Plejd site sync {count} times in a row because the cloud returned data it could not trust (affected: {collections}).\n\nYour lights and devices keep working from the last good copy, and nothing has been removed - the sync is skipped deliberately rather than applying incomplete data. New devices, rooms or scenes added in the Plejd app will not appear until this clears.\n\nThis usually resolves itself. If it persists, reloading the integration or using Reconfigure to re-fetch the site will retry immediately."
+    }
   }
 }

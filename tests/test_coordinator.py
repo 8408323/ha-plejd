@@ -2652,6 +2652,88 @@ async def test_start_attempts_cloud_self_heal_before_raising_not_ready(monkeypat
     hass.config_entries.async_reload.assert_not_awaited()
 
 
+async def test_start_self_heal_is_throttled_across_setup_retries(monkeypatch):
+    # HA retries a failed setup on its own schedule, and for a BLE-only site simply out of
+    # range that can repeat indefinitely. Each retry builds a NEW coordinator, so the throttle
+    # state has to live in hass.data - otherwise every attempt means another cloud login.
+    from homeassistant.exceptions import ConfigEntryNotReady
+
+    # Count getSiteById, not logins: the gateway-token path logs in too, so login count is
+    # not a clean proxy for "the self-heal reached the cloud".
+    fetches = 0
+
+    async def _login(session, email, password):
+        return "TOKEN"
+
+    async def _get_site(session, token, site_id):
+        nonlocal fetches
+        fetches += 1
+        return _fake_site(gateways=["gw-new"], resource_set_id="rs-new")
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _login)
+    monkeypatch.setattr(coordinator_mod, "async_get_site", _get_site)
+
+    entry = _cloud_poll_entry()
+    hass = _hass()  # nothing in range -> connect fails -> self-heal path
+    hass.session = object()
+    hass.config_entries = types.SimpleNamespace(
+        async_get_entry=lambda eid: entry,
+        async_update_entry=lambda e, data, options=None: setattr(e, "data", data),
+        async_reload=AsyncMock(return_value=True),
+    )
+
+    for _ in range(3):  # three setup retries, each with its own fresh coordinator
+        with pytest.raises(ConfigEntryNotReady):
+            await PlejdCoordinator(hass, entry).async_start()
+
+    assert fetches == 1  # only the first attempt reached the cloud
+
+
+async def test_start_self_heal_retries_once_the_cooldown_has_elapsed(monkeypatch):
+    # The throttle must not be permanent: a genuine repair still has to get through, just at
+    # a sane cadence rather than on every rapid setup retry.
+    from homeassistant.exceptions import ConfigEntryNotReady
+
+    fetches = 0
+
+    async def _login(session, email, password):
+        return "TOKEN"
+
+    async def _get_site(session, token, site_id):
+        nonlocal fetches
+        fetches += 1
+        return _fake_site(gateways=["gw-new"], resource_set_id="rs-new")
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _login)
+    monkeypatch.setattr(coordinator_mod, "async_get_site", _get_site)
+
+    from datetime import timedelta
+
+    from homeassistant.util import dt as dt_util
+
+    clock = dt_util.now()
+    monkeypatch.setattr(coordinator_mod.dt_util, "now", lambda: clock)
+
+    entry = _cloud_poll_entry()
+    hass = _hass()
+    hass.session = object()
+    hass.config_entries = types.SimpleNamespace(
+        async_get_entry=lambda eid: entry,
+        async_update_entry=lambda e, data, options=None: setattr(e, "data", data),
+        async_reload=AsyncMock(return_value=True),
+    )
+
+    with pytest.raises(ConfigEntryNotReady):
+        await PlejdCoordinator(hass, entry).async_start()
+    assert fetches == 1
+
+    clock += coordinator_mod.SELF_HEAL_COOLDOWN + timedelta(seconds=1)
+    monkeypatch.setattr(coordinator_mod.dt_util, "now", lambda: clock)
+    with pytest.raises(ConfigEntryNotReady):
+        await PlejdCoordinator(hass, entry).async_start()
+    assert fetches == 2  # allowed through again
+
+
 async def test_start_preserves_the_original_not_ready_when_self_heal_raises(monkeypatch, caplog):
     # An unexpected failure from the best-effort self-heal attempt (e.g. a malformed cloud
     # response) must not replace the original ConfigEntryNotReady - HA's setup-retry path
@@ -3350,3 +3432,71 @@ async def test_poll_faults_without_credentials_or_cache_is_noop(monkeypatch):
     monkeypatch.setattr(c, "_write_vector", _write_vector)
     await c._async_poll_faults(None)
     assert attempted == []
+
+
+async def test_cloud_poll_raises_a_repair_issue_after_repeated_malformed_responses(monkeypatch):
+    # Skipping a malformed snapshot is right but completely silent: a site whose daily sync
+    # has been skipped for days looks identical to one that simply has not changed.
+    async def _login(session, email, password):
+        return "TOKEN"
+
+    async def _get_site(session, token, site_id):
+        return _fake_site(malformed=["devices"])
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _login)
+    monkeypatch.setattr(coordinator_mod, "async_get_site", _get_site)
+
+    entry = _cloud_poll_entry()
+    hass = _hass()
+    hass.session = object()
+    hass.config_entries = types.SimpleNamespace(
+        async_get_entry=lambda eid: entry,
+        async_update_entry=lambda e, data, options=None: pytest.fail("must not persist a malformed snapshot"),
+        async_reload=AsyncMock(),
+    )
+    c = PlejdCoordinator(hass, entry)
+
+    await c._async_poll_cloud(None)
+    # one bad response is transient and self-healing - don't nag about it
+    assert not getattr(hass, "created_issues", {})
+
+    await c._async_poll_cloud(None)
+    issue = hass.created_issues["malformed_cloud_site_e1"]
+    assert issue["severity"] == "warning"
+    assert issue["translation_key"] == "malformed_cloud_site"
+    assert issue["translation_placeholders"]["collections"] == "devices"
+    assert issue["translation_placeholders"]["count"] == "2"
+
+
+async def test_cloud_poll_clears_the_repair_issue_once_the_cloud_recovers(monkeypatch):
+    from plejd.cloud import PlejdCloudDevice
+
+    responses = [_fake_site(malformed=["devices"]), _fake_site(malformed=["devices"]), _fake_site()]
+
+    async def _login(session, email, password):
+        return "TOKEN"
+
+    async def _get_site(session, token, site_id):
+        return responses.pop(0)
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _login)
+    monkeypatch.setattr(coordinator_mod, "async_get_site", _get_site)
+    assert PlejdCloudDevice  # the recovered response parses to the cached device, so no change
+
+    entry = _cloud_poll_entry()
+    hass = _hass()
+    hass.session = object()
+    hass.config_entries = types.SimpleNamespace(
+        async_get_entry=lambda eid: entry,
+        async_update_entry=lambda e, data, options=None: setattr(e, "data", data),
+        async_reload=AsyncMock(return_value=True),
+    )
+    c = PlejdCoordinator(hass, entry)
+
+    await c._async_poll_cloud(None)
+    await c._async_poll_cloud(None)
+    assert "malformed_cloud_site_e1" in hass.created_issues
+
+    await c._async_poll_cloud(None)  # a good response
+    assert "malformed_cloud_site_e1" not in hass.created_issues
+    assert "malformed_cloud_site_e1" in hass.deleted_issues

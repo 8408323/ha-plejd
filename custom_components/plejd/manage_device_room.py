@@ -56,15 +56,9 @@ from . import schedule_ws
 from .cloud import PlejdAuthError, PlejdCloudError, PlejdCloudRoom, async_get_site, async_login
 from .const import (
     CATEGORY_LIGHT,
-    CONF_DEVICE_ADDRESSES,
     CONF_DEVICES,
-    CONF_GATEWAYS,
-    CONF_INPUTS,
-    CONF_MOTION,
     CONF_PENDING_ROOM_MOVES,
-    CONF_RESOURCE_SET_ID,
     CONF_ROOMS,
-    CONF_SCENES,
     CONF_SITE_ID,
     DOMAIN,
 )
@@ -359,20 +353,17 @@ async def _async_refresh_and_reload(
     await schedule_ws.async_reload_entry_with_lock(
         hass,
         entry,
-        {
-            **entry.data,
-            CONF_DEVICES: device_dicts,
-            CONF_INPUTS: [asdict(i) for i in fresh_site.inputs],
-            CONF_MOTION: [asdict(m) for m in fresh_site.motion],
-            CONF_SCENES: [asdict(s) for s in fresh_site.scenes],
-            CONF_ROOMS: [asdict(r) for r in rooms],
-            CONF_GATEWAYS: fresh_site.gateways,
-            CONF_RESOURCE_SET_ID: fresh_site.resource_set_id,
-            CONF_DEVICE_ADDRESSES: fresh_site.device_addresses,
-            # Mirrors the in-memory pending cache so a restart doesn't lose an
-            # in-flight (not-yet-converged) move - see _pending_moves().
-            CONF_PENDING_ROOM_MOVES: dict(pending),
-        },
+        lambda e: schedule_ws.site_data_overlay(
+            e,
+            fresh_site,
+            {
+                CONF_DEVICES: device_dicts,
+                CONF_ROOMS: [asdict(r) for r in rooms],
+                # Mirrors the in-memory pending cache so a restart doesn't lose an
+                # in-flight (not-yet-converged) move - see _pending_moves().
+                CONF_PENDING_ROOM_MOVES: dict(pending),
+            },
+        ),
         error_context="moving a device to a room",
     )
 

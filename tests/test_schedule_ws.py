@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import types
 from unittest.mock import AsyncMock
 
@@ -311,7 +312,9 @@ async def test_reload_entry_with_lock_raises_when_reload_raises():
     hass, entry = _lock_test_hass_entry()
     hass.config_entries.async_reload = AsyncMock(side_effect=RuntimeError("boom"))
     with pytest.raises(HomeAssistantError, match="failed to reload after a test update"):
-        await schedule_ws.async_reload_entry_with_lock(hass, entry, {"x": 1}, error_context="a test update")
+        await schedule_ws.async_reload_entry_with_lock(
+            hass, entry, lambda e: {**e.data, "x": 1}, error_context="a test update"
+        )
 
 
 async def test_reload_entry_with_lock_logs_when_the_follow_up_reload_raises(caplog):
@@ -326,9 +329,13 @@ async def test_reload_entry_with_lock_logs_when_the_follow_up_reload_raises(capl
         return True
 
     hass.config_entries.async_reload = AsyncMock(side_effect=_reload)
-    await schedule_ws.async_reload_entry_with_lock(hass, entry, {"x": 1}, error_context="a test update")
+    await schedule_ws.async_reload_entry_with_lock(
+        hass, entry, lambda e: {**e.data, "x": 1}, error_context="a test update"
+    )
     assert calls == ["e1", "e1"]
-    assert "follow-up reload for a concurrent change failed" in caplog.text
+    assert "follow-up reload for a concurrent change" in caplog.text
+    # a rejected/raised follow-up must stay pending rather than be dropped
+    assert hass.data[DATA_RELOAD_PENDING] == "e1"
 
 
 async def test_add_logs_and_continues_when_follow_up_reload_fails(caplog):
@@ -353,7 +360,9 @@ async def test_add_logs_and_continues_when_follow_up_reload_fails(caplog):
     await schedule_ws.ws_add(hass, conn, {"id": 1, "name": "X", "days": [0], "time": "06:00", "scene": 3, "fade": 0})
     assert conn.result[1]["schedules"][0]["name"] == "X"
     assert hass.config_entries.calls == 2
-    assert DATA_RELOAD_PENDING not in hass.data
+    # A failed follow-up stays pending rather than being dropped: it belongs to a concurrent
+    # change, so losing it would silently discard someone else's edit.
+    assert hass.data[DATA_RELOAD_PENDING] == "e1"
     assert "follow-up reload" in caplog.text
 
 
@@ -492,3 +501,55 @@ def test_async_register_registers_all_commands():
     assert schedule_ws.ws_list in registered
     assert schedule_ws.ws_add in registered
     assert schedule_ws.ws_delete in registered
+
+
+# ── #125: payloads are built under the lock, not from a pre-lock snapshot ─────
+
+
+async def test_add_does_not_overwrite_a_schedule_added_while_it_waited_for_the_lock():
+    # The headline #125 race: two adds arrive together. The second waits on the reload lock,
+    # and if it built its payload before waiting it would write a list that never contained
+    # the first one's schedule - AND hand out the same free slot and the same next id.
+    entry = _entry(options={})
+    hass = _hass(entry)
+    conn = _Conn()
+
+    lock = schedule_ws.async_get_reload_lock(hass, entry.entry_id)
+    await lock.acquire()
+    add = asyncio.ensure_future(
+        schedule_ws.ws_add(hass, conn, {"id": 1, "name": "second", "days": [0], "time": "07:00", "scene": 3, "fade": 0})
+    )
+    await asyncio.sleep(0)  # let it reach the lock and block there
+    # the "first" add completes while we hold the lock
+    entry.options = {
+        **entry.options,
+        "schedules": [{"id": 0, "slot": 0, "name": "first", "days": [1], "time": "06:00", "scene": 3, "fade": 0}],
+        "next_schedule_id": 1,
+    }
+    lock.release()
+    await asyncio.gather(add)
+
+    saved = entry.options["schedules"]
+    assert [s["name"] for s in saved] == ["first", "second"]  # neither lost
+    assert [s["slot"] for s in saved] == [0, 1]  # no slot reuse
+    assert [s["id"] for s in saved] == [0, 1]  # no id reuse
+    assert entry.options["next_schedule_id"] == 2
+
+
+async def test_delete_does_not_resurrect_a_schedule_added_while_it_waited_for_the_lock():
+    # Mirror case: a delete that built its `kept` list pre-lock would write back a list
+    # missing the schedule another edit added in the meantime.
+    keep_me = {"id": 5, "slot": 2, "name": "added meanwhile", "days": [0], "time": "09:00", "scene": 3, "fade": 0}
+    entry = _entry(options={"schedules": [_SCHEDULE]})
+    hass = _hass(entry)
+    conn = _Conn()
+
+    lock = schedule_ws.async_get_reload_lock(hass, entry.entry_id)
+    await lock.acquire()
+    delete = asyncio.ensure_future(schedule_ws.ws_delete(hass, conn, {"id": 1, "schedule_id": _SCHEDULE["id"]}))
+    await asyncio.sleep(0)
+    entry.options = {**entry.options, "schedules": [_SCHEDULE, keep_me]}
+    lock.release()
+    await asyncio.gather(delete)
+
+    assert entry.options["schedules"] == [keep_me]  # target removed, the new one survives

@@ -14,7 +14,7 @@ import asyncio
 import logging
 from collections.abc import Callable, Coroutine
 from dataclasses import asdict, dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
@@ -24,7 +24,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady, HomeAssistantError
-from homeassistant.helpers import device_registry
+from homeassistant.helpers import device_registry, issue_registry
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import async_call_later, async_track_time_interval
 from homeassistant.util import dt as dt_util
@@ -96,6 +96,19 @@ RECONNECT_INITIAL_DELAY = 1.0
 RECONNECT_MAX_DELAY = 60.0
 NOTIFY_POLL_INTERVAL = timedelta(minutes=10)  # device-health (NotifyEvents) poll cadence
 CLOUD_POLL_INTERVAL = timedelta(hours=24)  # how often to check for site changes (added/renamed devices)
+# Minimum gap between setup-time self-heal attempts (see async_start). Much shorter than
+# CLOUD_POLL_INTERVAL because a real repair should take effect on the next setup retry rather
+# than a day later, but long enough that HA's rapid setup-retry backoff cannot turn a
+# persistently out-of-range BLE mesh into a stream of cloud logins.
+SELF_HEAL_COOLDOWN = timedelta(minutes=15)
+# Last self-heal attempt, keyed by entry_id. Lives in hass.data, not on the coordinator:
+# every setup retry constructs a brand new coordinator, so instance state would never
+# survive to throttle anything.
+DATA_LAST_SELF_HEAL = f"{DOMAIN}_last_self_heal"
+# Consecutive malformed-response skips per entry, and how many it takes to tell the user.
+# One bad response is transient; several in a row means the sync is effectively dead.
+DATA_MALFORMED_POLLS = f"{DOMAIN}_malformed_polls"
+MALFORMED_POLLS_BEFORE_REPAIR = 2
 FIRMWARE_REFRESH_INTERVAL = timedelta(days=1)
 
 
@@ -432,13 +445,64 @@ class PlejdCoordinator:
             # THIS entry - reloading it reentrantly here could hang or be rejected instead of
             # taking effect. Persist the repaired snapshot only; the re-raise below triggers
             # HA's own setup retry, which re-reads entry.data fresh on its next attempt.
-            try:
-                await self._async_poll_cloud(None, reload=False)
-            except Exception:  # noqa: BLE001 - best-effort; the original ConfigEntryNotReady below still applies
-                _LOGGER.warning("Plejd: cloud self-heal attempt during setup failed", exc_info=True)
+            if self._should_attempt_self_heal():
+                try:
+                    await self._async_poll_cloud(None, reload=False)
+                except Exception:  # noqa: BLE001 - best-effort; the original ConfigEntryNotReady below still applies
+                    _LOGGER.warning("Plejd: cloud self-heal attempt during setup failed", exc_info=True)
             raise
         self._cloud_poll_unsub = async_track_time_interval(self.hass, self._async_poll_cloud, CLOUD_POLL_INTERVAL)
         self._schedule_firmware_checks()
+
+    def _note_malformed_poll(self, collections: list[str]) -> None:
+        """Raise a repair issue once the cloud has served unusable data repeatedly.
+
+        Skipping a malformed snapshot is the right call, but it is also completely silent:
+        without this, a site whose daily sync has been skipped for days looks identical to one
+        that simply has not changed. Only flag it after more than one consecutive skip, since a
+        single bad response is transient and self-healing.
+        """
+        counts: dict[str, int] = self.hass.data.setdefault(DATA_MALFORMED_POLLS, {})
+        counts[self._entry_id] = counts.get(self._entry_id, 0) + 1
+        if counts[self._entry_id] < MALFORMED_POLLS_BEFORE_REPAIR:
+            return
+        issue_registry.async_create_issue(
+            self.hass,
+            DOMAIN,
+            f"malformed_cloud_site_{self._entry_id}",
+            is_fixable=False,
+            severity=issue_registry.IssueSeverity.WARNING,
+            translation_key="malformed_cloud_site",
+            translation_placeholders={
+                "collections": ", ".join(collections),
+                "count": str(counts[self._entry_id]),
+            },
+        )
+
+    def _clear_malformed_polls(self) -> None:
+        """Drop the repair issue once the cloud serves a usable snapshot again."""
+        counts: dict[str, int] = self.hass.data.get(DATA_MALFORMED_POLLS, {})
+        if counts.pop(self._entry_id, 0) >= MALFORMED_POLLS_BEFORE_REPAIR:
+            issue_registry.async_delete_issue(self.hass, DOMAIN, f"malformed_cloud_site_{self._entry_id}")
+
+    def _should_attempt_self_heal(self) -> bool:
+        """True at most once per SELF_HEAL_COOLDOWN, recording the attempt.
+
+        HA retries a failed setup on its own schedule, and for a BLE-only site whose mesh is
+        simply out of range that retry can repeat indefinitely - without this, every attempt
+        would mean a fresh login + getSiteById against the Plejd cloud.
+        """
+        last: datetime | None = self.hass.data.get(DATA_LAST_SELF_HEAL, {}).get(self._entry_id)
+        now = dt_util.now()
+        if last is not None and now - last < SELF_HEAL_COOLDOWN:
+            _LOGGER.debug(
+                "Plejd: skipping the setup self-heal, last attempt was %s ago (cooldown %s)",
+                now - last,
+                SELF_HEAL_COOLDOWN,
+            )
+            return False
+        self.hass.data.setdefault(DATA_LAST_SELF_HEAL, {})[self._entry_id] = now
+        return True
 
     async def _async_poll_cloud(self, _now: object, *, reload: bool = True) -> None:
         """Detect site changes and reload the integration if anything differs.
@@ -499,7 +563,9 @@ class PlejdCoordinator:
                 "Plejd cloud poll: site response is malformed (%s) - skipping this poll",
                 ", ".join(sorted(site.malformed)),
             )
+            self._note_malformed_poll(sorted(site.malformed))
             return
+        self._clear_malformed_polls()
         # A response that still lists the gateway but transiently drops its resourceSetId
         # (and the resourceSets fallback) must not be read as "the gateway is gone": keeping
         # the cached id lets the gateway transport carry on, whereas overwriting it with None
