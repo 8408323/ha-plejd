@@ -1881,7 +1881,7 @@ async def test_cloud_poll_merges_options_read_after_acquiring_the_lock(monkeypat
     await asyncio.sleep(0)  # let the poll reach the lock and block there
     entry.options = {**entry.options, "schedules": [{"id": 1}]}  # the other operation's save
     lock.release()
-    await poll
+    await asyncio.gather(poll)
 
     assert persisted["options"]["schedules"] == [{"id": 1}]  # not discarded
     assert persisted["options"][CONF_TRANSPORT] == TRANSPORT_AUTO

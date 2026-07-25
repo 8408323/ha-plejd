@@ -41,7 +41,7 @@ def _flow():
     return flow
 
 
-def _site(site_id="S1"):
+def _site(site_id="S1", malformed=None):
     dev = PlejdCloudDevice(
         device_id="d1",
         name="Kitchen",
@@ -68,6 +68,7 @@ def _site(site_id="S1"):
         gateways=["gw1"],
         resource_set_id="rsABC",
         device_addresses={"d1": 1, "w1": 33},
+        malformed=frozenset(malformed or ()),
     )
 
 
@@ -180,6 +181,14 @@ async def test_create_entry_handles_site_fetch_error(monkeypatch):
 )
 async def test_create_entry_handles_site_fetch_transport_failure(monkeypatch, error):
     _patch_cloud(monkeypatch, sites=[{"siteId": "S1"}], site=error)
+    result = await _flow().async_step_user(_LOGIN)
+    assert result["type"] == "form" and result["errors"] == {"base": "cannot_connect"}
+
+
+async def test_create_entry_refuses_a_malformed_site_response(monkeypatch):
+    # A truncated/wrong-typed collection parses into an empty one, so setting up on it would
+    # create an entry missing whole device/scene/room sets. Refuse it like any bad response.
+    _patch_cloud(monkeypatch, sites=[{"siteId": "S1"}], site=_site(malformed={"devices"}))
     result = await _flow().async_step_user(_LOGIN)
     assert result["type"] == "form" and result["errors"] == {"base": "cannot_connect"}
 
@@ -315,6 +324,18 @@ async def test_reconfigure_cannot_connect_on_site_fetch(monkeypatch):
     flow = _reconfigure_flow(_stored_entry())
     res = await flow.async_step_reconfigure({})
     assert res["type"] == "form" and res["errors"] == {"base": "cannot_connect"}
+
+
+async def test_reconfigure_refuses_a_malformed_site_response(monkeypatch):
+    # Replacing the cached snapshot with normalized-empty collections would remove every
+    # entity of the affected kind - the entry must be left untouched instead.
+    entry = _stored_entry()
+    before = dict(entry.data)
+    _patch_cloud(monkeypatch, login="tok", site=_site(malformed={"scenes"}))
+    flow = _reconfigure_flow(entry)
+    res = await flow.async_step_reconfigure({})
+    assert res["type"] == "form" and res["errors"] == {"base": "cannot_connect"}
+    assert entry.data == before  # nothing persisted
 
 
 async def test_reconfigure_cannot_connect_on_transport_failure(monkeypatch):

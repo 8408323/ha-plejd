@@ -52,6 +52,13 @@ _OUTPUT_TYPE_CATEGORY = {
 }
 
 
+# Parse's error code for rejected login credentials (returned with a 404).
+PARSE_ERROR_INVALID_LOGIN = 101
+
+# Login statuses that are retryable rather than a verdict on the credentials.
+_TRANSIENT_LOGIN_STATUSES = frozenset({408, 425, 429})
+
+
 class PlejdCloudError(Exception):
     """A Plejd cloud request failed."""
 
@@ -212,12 +219,16 @@ async def async_login(session: ClientSession, email: str, password: str) -> str:
         if resp.status != 200 or not token:
             message = str(data.get("error", "login failed")) if isinstance(data, dict) else "login failed"
             # Callers start HA's reauth flow on PlejdAuthError, so only a response that
-            # actually denotes rejected credentials may map to it - Parse signals that with a
-            # 4xx carrying an error code. A 5xx (cloud broken), a 429 (rate limited, notably
-            # from the daily poll's own retries) and a 200 that simply carries no sessionToken
-            # (malformed, not a rejection) are all transient, and mapping any of them to
-            # reauth would prompt the user to re-enter a password that was never the problem.
-            if resp.status == 200 or resp.status == 429 or resp.status >= 500:
+            # actually denotes rejected credentials may map to it - prompting a user to
+            # re-enter a password that was never the problem is its own bug.
+            code = data.get("code") if isinstance(data, dict) else None
+            if code == PARSE_ERROR_INVALID_LOGIN:
+                raise PlejdAuthError(message)  # Parse's own "invalid login" signal
+            # No credential-rejection code: a 200 carrying no sessionToken (malformed), an
+            # explicitly retryable status, and any 5xx are all transient. An unrecognized 4xx
+            # still falls through to auth, which is the safer default - misreading a genuine
+            # rejection as transient would silently never surface reauth at all.
+            if resp.status == 200 or resp.status in _TRANSIENT_LOGIN_STATUSES or resp.status >= 500:
                 raise PlejdCloudError(message)
             raise PlejdAuthError(message)
         return token
@@ -776,17 +787,17 @@ def parse_site(site: dict) -> PlejdCloudSite:
     # would look like a genuine deletion and destroy those entities on the next poll.
     malformed: set[str] = set()
 
-    def _checked_list(key: str, *labels: str, of_objects: bool = False) -> list:
+    def _checked_list(key: str, *labels: str, id_field: str | None = None) -> list:
         raw = site.get(key)
         if not isinstance(raw, list):
             malformed.update(labels)
             return []
-        if of_objects and any(not isinstance(item, dict) for item in raw):
-            # A stray non-object element means this array is itself truncated/corrupt.
-            # The loops below still skip such an element so the parse survives, but that
-            # silently drops a real device/scene/room from the snapshot - which a caching,
-            # diffing caller (the cloud poll) would otherwise read as a deliberate deletion
-            # and persist, removing the entity.
+        if id_field is not None and any(not isinstance(item, dict) or item.get(id_field) is None for item in raw):
+            # A stray non-object element, or a record missing the id everything keys off,
+            # means this array is itself truncated/corrupt. The loops below still skip such
+            # an element so the parse survives, but that silently drops a real
+            # device/scene/room from the snapshot - which a caching, diffing caller (the
+            # cloud poll) would read as a deliberate deletion and persist, losing the entity.
             malformed.update(labels)
         return raw
 
@@ -797,12 +808,12 @@ def parse_site(site: dict) -> PlejdCloudSite:
         malformed.update(labels)
         return {}
 
-    raw_devices = _checked_list("devices", "devices", of_objects=True)
+    raw_devices = _checked_list("devices", "devices", id_field="deviceId")
     input_address = _checked_dict("inputAddress", "inputs")
     # plejdDevices feeds both the motion sensors and every device's hardware id/model, so a
     # corrupt element there makes both collections untrustworthy.
-    plejd_devices = _checked_list("plejdDevices", "motion", "devices", of_objects=True)
-    raw_scenes = _checked_list("scenes", "scenes", of_objects=True)
+    plejd_devices = _checked_list("plejdDevices", "motion", "devices", id_field="deviceId")
+    raw_scenes = _checked_list("scenes", "scenes", id_field="sceneId")
     scene_index = _checked_dict("sceneIndex", "scenes")
     # These two carry every mesh address there is: outputAddress is what control commands
     # target, deviceAddress is the physical-device fallback (and what fault polling and the
@@ -811,10 +822,10 @@ def parse_site(site: dict) -> PlejdCloudSite:
     # device (and, for deviceAddress, motion) data rather than an empty-but-valid map.
     output_address = _checked_dict("outputAddress", "devices")
     device_address = _checked_dict("deviceAddress", "devices", "motion")
-    raw_rooms = _checked_list("rooms", "rooms", of_objects=True)
+    raw_rooms = _checked_list("rooms", "rooms", id_field="roomId")
     room_address = _checked_dict("roomAddress", "rooms")
     output_groups = _checked_dict("outputGroups", "rooms")
-    gateways_raw = _checked_list("gateways", "gateways", of_objects=True)
+    gateways_raw = _checked_list("gateways", "gateways", id_field="deviceId")
 
     hardware_by_id = {d.get("deviceId"): d for d in plejd_devices if isinstance(d, dict)}
 
@@ -1050,6 +1061,24 @@ def parse_site(site: dict) -> PlejdCloudSite:
         if not 1 <= addr_int <= 255:
             continue  # mesh addresses are single-byte (encode_command masks with & 0xFF); 0 is broadcast-like
         device_addresses[device_id] = addr_int
+
+    # Canonical ordering, applied once here so EVERY caller that stores a snapshot (the
+    # config flow's setup and reconfigure steps, coordinator.py's cloud poll) writes the
+    # same order for the same site. getSiteById is JSON-object-keyed for several of these
+    # (inputAddress, roomAddress, per-output address maps, ...) and object key order is not
+    # semantically meaningful, so the same site can otherwise produce differently ordered
+    # lists across requests - and a stored snapshot in source order would make the very
+    # first poll after setup/reconfigure diff unequal and reload the integration for
+    # nothing. Sorting at the source keeps that impossible rather than relying on each
+    # write site to remember.
+    devices.sort(key=lambda d: (d.device_id, d.output_index))
+    inputs.sort(key=lambda i: (i.device_id, i.input_index))
+    motion.sort(key=lambda m: m.device_id)
+    scenes.sort(key=lambda s: s.scene_id)
+    rooms.sort(key=lambda r: r.room_id)
+    all_rooms.sort(key=lambda r: r.room_id)
+    all_scenes.sort(key=lambda s: s.scene_id)
+    gateways.sort()
 
     return PlejdCloudSite(
         site_id=meta.get("siteId") or "",

@@ -480,22 +480,14 @@ class PlejdCoordinator:
         # docstring already documents and accepts for every other feature's refresh cycle,
         # now also triggered by this poll. Not solved here for the same reason: doing so
         # would need pending-move awareness plumbed through this poll too.
-        # getSiteById is JSON-object-keyed for several of these collections (inputAddress,
-        # roomAddress, per-output address maps, ...) - key order isn't semantically
-        # significant, but parse_site() builds these lists by iterating those objects, so
-        # the same site can produce differently-ordered lists across separate requests.
-        # Sort by each collection's own id before storing/comparing, or an unrelated
-        # ordering wobble looks like a real change and reloads the integration for nothing.
-        devices = sorted((asdict(d) for d in site.devices), key=lambda d: d["device_id"])
-        # A device can have more than one input, so device_id alone isn't a stable sort key
-        # - without input_index too, Python's stable sort just preserves the cloud's
-        # arbitrary per-device iteration order for same-device inputs, and that wobbling
-        # unrelated to any real change looks like one and triggers a needless reload.
-        inputs = sorted((asdict(i) for i in site.inputs), key=lambda i: (i["device_id"], i["input_index"]))
-        motion = sorted((asdict(m) for m in site.motion), key=lambda m: m["device_id"])
-        scenes = sorted((asdict(s) for s in site.scenes), key=lambda s: s["scene_id"])
-        rooms = sorted((asdict(r) for r in site.rooms), key=lambda r: r["room_id"])
-        gateways = sorted(site.gateways)
+        # No sorting needed here: parse_site() already returns every collection in a canonical
+        # order, so the config flow's stored snapshot and this diff agree by construction.
+        devices = [asdict(d) for d in site.devices]
+        inputs = [asdict(i) for i in site.inputs]
+        motion = [asdict(m) for m in site.motion]
+        scenes = [asdict(s) for s in site.scenes]
+        rooms = [asdict(r) for r in site.rooms]
+        gateways = list(site.gateways)
         # parse_site() distinguishes "this collection's raw source field was absent or the
         # wrong type" (site.malformed) from "the cloud correctly reports zero of these now"
         # (a real, empty list) - only the former is untrustworthy. Treating emptiness alone
@@ -527,12 +519,16 @@ class PlejdCoordinator:
         # (removed in the app) would leave the coordinator stuck raising ConfigEntryNotReady
         # forever on reload instead of falling back to BLE.
         has_gateway = bool(gateways and resource_set_id)
-        current_transport = entry.options.get(CONF_TRANSPORT, TRANSPORT_AUTO)
-        # Only a gateway-only preference actually becomes impossible without a gateway. An
-        # explicit BLE choice stays valid and must survive, or an unrelated site change would
-        # silently downgrade it to AUTO and start using a gateway added later on its own.
-        should_reset_transport = not has_gateway and current_transport == TRANSPORT_GATEWAY
-        new_transport = TRANSPORT_AUTO if should_reset_transport else current_transport
+
+        def _transport_for(current: str) -> str:
+            # Only a gateway-only preference actually becomes impossible without a gateway. An
+            # explicit BLE choice stays valid and must survive, or an unrelated site change
+            # would silently downgrade it to AUTO and start using a gateway added later on
+            # its own. Deferred into a callable because the answer depends on the preference
+            # as it is when we actually write, which may be newer than what we read here.
+            return TRANSPORT_AUTO if not has_gateway and current == TRANSPORT_GATEWAY else current
+
+        new_transport = _transport_for(entry.options.get(CONF_TRANSPORT, TRANSPORT_AUTO))
         new_data = {
             CONF_CRYPTO_KEY: site.crypto_key.hex(),
             CONF_DEVICES: devices,
@@ -568,21 +564,28 @@ class PlejdCoordinator:
         # entry.data already matches the fresh site and the running coordinator never
         # reflects it. Guarded by the shared per-entry reload lock so the listener doesn't
         # also fire a second, racing reload for this same change.
-        old_data = dict(entry.data)
-        old_options = dict(entry.options)
+        # Populated inside the lock, immediately before the write, so the rollback restores
+        # exactly what this poll overwrote - a snapshot taken out here would instead restore
+        # values from before any concurrent operation that landed while we waited for the lock.
+        overwritten_data: dict[str, Any] = {}
+        overwritten_transport: tuple[str, ...] = ()
         lock = schedule_ws.async_get_reload_lock(self.hass, entry.entry_id)
         try:
             async with lock:
                 schedule_ws.async_mark_expecting_self_reload(self.hass, entry.entry_id)
-                # Both overlays are merged onto entry.data/entry.options read HERE, inside the
-                # lock, not onto the pre-lock snapshot the diff above was computed from: if
-                # another operation (e.g. a schedule save) held the lock while we waited, it
-                # has already persisted its own change, and writing back a copy captured
-                # before that would discard it permanently.
+                # Everything is read HERE, inside the lock, not from the pre-lock snapshot the
+                # diff above was computed from: if another operation (e.g. a schedule save)
+                # held the lock while we waited, it has already persisted its own change, and
+                # writing back anything captured before that would discard it permanently.
+                overwritten_data = {key: entry.data[key] for key in new_data if key in entry.data}
+                overwritten_transport = (entry.options[CONF_TRANSPORT],) if CONF_TRANSPORT in entry.options else ()
                 self.hass.config_entries.async_update_entry(
                     entry,
                     data={**entry.data, **new_data},
-                    options={**entry.options, CONF_TRANSPORT: new_transport},
+                    options={
+                        **entry.options,
+                        CONF_TRANSPORT: _transport_for(entry.options.get(CONF_TRANSPORT, TRANSPORT_AUTO)),
+                    },
                 )
                 try:
                     reload_ok = await self.hass.config_entries.async_reload(entry.entry_id)
@@ -617,18 +620,19 @@ class PlejdCoordinator:
                 "snapshot so the next poll retries it"
             )
             async with lock:
-                # Restore only the keys this poll actually wrote, onto entry.data/entry.options
-                # as they are NOW - a wholesale write-back of the pre-reload snapshot would
-                # also undo any concurrent change that landed while we were reloading.
+                # Restore only what this poll actually overwrote (captured inside the lock,
+                # just before the write), onto entry.data/entry.options as they are NOW - a
+                # wholesale write-back would also undo any concurrent change, whether it
+                # landed while we waited for the lock or while the failed reload was running.
                 reverted_data = {**entry.data}
                 for key in new_data:
-                    if key in old_data:
-                        reverted_data[key] = old_data[key]
+                    if key in overwritten_data:
+                        reverted_data[key] = overwritten_data[key]
                     else:
                         reverted_data.pop(key, None)  # a key this poll introduced (e.g. installation id)
                 reverted_options = {**entry.options}
-                if CONF_TRANSPORT in old_options:
-                    reverted_options[CONF_TRANSPORT] = old_options[CONF_TRANSPORT]
+                if overwritten_transport:
+                    reverted_options[CONF_TRANSPORT] = overwritten_transport[0]
                 else:
                     reverted_options.pop(CONF_TRANSPORT, None)
                 schedule_ws.async_mark_expecting_self_reload(self.hass, entry.entry_id)

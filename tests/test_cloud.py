@@ -81,7 +81,6 @@ _SITE = {
         {"deviceId": "d1", "title": "Kitchen", "roomId": "r1", "outputType": "LIGHT"},
         {"deviceId": "d2", "title": "Pump", "roomId": "r1", "outputType": "RELAY"},
         {"deviceId": "d3", "title": "Blind", "roomId": "r2", "outputType": "COVERABLE"},
-        {"title": "ghost"},  # no deviceId -> skipped
     ],
     "scenes": [{"sceneId": "sc1", "title": "Movie"}, {"sceneId": "sc2", "title": "NoIndex"}],
     "sceneIndex": {"sc1": 3},
@@ -149,7 +148,7 @@ async def test_get_site_parses_devices():
             site = await async_get_site(s, "tok", "S1")
     assert site.crypto_key == bytes.fromhex("00112233445566778899aabbccddeeff")
     by_id = {d.device_id: d for d in site.devices}
-    assert set(by_id) == {"d1", "d2", "d3"}  # ghost skipped
+    assert set(by_id) == {"d1", "d2", "d3"}
     assert by_id["d1"].category == "light" and by_id["d1"].dimmable is True
     assert by_id["d1"].model == "DIM-01" and by_id["d1"].outputs == [11]
     assert by_id["d2"].category == "switch" and by_id["d2"].dimmable is False
@@ -1272,6 +1271,83 @@ def test_parse_site_marks_a_collection_malformed_for_a_stray_non_object_entry(ke
     # would read as a deliberate deletion and persist. It must be flagged instead.
     site = parse_site({**_SITE, key: [*(_SITE.get(key) or []), "not-an-object"]})
     assert labels <= site.malformed
+
+
+@pytest.mark.parametrize(
+    ("key", "record", "labels"),
+    [
+        ("devices", {"title": "ghost"}, {"devices"}),  # no deviceId
+        ("plejdDevices", {"hardwareId": "1"}, {"devices", "motion"}),
+        ("scenes", {"title": "nameless"}, {"scenes"}),
+        ("rooms", {"title": "nameless"}, {"rooms"}),
+        ("gateways", {"resourceSetId": "rs1"}, {"gateways"}),
+    ],
+)
+def test_parse_site_marks_a_collection_malformed_for_a_record_missing_its_id(key, record, labels):
+    # A record present but missing the id everything keys off is truncated data, and the
+    # parser can only skip it - which for the diffing cloud poll reads as a deletion. Flag
+    # the collection so the snapshot is rejected rather than silently applied short a device.
+    site = parse_site({**_SITE, key: [*(_SITE.get(key) or []), record]})
+    assert labels <= site.malformed
+
+
+def test_parse_site_still_skips_a_device_record_missing_its_id():
+    # Flagging the collection must not stop the parse producing the other, good devices -
+    # a caller that only needs to read the site (not cache it) is unaffected.
+    site = parse_site({**_SITE, "devices": [*_SITE["devices"], {"title": "ghost"}]})
+    assert {d.device_id for d in site.devices} == {"d1", "d2", "d3"}
+
+
+def test_parse_site_returns_collections_in_a_canonical_order():
+    # parse_site is the single place ordering is normalized, so every caller that stores a
+    # snapshot (config flow setup/reconfigure, the cloud poll) writes the same order for the
+    # same site - otherwise the first poll after setup diffs unequal and reloads for nothing.
+    shuffled = {
+        **_SITE,
+        "devices": list(reversed(_SITE["devices"])),
+        "inputAddress": {"d3": {"0": 31}, "d1": {"1": 11, "0": 12}},
+        "scenes": list(reversed(_SITE["scenes"])),
+        "sceneIndex": {"sc1": 3, "sc2": 4},
+    }
+    site = parse_site(shuffled)
+    assert [(d.device_id, d.output_index) for d in site.devices] == sorted(
+        (d.device_id, d.output_index) for d in site.devices
+    )
+    assert [(i.device_id, i.input_index) for i in site.inputs] == sorted(
+        (i.device_id, i.input_index) for i in site.inputs
+    )
+    assert [s.scene_id for s in site.scenes] == sorted(s.scene_id for s in site.scenes)
+    assert [s.scene_id for s in site.all_scenes] == sorted(s.scene_id for s in site.all_scenes)
+
+
+async def test_login_request_timeout_is_transient_not_an_auth_failure():
+    # A 408 is the server giving up on the request, not a verdict on the credentials.
+    with aioresponses() as m:
+        m.post(_LOGIN, status=408, payload={"error": "request timeout"})
+        async with aiohttp.ClientSession() as s:
+            with pytest.raises(PlejdCloudError, match="request timeout") as excinfo:
+                await async_login(s, "u@x.se", "pw")
+    assert not isinstance(excinfo.value, PlejdAuthError)
+
+
+async def test_login_unrecognized_4xx_without_a_code_is_still_an_auth_failure():
+    # Deliberately the safer default: without Parse's code we can't prove it was transient,
+    # and misreading a genuine rejection as transient would never surface reauth at all.
+    with aioresponses() as m:
+        m.post(_LOGIN, status=403, payload={"error": "forbidden"})
+        async with aiohttp.ClientSession() as s:
+            with pytest.raises(PlejdAuthError, match="forbidden"):
+                await async_login(s, "u@x.se", "pw")
+
+
+async def test_login_parse_invalid_login_code_is_an_auth_failure():
+    # Parse's own credential-rejection signal (code 101) must still reach reauth, whatever
+    # status it arrives with - that is the one case where prompting for the password is right.
+    with aioresponses() as m:
+        m.post(_LOGIN, status=404, payload={"code": 101, "error": "invalid login parameters"})
+        async with aiohttp.ClientSession() as s:
+            with pytest.raises(PlejdAuthError, match="invalid login parameters"):
+                await async_login(s, "u@x.se", "pw")
 
 
 def test_parse_site_sorts_device_outputs_regardless_of_output_address_key_order():

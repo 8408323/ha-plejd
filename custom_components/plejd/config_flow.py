@@ -168,6 +168,14 @@ class PlejdConfigFlow(ConfigFlow, domain=DOMAIN):
                 _LOGGER.debug("Plejd reconfigure: cloud unreachable", exc_info=True)
                 errors["base"] = "cannot_connect"
             else:
+                if site.malformed:
+                    # Replacing the cached snapshot with normalized-empty collections would
+                    # remove every device/scene/room entity of the affected kind - refuse the
+                    # response the same way an unreachable cloud is refused.
+                    _LOGGER.debug("Plejd reconfigure: site response malformed (%s)", ", ".join(sorted(site.malformed)))
+                    return self.async_show_form(
+                        step_id="reconfigure", data_schema=vol.Schema({}), errors={"base": "cannot_connect"}
+                    )
                 data_updates = {
                     CONF_CRYPTO_KEY: site.crypto_key.hex(),
                     CONF_DEVICES: [asdict(d) for d in site.devices],
@@ -226,6 +234,12 @@ class PlejdConfigFlow(ConfigFlow, domain=DOMAIN):
             site = await async_get_site(session, self._token, site_id)
         except (PlejdCloudError, ClientError, OSError):
             _LOGGER.debug("Plejd site fetch failed during setup", exc_info=True)
+            return self.async_show_form(step_id="user", data_schema=STEP_USER_SCHEMA, errors={"base": "cannot_connect"})
+        if site.malformed:
+            # A truncated/wrong-typed collection parses into an empty one, so setting up on it
+            # would create an entry missing entire device/scene/room sets. Fail like any other
+            # bad response and let the user retry instead.
+            _LOGGER.debug("Plejd site response malformed during setup (%s)", ", ".join(sorted(site.malformed)))
             return self.async_show_form(step_id="user", data_schema=STEP_USER_SCHEMA, errors={"base": "cannot_connect"})
         await self.async_set_unique_id(site.site_id)
         self._abort_if_unique_id_configured()
