@@ -1887,6 +1887,91 @@ async def test_cloud_poll_merges_options_read_after_acquiring_the_lock(monkeypat
     assert persisted["options"][CONF_TRANSPORT] == TRANSPORT_AUTO
 
 
+async def test_cloud_poll_skips_when_a_management_operation_landed_while_it_waited(monkeypatch):
+    # A device/room/scene operation completing between this poll's fetch and its lock
+    # acquisition writes a NEWER snapshot of the same keys. Applying the poll's older overlay
+    # would revert what the user just did, so the poll skips and lets the next one re-fetch.
+    from plejd import schedule_ws
+    from plejd.cloud import PlejdCloudDevice
+
+    new_dev = PlejdCloudDevice(**{**_DEV, "device_id": "d2", "name": "Matbord", "address": 9})
+
+    async def _login(session, email, password):
+        return "TOKEN"
+
+    async def _get_site(session, token, site_id):
+        return _fake_site(devices=[PlejdCloudDevice(**_DEV), new_dev])
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _login)
+    monkeypatch.setattr(coordinator_mod, "async_get_site", _get_site)
+
+    entry = _cloud_poll_entry()
+    hass = _hass()
+    hass.session = object()
+    persisted: list = []
+    hass.config_entries = types.SimpleNamespace(
+        async_get_entry=lambda eid: entry,
+        async_update_entry=lambda e, data, options=None: persisted.append(data),
+        async_reload=AsyncMock(return_value=True),
+    )
+    c = PlejdCoordinator(hass, entry)
+
+    lock = schedule_ws.async_get_reload_lock(hass, entry.entry_id)
+    await lock.acquire()
+    poll = asyncio.ensure_future(c._async_poll_cloud(None))
+    await asyncio.sleep(0)  # let the poll reach the lock and block there
+    # the management operation's own newer result for a site-derived key
+    entry.data = {**entry.data, CONF_DEVICES: [{**_DEV, "name": "Renamed by the user"}]}
+    lock.release()
+    await asyncio.gather(poll)
+
+    assert persisted == []  # nothing written
+    assert entry.data[CONF_DEVICES][0]["name"] == "Renamed by the user"  # their change stands
+    hass.config_entries.async_reload.assert_not_awaited()
+
+
+async def test_cloud_poll_does_not_roll_back_when_the_follow_up_reload_succeeded(monkeypatch):
+    # The follow-up reload loads the entry with this poll's data already written, so a
+    # success there means the sync IS live - rolling back on the first reload's failure would
+    # undo a working state.
+    from plejd import schedule_ws
+    from plejd.cloud import PlejdCloudDevice
+
+    new_dev = PlejdCloudDevice(**{**_DEV, "device_id": "d2", "name": "Matbord", "address": 9})
+
+    async def _login(session, email, password):
+        return "TOKEN"
+
+    async def _get_site(session, token, site_id):
+        return _fake_site(devices=[PlejdCloudDevice(**_DEV), new_dev])
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _login)
+    monkeypatch.setattr(coordinator_mod, "async_get_site", _get_site)
+
+    entry = _cloud_poll_entry()
+    hass = _hass()
+    hass.session = object()
+    calls: list[str] = []
+
+    async def _reload(entry_id):
+        calls.append(entry_id)
+        if len(calls) == 1:
+            hass.data[schedule_ws.DATA_RELOAD_PENDING] = entry_id
+            return False  # our own reload is rejected...
+        return True  # ...but the follow-up for the concurrent change succeeds
+
+    hass.config_entries = types.SimpleNamespace(
+        async_get_entry=lambda eid: entry,
+        async_update_entry=lambda e, data, options=None: setattr(e, "data", data),
+        async_reload=AsyncMock(side_effect=_reload),
+    )
+    c = PlejdCoordinator(hass, entry)
+    await c._async_poll_cloud(None)
+
+    assert calls == ["e1", "e1"]  # ours, then the follow-up - and no third rollback reload
+    assert [d["device_id"] for d in entry.data[CONF_DEVICES]] == ["d1", "d2"]  # sync kept
+
+
 async def test_cloud_poll_reloads_the_reverted_snapshot_after_a_failed_setup(monkeypatch):
     # If async_reload unloaded the old entry but failed to set the new one up, this
     # coordinator (and its poll timer) is already gone - reverting the stored snapshot alone

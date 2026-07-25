@@ -1162,11 +1162,11 @@ def test_parse_site_marks_nothing_malformed_for_a_well_formed_empty_site():
 @pytest.mark.parametrize(
     ("key", "bad_value", "label"),
     [
-        ("devices", None, "devices"),
+        ("devices", {"d1": {}}, "devices"),
         ("inputAddress", [], "inputs"),
         ("plejdDevices", {}, "motion"),
         ("scenes", "not-a-list", "scenes"),
-        ("rooms", None, "rooms"),
+        ("rooms", "not-a-list", "rooms"),
         ("gateways", "not-a-list", "gateways"),
     ],
 )
@@ -1201,17 +1201,15 @@ def test_parse_site_survives_a_wrong_typed_but_non_empty_collection(key, bad_val
 
 
 @pytest.mark.parametrize(
-    ("missing", "labels"),
+    ("key", "labels"),
     [("outputAddress", {"devices"}), ("deviceAddress", {"devices", "motion"})],
 )
-def test_parse_site_marks_devices_malformed_when_an_address_map_is_absent(missing, labels):
+def test_parse_site_marks_devices_malformed_when_an_address_map_is_the_wrong_type(key, labels):
     # outputAddress is what control commands target and deviceAddress is the physical
-    # fallback (also the motion sensors' own address source) - losing either parses into
-    # entities with address=None that can never be commanded, so it must not look like a
-    # valid snapshot worth caching over the working one.
-    site = {**_SITE}
-    del site[missing]
-    assert labels <= parse_site(site).malformed
+    # fallback (also the motion sensors' own address source) - a present-but-corrupt map
+    # parses into entities with address=None that can never be commanded, so it must not
+    # look like a valid snapshot worth caching over the working one.
+    assert labels <= parse_site({**_SITE, key: "not-a-dict"}).malformed
 
 
 async def test_login_rate_limit_is_transient_not_an_auth_failure():
@@ -1226,15 +1224,15 @@ async def test_login_rate_limit_is_transient_not_an_auth_failure():
     assert not isinstance(excinfo.value, PlejdAuthError)
 
 
-@pytest.mark.parametrize("missing", ["sceneIndex", "roomAddress", "outputGroups"])
-def test_parse_site_marks_a_collection_malformed_when_a_companion_map_is_absent(missing):
-    # A partial response can keep the primary list while dropping the map it is parsed
-    # against - scenes without sceneIndex parses to zero executable scenes, rooms without
-    # roomAddress/outputGroups to zero room entities. Both look like a genuine deletion
-    # unless flagged, so the poll would destroy those entities.
+@pytest.mark.parametrize("key", ["sceneIndex", "roomAddress", "outputGroups"])
+def test_parse_site_marks_a_collection_malformed_when_a_companion_map_is_corrupt(key):
+    # A partial response can keep the primary list while corrupting the map it is parsed
+    # against - scenes with an unusable sceneIndex parses to zero executable scenes, rooms
+    # with an unusable roomAddress/outputGroups to zero room entities. Both look like a
+    # genuine deletion unless flagged, so the poll would destroy those entities.
     site = {**_SITE, "rooms": [{"roomId": "r1", "title": "Kok"}], "roomAddress": {"r1": 14}, "outputGroups": {}}
-    del site[missing]
-    expected = "scenes" if missing == "sceneIndex" else "rooms"
+    site[key] = "not-a-dict"
+    expected = "scenes" if key == "sceneIndex" else "rooms"
     assert expected in parse_site(site).malformed
 
 
@@ -1296,6 +1294,55 @@ def test_parse_site_still_skips_a_device_record_missing_its_id():
     # a caller that only needs to read the site (not cache it) is unaffected.
     site = parse_site({**_SITE, "devices": [*_SITE["devices"], {"title": "ghost"}]})
     assert {d.device_id for d in site.devices} == {"d1", "d2", "d3"}
+
+
+def test_parse_site_does_not_flag_a_site_that_simply_has_no_rooms_or_gateway():
+    # Omitting a collection is how the API says the site has none: a BLE-only site has no
+    # gateways, a site with no rooms has no rooms/roomAddress/outputGroups. Flagging those
+    # would refuse setup, refuse reconfigure and stop the poll ever syncing for such a site,
+    # which is far worse than the destructive sync the flag exists to prevent.
+    assert "rooms" not in _SITE and "gateways" not in _SITE  # the representative fixture
+    assert parse_site(_SITE).malformed == frozenset()
+
+
+def test_parse_site_picks_the_lowest_input_index_for_a_shared_address():
+    # Several inputs can share one mesh address and only the first survives dedup. The winner
+    # must be the lowest index, not whichever the cloud's JSON key order happened to emit
+    # first - otherwise the cached input_index flips between polls, reloading an unchanged
+    # integration and making a later per-input settings write hit a different physical input.
+    forward = parse_site({**_SITE, "inputAddress": {"d1": {"0": 11, "1": 11}}})
+    reversed_keys = parse_site({**_SITE, "inputAddress": {"d1": {"1": 11, "0": 11}}})
+    assert [(i.address, i.input_index) for i in forward.inputs] == [(11, 0)]
+    assert [(i.address, i.input_index) for i in reversed_keys.inputs] == [(11, 0)]
+
+
+@pytest.mark.parametrize(
+    ("key", "record", "labels"),
+    [
+        ("devices", {"deviceId": 7, "title": "int id"}, {"devices"}),
+        ("scenes", {"sceneId": 7, "title": "int id"}, {"scenes"}),
+        ("gateways", {"deviceId": 7}, {"gateways"}),
+    ],
+)
+def test_parse_site_flags_rather_than_crashes_on_a_non_string_id(key, record, labels):
+    # Mixed identifier types (one string id, one int) used to blow up the canonical sort with
+    # a TypeError, so untrusted input aborted the parse instead of returning something the
+    # caller could reject. The record is skipped and the collection flagged instead.
+    site = parse_site({**_SITE, key: [*(_SITE.get(key) or []), record]})
+    assert labels <= site.malformed
+
+
+def test_parse_site_skips_a_malformed_per_device_input_map():
+    site = parse_site({**_SITE, "inputAddress": {"d1": "not-a-dict", "d3": {"0": 31}}})
+    assert [(i.device_id, i.address) for i in site.inputs] == [("d3", 31)]  # the good one survives
+
+
+def test_parse_site_skips_a_motion_sensor_with_a_non_string_id():
+    # The sensor is dropped rather than crashing the canonical sort, and plejdDevices is
+    # flagged so a caching caller rejects the snapshot instead of losing the sensor quietly.
+    site = parse_site({**_SITE, "plejdDevices": [*_SITE["plejdDevices"], {"deviceId": 7, "hardwareId": "70"}]})
+    assert [m.device_id for m in site.motion] == ["w1"]
+    assert "motion" in site.malformed
 
 
 def test_parse_site_returns_collections_in_a_canonical_order():

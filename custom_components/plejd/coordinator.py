@@ -569,31 +569,46 @@ class PlejdCoordinator:
         # values from before any concurrent operation that landed while we waited for the lock.
         overwritten_data: dict[str, Any] = {}
         overwritten_transport: tuple[str, ...] = ()
+        # What the site-derived keys looked like when the diff above was computed. If they
+        # differ once we hold the lock, a management operation (device/room/scene/schedule)
+        # landed in between and its result is NEWER than this poll's fetch - applying our
+        # overlay would revert the thing the user just did.
+        pre_lock_values = {key: entry.data.get(key) for key in new_data}
+        reload_ok = True
         lock = schedule_ws.async_get_reload_lock(self.hass, entry.entry_id)
         try:
             async with lock:
-                schedule_ws.async_mark_expecting_self_reload(self.hass, entry.entry_id)
-                # Everything is read HERE, inside the lock, not from the pre-lock snapshot the
-                # diff above was computed from: if another operation (e.g. a schedule save)
-                # held the lock while we waited, it has already persisted its own change, and
-                # writing back anything captured before that would discard it permanently.
-                overwritten_data = {key: entry.data[key] for key in new_data if key in entry.data}
-                overwritten_transport = (entry.options[CONF_TRANSPORT],) if CONF_TRANSPORT in entry.options else ()
-                self.hass.config_entries.async_update_entry(
-                    entry,
-                    data={**entry.data, **new_data},
-                    options={
-                        **entry.options,
-                        CONF_TRANSPORT: _transport_for(entry.options.get(CONF_TRANSPORT, TRANSPORT_AUTO)),
-                    },
-                )
-                try:
-                    reload_ok = await self.hass.config_entries.async_reload(entry.entry_id)
-                except Exception:  # noqa: BLE001 - treated like a rejected reload below
-                    _LOGGER.exception("Plejd cloud poll: reload after a site change raised")
-                    reload_ok = False
+                if any(entry.data.get(key) != value for key, value in pre_lock_values.items()):
+                    # Skip rather than overwrite: the next interval re-fetches, and a
+                    # management operation's own reload has already applied its change.
+                    _LOGGER.info(
+                        "Plejd cloud poll: the entry changed while waiting for the reload lock — "
+                        "skipping this poll so the newer change stands"
+                    )
+                else:
+                    schedule_ws.async_mark_expecting_self_reload(self.hass, entry.entry_id)
+                    # Everything is read HERE, inside the lock, not from the pre-lock snapshot
+                    # the diff above was computed from: if another operation held the lock
+                    # while we waited, writing back anything captured before that would
+                    # discard its change permanently.
+                    overwritten_data = {key: entry.data[key] for key in new_data if key in entry.data}
+                    overwritten_transport = (entry.options[CONF_TRANSPORT],) if CONF_TRANSPORT in entry.options else ()
+                    self.hass.config_entries.async_update_entry(
+                        entry,
+                        data={**entry.data, **new_data},
+                        options={
+                            **entry.options,
+                            CONF_TRANSPORT: _transport_for(entry.options.get(CONF_TRANSPORT, TRANSPORT_AUTO)),
+                        },
+                    )
+                    try:
+                        reload_ok = await self.hass.config_entries.async_reload(entry.entry_id)
+                    except Exception:  # noqa: BLE001 - treated like a rejected reload below
+                        _LOGGER.exception("Plejd cloud poll: reload after a site change raised")
+                        reload_ok = False
         finally:
             schedule_ws.async_consume_expected_self_reload(self.hass, entry.entry_id)
+        follow_up_ok = False
         if self.hass.data.get(schedule_ws.DATA_RELOAD_PENDING) == entry.entry_id:
             self.hass.data.pop(schedule_ws.DATA_RELOAD_PENDING, None)
             async with lock:
@@ -609,12 +624,16 @@ class PlejdCoordinator:
                 # coordinator stale until an unrelated site/option change happens to retry it.
                 _LOGGER.warning("Plejd cloud poll: follow-up reload for a concurrent change failed; leaving it pending")
                 self.hass.data[schedule_ws.DATA_RELOAD_PENDING] = entry.entry_id
-        if not reload_ok:
+        if not reload_ok and not follow_up_ok:
             # Revert the cached snapshot rather than just logging: leaving entry.data
             # already matching the fresh site would make every later poll's comparison
             # find no difference and never retry, stranding the running coordinator (which
             # never actually got the new data live) stale until an unrelated cloud change
             # or an HA restart. Reverting means the next poll's diff naturally retries this.
+            #
+            # A follow-up reload that succeeded is deliberately treated as this poll having
+            # landed after all: it reloaded the entry with our data already written, so the
+            # sync IS live and rolling back would undo a working state.
             _LOGGER.warning(
                 "Plejd cloud poll: reload after a site change failed; reverting the cached "
                 "snapshot so the next poll retries it"

@@ -782,18 +782,29 @@ def parse_site(site: dict) -> PlejdCloudSite:
     # blow up mid-parse with AttributeError/TypeError before `malformed` could reach the
     # caller at all, turning a skippable bad response into an unhandled exception.
     # A collection is also malformed when a companion map it is parsed against is the wrong
-    # type: scenes without sceneIndex yields no executable scenes, and rooms without
-    # outputGroups yields no room entities - both parse "successfully" to an empty list that
-    # would look like a genuine deletion and destroy those entities on the next poll.
+    # type: scenes with a wrong-typed sceneIndex yields no executable scenes, and rooms with a
+    # wrong-typed outputGroups yields no room entities - both parse "successfully" to an empty
+    # list that would look like a genuine deletion and destroy those entities on the next poll.
+    #
+    # An ABSENT key is deliberately NOT malformed. Omitting a collection is how the API says
+    # the site has none of them: a BLE-only site has no `gateways`, a site with no rooms has no
+    # `rooms`/`roomAddress`/`outputGroups`. Flagging those would refuse setup, refuse
+    # reconfigure, and stop the poll ever syncing for such a site - a far worse failure than
+    # the one the flag exists to prevent. Only a value that is present and the wrong shape is
+    # provably corrupt, so only that is flagged.
     malformed: set[str] = set()
 
     def _checked_list(key: str, *labels: str, id_field: str | None = None) -> list:
         raw = site.get(key)
+        if raw is None:
+            return []  # absent (or explicit null) means "there are none" - see above
         if not isinstance(raw, list):
             malformed.update(labels)
             return []
-        if id_field is not None and any(not isinstance(item, dict) or item.get(id_field) is None for item in raw):
-            # A stray non-object element, or a record missing the id everything keys off,
+        if id_field is not None and any(
+            not isinstance(item, dict) or not isinstance(item.get(id_field), str) for item in raw
+        ):
+            # A stray non-object element, or a record whose id is missing or not a string,
             # means this array is itself truncated/corrupt. The loops below still skip such
             # an element so the parse survives, but that silently drops a real
             # device/scene/room from the snapshot - which a caching, diffing caller (the
@@ -803,6 +814,8 @@ def parse_site(site: dict) -> PlejdCloudSite:
 
     def _checked_dict(key: str, *labels: str) -> dict:
         raw = site.get(key)
+        if raw is None:
+            return {}  # absent (or explicit null) means "there are none" - see above
         if isinstance(raw, dict):
             return raw
         malformed.update(labels)
@@ -835,8 +848,8 @@ def parse_site(site: dict) -> PlejdCloudSite:
         if not isinstance(info, dict):
             continue  # untrusted cloud data: a non-object entry in devices[]
         device_id = info.get("deviceId")
-        if device_id is None:
-            continue
+        if not isinstance(device_id, str):
+            continue  # untrusted cloud data: a non-string id would also break the sort below
         output_index = seen_outputs.get(device_id, 0)
         seen_outputs[device_id] = output_index + 1
         hardware = hardware_by_id.get(device_id, {})
@@ -878,26 +891,36 @@ def parse_site(site: dict) -> PlejdCloudSite:
         )
 
     name_by_device = {info.get("deviceId"): info.get("title") for info in raw_devices if isinstance(info, dict)}
-    inputs: list[PlejdCloudInput] = []
-    seen_addr: set[int] = set()
+    # Several inputs can share one mesh address (the same physical button reported under more
+    # than one index), and only the first is kept. Collect every candidate and order them
+    # BEFORE deduplicating, so the winner is the lowest (device_id, input_index) rather than
+    # whichever the cloud's arbitrary JSON key order happened to put first: otherwise the
+    # cached input_index flips between polls, which both reloads an unchanged integration and
+    # makes a later per-input settings write target a different physical input.
+    input_candidates: list[tuple[str, int, int]] = []
     for device_id, idx_map in input_address.items():
-        for idx_str, addr in (idx_map or {}).items():
+        if not isinstance(idx_map, dict):
+            continue  # untrusted cloud data: a malformed per-device input map
+        for idx_str, addr in idx_map.items():
             try:
-                address = int(addr)
-                input_index = int(idx_str)
+                input_candidates.append((device_id, int(idx_str), int(addr)))
             except (ValueError, TypeError):
                 continue  # malformed entry from the cloud - skip it, not fatal
-            if address in seen_addr:
-                continue
-            seen_addr.add(address)
-            inputs.append(
-                PlejdCloudInput(
-                    device_id=device_id,
-                    name=name_by_device.get(device_id) or "Button",
-                    address=address,
-                    input_index=input_index,
-                )
+    input_candidates.sort()
+    inputs: list[PlejdCloudInput] = []
+    seen_addr: set[int] = set()
+    for device_id, input_index, address in input_candidates:
+        if address in seen_addr:
+            continue
+        seen_addr.add(address)
+        inputs.append(
+            PlejdCloudInput(
+                device_id=device_id,
+                name=name_by_device.get(device_id) or "Button",
+                address=address,
+                input_index=input_index,
             )
+        )
 
     motion: list[PlejdCloudMotion] = []
     for phys in plejd_devices:
@@ -905,6 +928,8 @@ def parse_site(site: dict) -> PlejdCloudSite:
             continue  # untrusted cloud data: a non-object entry in plejdDevices[]
         if int(phys.get("hardwareId") or 0) == HARDWARE_WMS_01:
             device_id = phys.get("deviceId")
+            if not isinstance(device_id, str):
+                continue  # untrusted cloud data: a non-string id would also break the sort below
             addr = device_address.get(device_id)
             if addr is not None:
                 motion.append(PlejdCloudMotion(device_id=device_id, name="Motion sensor", address=int(addr)))
@@ -932,7 +957,9 @@ def parse_site(site: dict) -> PlejdCloudSite:
     scenes = [
         PlejdCloudScene(scene_id=sc["sceneId"], name=sc.get("title") or sc["sceneId"], index=int(idx))
         for sc in raw_scenes
-        if isinstance(sc, dict) and (idx := scene_index.get(sc.get("sceneId"))) is not None
+        if isinstance(sc, dict)
+        and isinstance(sc.get("sceneId"), str)
+        and (idx := scene_index.get(sc.get("sceneId"))) is not None
     ]
     all_scenes = [
         PlejdCloudSceneInfo(scene_id=sc["sceneId"], name=sc.get("title") or sc["sceneId"])
@@ -943,7 +970,7 @@ def parse_site(site: dict) -> PlejdCloudSite:
     # A gateway (GWY-01) has no controllable output, so it is absent from devices[];
     # it lives only in gateways[]. Its resourceSetId authorises the remote WebSocket.
     gateway_objs = gateways_raw
-    gateways = [g["deviceId"] for g in gateway_objs if isinstance(g, dict) and g.get("deviceId")]
+    gateways = [g["deviceId"] for g in gateway_objs if isinstance(g, dict) and isinstance(g.get("deviceId"), str)]
     # The gateway's own resourceSetId is authoritative. Only fall back to a site
     # resourceSet when there's exactly one (otherwise we can't tell which grants access).
     resource_sets = site.get("resourceSets") or []
