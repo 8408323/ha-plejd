@@ -1563,7 +1563,9 @@ def _cloud_poll_entry():
     )
 
 
-def _fake_site(devices=None, gateways=None, resource_set_id=None, device_addresses=None, rooms=None, motion=None):
+def _fake_site(
+    devices=None, gateways=None, resource_set_id=None, device_addresses=None, rooms=None, motion=None, malformed=None
+):
     """A PlejdCloudSite-like object matching _DEV by default (no change)."""
     from plejd.cloud import PlejdCloudSite
 
@@ -1582,6 +1584,7 @@ def _fake_site(devices=None, gateways=None, resource_set_id=None, device_address
         resource_set_id=resource_set_id,
         device_addresses=device_addresses or {},
         rooms=rooms or [],
+        malformed=frozenset(malformed or ()),
     )
 
 
@@ -1707,15 +1710,47 @@ async def test_cloud_poll_reverts_and_logs_when_reload_raises(monkeypatch, caplo
     assert entry.data[CONF_DEVICES] == original_devices
 
 
-async def test_cloud_poll_skips_a_suspiciously_empty_device_list(monkeypatch, caplog):
-    # A getSiteById response missing/omitting "devices" entirely parses to an empty list
-    # the same as a genuinely empty site - applying that unattended would silently wipe
-    # every device entity. Must be skipped like a missed poll, not "synced" destructively.
+@pytest.mark.parametrize("malformed_label", ["devices", "inputs", "motion", "scenes", "rooms", "gateways"])
+async def test_cloud_poll_skips_a_malformed_site_response(monkeypatch, caplog, malformed_label):
+    # parse_site() flags a collection as malformed when its raw source field was missing or
+    # the wrong type - that response must be skipped like a missed poll (not "synced"
+    # destructively), regardless of which collection was affected or whether the resulting
+    # parsed list happens to be empty or not.
     async def _login(session, email, password):
         return "TOKEN"
 
     async def _get_site(session, token, site_id):
-        return _fake_site(devices=[])
+        return _fake_site(malformed=[malformed_label])
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _login)
+    monkeypatch.setattr(coordinator_mod, "async_get_site", _get_site)
+
+    entry = _cloud_poll_entry()
+    config_entries = types.SimpleNamespace(
+        async_get_entry=lambda eid: entry,
+        async_update_entry=lambda e, data, options=None: pytest.fail("must not persist a malformed snapshot"),
+        async_reload=AsyncMock(),
+    )
+    hass = _hass()
+    hass.session = object()
+    hass.config_entries = config_entries
+    c = PlejdCoordinator(hass, entry)
+    await c._async_poll_cloud(None)  # must not raise
+    assert "site response is malformed" in caplog.text
+    assert malformed_label in caplog.text
+    config_entries.async_reload.assert_not_awaited()
+
+
+async def test_cloud_poll_syncs_a_genuinely_empty_but_well_formed_collection(monkeypatch):
+    # A well-formed response reporting zero scenes (e.g. the user deleted their last one)
+    # must NOT be treated as suspicious/malformed - unlike the emptiness-based heuristic
+    # this replaced, a real deletion has to sync like any other site change, or it would be
+    # silently blocked forever (every later poll's diff would keep finding "still empty").
+    async def _login(session, email, password):
+        return "TOKEN"
+
+    async def _get_site(session, token, site_id):
+        return _fake_site(devices=[])  # malformed defaults to empty - this is well-formed
 
     monkeypatch.setattr(coordinator_mod, "async_login", _login)
     monkeypatch.setattr(coordinator_mod, "async_get_site", _get_site)
@@ -1723,81 +1758,17 @@ async def test_cloud_poll_skips_a_suspiciously_empty_device_list(monkeypatch, ca
     entry = _cloud_poll_entry()  # cached CONF_DEVICES: [_DEV] (non-empty)
     config_entries = types.SimpleNamespace(
         async_get_entry=lambda eid: entry,
-        async_update_entry=lambda e, data, options=None: pytest.fail("must not persist a suspiciously empty snapshot"),
-        async_reload=AsyncMock(),
+        async_update_entry=lambda e, data, options=None: setattr(e, "data", data),
+        async_reload=AsyncMock(return_value=True),
     )
     hass = _hass()
     hass.session = object()
     hass.config_entries = config_entries
     c = PlejdCoordinator(hass, entry)
-    await c._async_poll_cloud(None)  # must not raise
-    assert "likely malformed response" in caplog.text
-    config_entries.async_reload.assert_not_awaited()
+    await c._async_poll_cloud(None)
 
-
-async def test_cloud_poll_skips_a_suspiciously_empty_room_list(monkeypatch, caplog):
-    # The empty-collection guard generalizes beyond devices - a room list that unexpectedly
-    # comes back empty while the cache has real rooms is just as suspicious.
-    from dataclasses import asdict
-
-    from plejd.cloud import PlejdCloudRoom
-
-    room = PlejdCloudRoom(
-        room_id="r1", name="Kok", address=100, member_addresses=[5], dimmable=True, dimmable_addresses=[5]
-    )
-
-    async def _login(session, email, password):
-        return "TOKEN"
-
-    async def _get_site(session, token, site_id):
-        return _fake_site(rooms=[])
-
-    monkeypatch.setattr(coordinator_mod, "async_login", _login)
-    monkeypatch.setattr(coordinator_mod, "async_get_site", _get_site)
-
-    entry = _cloud_poll_entry()
-    entry.data[CONF_ROOMS] = [asdict(room)]  # cache has a real room
-    config_entries = types.SimpleNamespace(
-        async_get_entry=lambda eid: entry,
-        async_update_entry=lambda e, data, options=None: pytest.fail("must not persist a suspiciously empty snapshot"),
-        async_reload=AsyncMock(),
-    )
-    hass = _hass()
-    hass.session = object()
-    hass.config_entries = config_entries
-    c = PlejdCoordinator(hass, entry)
-    await c._async_poll_cloud(None)  # must not raise
-    assert "likely malformed response" in caplog.text
-    config_entries.async_reload.assert_not_awaited()
-
-
-async def test_cloud_poll_skips_a_suspiciously_empty_motion_list(monkeypatch, caplog):
-    # motion is derived from a different source key (plejdDevices) than devices[] - a
-    # response that keeps devices[] but omits plejdDevices would sail past the devices
-    # guard above while still silently wiping every motion/illuminance entity.
-    async def _login(session, email, password):
-        return "TOKEN"
-
-    async def _get_site(session, token, site_id):
-        return _fake_site(motion=[])
-
-    monkeypatch.setattr(coordinator_mod, "async_login", _login)
-    monkeypatch.setattr(coordinator_mod, "async_get_site", _get_site)
-
-    entry = _cloud_poll_entry()
-    entry.data[CONF_MOTION] = [{"device_id": "m1", "name": "Motion sensor", "address": 42}]  # cache has a sensor
-    config_entries = types.SimpleNamespace(
-        async_get_entry=lambda eid: entry,
-        async_update_entry=lambda e, data, options=None: pytest.fail("must not persist a suspiciously empty snapshot"),
-        async_reload=AsyncMock(),
-    )
-    hass = _hass()
-    hass.session = object()
-    hass.config_entries = config_entries
-    c = PlejdCoordinator(hass, entry)
-    await c._async_poll_cloud(None)  # must not raise
-    assert "likely malformed response" in caplog.text
-    config_entries.async_reload.assert_not_awaited()
+    assert entry.data[CONF_DEVICES] == []
+    config_entries.async_reload.assert_awaited_once_with("e1")
 
 
 async def test_cloud_poll_resets_forced_transport_when_gateway_disappears(monkeypatch):
@@ -1832,6 +1803,42 @@ async def test_cloud_poll_resets_forced_transport_when_gateway_disappears(monkey
     c = PlejdCoordinator(hass, entry)
     await c._async_poll_cloud(None)
     assert updated_options[CONF_TRANSPORT] == TRANSPORT_AUTO
+
+
+async def test_cloud_poll_preserves_forced_transport_on_a_malformed_gateway_snapshot(monkeypatch):
+    # Unlike a genuine gateway removal (see above), a malformed response (gateways/
+    # resourceSetId missing/wrong type) must not reset a forced TRANSPORT_GATEWAY
+    # preference - the whole poll is skipped, so the user's choice survives until a
+    # well-formed response actually confirms the gateway is gone.
+    from plejd.const import TRANSPORT_GATEWAY
+
+    async def _login(session, email, password):
+        return "TOKEN"
+
+    async def _get_site(session, token, site_id):
+        return _fake_site(gateways=[], malformed=["gateways"])
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _login)
+    monkeypatch.setattr(coordinator_mod, "async_get_site", _get_site)
+
+    entry = _cloud_poll_entry()
+    entry.data[CONF_GATEWAYS] = ["gw1"]
+    entry.data[CONF_RESOURCE_SET_ID] = "rs1"
+    entry.data[CONF_INSTALLATION_ID] = "inst1"
+    entry.options = {CONF_TRANSPORT: TRANSPORT_GATEWAY}
+    config_entries = types.SimpleNamespace(
+        async_get_entry=lambda eid: entry,
+        async_update_entry=lambda e, data, options=None: pytest.fail("must not persist a malformed snapshot"),
+        async_reload=AsyncMock(),
+    )
+    hass = _hass()
+    hass.session = object()
+    hass.config_entries = config_entries
+    c = PlejdCoordinator(hass, entry)
+    await c._async_poll_cloud(None)  # must not raise
+
+    assert entry.options[CONF_TRANSPORT] == TRANSPORT_GATEWAY  # untouched
+    config_entries.async_reload.assert_not_awaited()
 
 
 async def test_start_self_heal_persists_without_reloading(monkeypatch):
@@ -1906,7 +1913,8 @@ async def test_cloud_poll_runs_a_follow_up_reload_for_a_concurrent_change(monkey
 async def test_cloud_poll_logs_when_the_follow_up_reload_raises(monkeypatch, caplog):
     # Same race as above, but the follow-up reload itself raises - that must be logged
     # and swallowed (it's a best-effort reload for someone else's change), not propagated
-    # out of this poll and not treated as this poll's own reload having failed.
+    # out of this poll and not treated as this poll's own reload having failed. It also
+    # must not be dropped for good: leaving it pending lets a later reload retry it.
     from plejd import schedule_ws
     from plejd.cloud import PlejdCloudDevice
 
@@ -1943,8 +1951,8 @@ async def test_cloud_poll_logs_when_the_follow_up_reload_raises(monkeypatch, cap
         await c._async_poll_cloud(None)
 
     assert calls == ["e1", "e1"]
-    assert schedule_ws.DATA_RELOAD_PENDING not in hass.data
-    assert "follow-up reload for a concurrent change failed" in caplog.text
+    assert hass.data[schedule_ws.DATA_RELOAD_PENDING] == "e1"
+    assert "follow-up reload for a concurrent change" in caplog.text
 
 
 async def test_cloud_poll_seeds_installation_id_for_new_gateway(monkeypatch):

@@ -185,6 +185,12 @@ class PlejdCloudSite:
     all_rooms: list[PlejdCloudRoomInfo] = field(default_factory=list)
     # every scene on the site, for scene management - see PlejdCloudSceneInfo.
     all_scenes: list[PlejdCloudSceneInfo] = field(default_factory=list)
+    # names of collections (devices/inputs/motion/scenes/rooms/gateways) whose raw source
+    # field(s) were missing or the wrong type in this response, as opposed to present and
+    # genuinely empty (e.g. the user deleted their last scene) - callers that cache and diff
+    # this site (coordinator.py's cloud poll) must not treat a malformed field the same as a
+    # real, intentional deletion.
+    malformed: frozenset[str] = frozenset()
 
 
 def _headers(token: str | None = None) -> dict[str, str]:
@@ -745,6 +751,25 @@ def parse_site(site: dict) -> PlejdCloudSite:
     # meshKey is a dash-separated hex string used as the BLE AccessAddress during commissioning.
     mesh_key: str = mesh.get("meshKey") or ""
 
+    # A field's raw source key being absent or the wrong type means this response is
+    # truncated/malformed, not that the user emptied that collection - the difference
+    # matters to callers (coordinator.py's cloud poll) that must not treat "cloud sent
+    # garbage" the same as "cloud correctly reports zero scenes now". An empty list/dict
+    # of the right type is a genuine, trustworthy "there are none".
+    malformed: set[str] = set()
+    if not isinstance(site.get("devices"), list):
+        malformed.add("devices")
+    if not isinstance(site.get("inputAddress"), dict):
+        malformed.add("inputs")
+    if not isinstance(site.get("plejdDevices"), list):
+        malformed.add("motion")
+    if not isinstance(site.get("scenes"), list):
+        malformed.add("scenes")
+    if not isinstance(site.get("rooms"), list) or not isinstance(site.get("roomAddress"), dict):
+        malformed.add("rooms")
+    if not isinstance(site.get("gateways"), list):
+        malformed.add("gateways")
+
     device_address = site.get("deviceAddress") or {}
     output_address = site.get("outputAddress")
     output_address = output_address if isinstance(output_address, dict) else {}
@@ -827,7 +852,9 @@ def parse_site(site: dict) -> PlejdCloudSite:
     # Gateways live in gateways[], not plejdDevices, and carry the firmware dict under
     # `firmwareObject` (their `firmware` is a bare buildTime int), so prefer that.
     firmware_by_device: dict[str, PlejdDeviceFirmware] = {}
-    for phys in (site.get("plejdDevices") or []) + (site.get("gateways") or []):
+    gateways_raw = site.get("gateways")
+    gateways_raw = gateways_raw if isinstance(gateways_raw, list) else []
+    for phys in (site.get("plejdDevices") or []) + gateways_raw:
         device_id = phys.get("deviceId")
         if device_id is None:
             continue
@@ -854,8 +881,8 @@ def parse_site(site: dict) -> PlejdCloudSite:
 
     # A gateway (GWY-01) has no controllable output, so it is absent from devices[];
     # it lives only in gateways[]. Its resourceSetId authorises the remote WebSocket.
-    gateway_objs = site.get("gateways") or []
-    gateways = [g["deviceId"] for g in gateway_objs if g.get("deviceId")]
+    gateway_objs = gateways_raw
+    gateways = [g["deviceId"] for g in gateway_objs if isinstance(g, dict) and g.get("deviceId")]
     # The gateway's own resourceSetId is authoritative. Only fall back to a site
     # resourceSet when there's exactly one (otherwise we can't tell which grants access).
     resource_sets = site.get("resourceSets") or []
@@ -994,4 +1021,5 @@ def parse_site(site: dict) -> PlejdCloudSite:
         rooms=rooms,
         all_rooms=all_rooms,
         all_scenes=all_scenes,
+        malformed=frozenset(malformed),
     )

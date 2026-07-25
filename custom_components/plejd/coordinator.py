@@ -496,31 +496,18 @@ class PlejdCoordinator:
         scenes = sorted((asdict(s) for s in site.scenes), key=lambda s: s["scene_id"])
         rooms = sorted((asdict(r) for r in site.rooms), key=lambda r: r["room_id"])
         gateways = sorted(site.gateways)
-        # A getSiteById response missing/omitting a collection entirely (e.g. truncated or
-        # otherwise malformed) parses the same as that collection being genuinely empty -
-        # applying that here unattended would silently remove every entity of that kind.
-        # gateways is deliberately excluded: it going empty is a real, expected state (the
-        # user removed their gateway in the app) that must be applied, not skipped - see
-        # the forced-transport reset below.
-        for label, fresh, cached_key in (
-            ("devices", devices, CONF_DEVICES),
-            ("inputs", inputs, CONF_INPUTS),
-            # motion is derived from plejdDevices (like devices/firmware), a different
-            # source key than devices[] - a response that omits plejdDevices while still
-            # including devices[] would otherwise slip past the devices/inputs guards
-            # above and silently empty out every motion/illuminance entity.
-            ("motion", motion, CONF_MOTION),
-            ("scenes", scenes, CONF_SCENES),
-            ("rooms", rooms, CONF_ROOMS),
-        ):
-            if not fresh and entry.data.get(cached_key):
-                _LOGGER.warning(
-                    "Plejd cloud poll: fresh site unexpectedly has no %s (cache has %d) - "
-                    "skipping this poll as a likely malformed response",
-                    label,
-                    len(entry.data[cached_key]),
-                )
-                return
+        # parse_site() distinguishes "this collection's raw source field was absent or the
+        # wrong type" (site.malformed) from "the cloud correctly reports zero of these now"
+        # (a real, empty list) - only the former is untrustworthy. Treating emptiness alone
+        # as suspicious would also block a legitimate last-scene/last-room deletion (and any
+        # other unrelated site change) from ever syncing, since every later poll's diff
+        # would keep finding the same "still empty" non-difference forever.
+        if site.malformed:
+            _LOGGER.warning(
+                "Plejd cloud poll: site response is malformed (%s) - skipping this poll",
+                ", ".join(sorted(site.malformed)),
+            )
+            return
         # Mirrors manage_device.py's own device-removal refresh: drop a forced gateway-only
         # preference once there's no usable gateway left, or a gateway disappearing here
         # (removed in the app) would leave the coordinator stuck raising ConfigEntryNotReady
@@ -580,9 +567,17 @@ class PlejdCoordinator:
             self.hass.data.pop(schedule_ws.DATA_RELOAD_PENDING, None)
             async with lock:
                 try:
-                    await self.hass.config_entries.async_reload(entry.entry_id)
-                except Exception:  # noqa: BLE001 - best-effort follow-up for someone else's change
-                    _LOGGER.warning("Plejd cloud poll: follow-up reload for a concurrent change failed")
+                    follow_up_ok = await self.hass.config_entries.async_reload(entry.entry_id)
+                except Exception:  # noqa: BLE001 - treated like a rejected follow-up reload below
+                    _LOGGER.exception("Plejd cloud poll: follow-up reload for a concurrent change raised")
+                    follow_up_ok = False
+            if not follow_up_ok:
+                # A rejected (not raised) reload is silently dropping someone else's change
+                # otherwise - re-mark it pending so the next successful reload (from this
+                # poll or any other operation) picks it up, instead of leaving the running
+                # coordinator stale until an unrelated site/option change happens to retry it.
+                _LOGGER.warning("Plejd cloud poll: follow-up reload for a concurrent change failed; leaving it pending")
+                self.hass.data[schedule_ws.DATA_RELOAD_PENDING] = entry.entry_id
         if not reload_ok:
             # Revert the cached snapshot rather than just logging: leaving entry.data
             # already matching the fresh site would make every later poll's comparison

@@ -1133,6 +1133,47 @@ def test_parse_site_room_dimmable_addresses_excludes_on_off_only_members():
     assert room.dimmable_addresses == [11]  # d1 is dimmable; d6 (traits=0) is on/off only
 
 
+def test_parse_site_marks_nothing_malformed_for_a_well_formed_empty_site():
+    # A genuinely empty-but-well-formed site (every collection key present as its correct
+    # empty type) must not be flagged - only an absent/wrong-type field is a parse concern,
+    # not a caller-level "is this data trustworthy" one.
+    site = {
+        "siteId": "S1",
+        "title": "Empty",
+        "plejdMesh": {"cryptoKey": "00" * 16},
+        "devices": [],
+        "inputAddress": {},
+        "plejdDevices": [],
+        "scenes": [],
+        "sceneIndex": {},
+        "rooms": [],
+        "roomAddress": {},
+        "gateways": [],
+    }
+    assert parse_site(site).malformed == frozenset()
+
+
+@pytest.mark.parametrize(
+    ("key", "bad_value", "label"),
+    [
+        ("devices", None, "devices"),
+        ("inputAddress", [], "inputs"),
+        ("plejdDevices", {}, "motion"),
+        ("scenes", "not-a-list", "scenes"),
+        ("rooms", None, "rooms"),
+        ("gateways", "not-a-list", "gateways"),
+    ],
+)
+def test_parse_site_marks_a_collection_malformed_when_its_source_field_is_the_wrong_type(key, bad_value, label):
+    site = {**_SITE, key: bad_value}
+    assert label in parse_site(site).malformed
+
+
+def test_parse_site_marks_rooms_malformed_when_room_address_is_the_wrong_type():
+    site = {**_SITE, "rooms": [], "roomAddress": "not-a-dict"}
+    assert "rooms" in parse_site(site).malformed
+
+
 async def test_update_time_event_sends_minimal_payload_without_night_reduction():
     from aioresponses import CallbackResult
 
