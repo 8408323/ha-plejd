@@ -77,40 +77,36 @@ def _cloud_schedule_owning_scene(entry: ConfigEntry, scene_id: str) -> dict | No
     )
 
 
-async def _async_refresh_and_reload(hass: HomeAssistant, entry: ConfigEntry, http_session, token) -> None:
+async def _async_refresh_and_reload(
+    hass: HomeAssistant, entry: ConfigEntry, http_session, token, *, mutation: str | None = None
+) -> None:
     try:
         fresh_site = await async_get_site(http_session, token, entry.data[CONF_SITE_ID])
     except PlejdCloudError as err:
         raise HomeAssistantError(f"Plejd cloud error refreshing site: {err}") from err
-    # Claim the manual-reload so the entry's update listener (_async_reload_entry) doesn't
-    # also reload for this same data change, racing this one - same guard schedule_ws's
-    # own _async_persist uses for the identical async_update_entry -> listener race.
-    hass.data[schedule_ws.DATA_MANUAL_RELOAD] = entry.entry_id
-    try:
-        hass.config_entries.async_update_entry(
-            entry,
-            data={
-                **entry.data,
-                CONF_DEVICES: [asdict(d) for d in fresh_site.devices],
-                CONF_INPUTS: [asdict(i) for i in fresh_site.inputs],
-                CONF_MOTION: [asdict(m) for m in fresh_site.motion],
-                CONF_SCENES: [asdict(s) for s in fresh_site.scenes],
-                CONF_ROOMS: [asdict(r) for r in fresh_site.rooms],
-                CONF_GATEWAYS: fresh_site.gateways,
-                CONF_RESOURCE_SET_ID: fresh_site.resource_set_id,
-                CONF_DEVICE_ADDRESSES: fresh_site.device_addresses,
-            },
-        )
-        await hass.config_entries.async_reload(entry.entry_id)
-    finally:
-        hass.data.pop(schedule_ws.DATA_MANUAL_RELOAD, None)
-        hass.data.pop(schedule_ws.DATA_MANUAL_RELOAD_SEEN, None)
-        if hass.data.get(schedule_ws.DATA_RELOAD_PENDING) == entry.entry_id:
-            # A concurrent options/data change's own reload was suppressed by the guard
-            # above while ours was in flight; give it a reload of its own instead of
-            # dropping it silently (see _async_reload_entry).
-            hass.data.pop(schedule_ws.DATA_RELOAD_PENDING, None)
-            await hass.config_entries.async_reload(entry.entry_id)
+    await schedule_ws.async_reload_entry_with_lock(
+        hass,
+        entry,
+        {
+            **entry.data,
+            CONF_DEVICES: [asdict(d) for d in fresh_site.devices],
+            CONF_INPUTS: [asdict(i) for i in fresh_site.inputs],
+            CONF_MOTION: [asdict(m) for m in fresh_site.motion],
+            CONF_SCENES: [asdict(s) for s in fresh_site.scenes],
+            CONF_ROOMS: [asdict(r) for r in fresh_site.rooms],
+            CONF_GATEWAYS: fresh_site.gateways,
+            CONF_RESOURCE_SET_ID: fresh_site.resource_set_id,
+            CONF_DEVICE_ADDRESSES: fresh_site.device_addresses,
+        },
+        # A create/remove's cloud mutation has already happened and isn't safely retryable
+        # by the time this runs - raising on a reload failure here would make the whole
+        # service call look failed: retrying a create makes a duplicate scene, retrying a
+        # remove just gets "not found". Only the reload itself needs a manual retry (e.g. a
+        # later options-flow reload, or the next successful management operation's own
+        # reload picking up the same data). A plain update is safe to retry as-is.
+        raise_on_reload_failure=mutation is None,
+        error_context=f"a scene {mutation}" if mutation else "a scene update",
+    )
 
 
 async def async_create_scene(
@@ -138,7 +134,7 @@ async def async_create_scene(
         )
     except PlejdCloudError as err:
         raise HomeAssistantError(f"Plejd cloud error creating scene: {err}") from err
-    await _async_refresh_and_reload(hass, entry, http_session, token)
+    await _async_refresh_and_reload(hass, entry, http_session, token, mutation="create")
 
 
 async def async_update_scene(
@@ -227,4 +223,4 @@ async def async_remove_scene(hass: HomeAssistant, entry: ConfigEntry, *, scene_i
         raise HomeAssistantError(f"Plejd cloud error removing scene: {err}") from err
     if not ok:
         raise HomeAssistantError(f"Plejd cloud rejected removing scene '{scene.name}'")
-    await _async_refresh_and_reload(hass, entry, http_session, token)
+    await _async_refresh_and_reload(hass, entry, http_session, token, mutation="remove")

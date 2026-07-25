@@ -18,6 +18,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
+from . import schedule_ws
 from .cloud import (
     PlejdCloudError,
     async_get_site,
@@ -132,9 +133,10 @@ async def async_add_device(
         fresh_site = await async_get_site(http_session, token, entry.data[CONF_SITE_ID])
     except PlejdCloudError as err:
         raise HomeAssistantError(f"Plejd cloud error refreshing device list: {err}") from err
-    hass.config_entries.async_update_entry(
+    await schedule_ws.async_reload_entry_with_lock(
+        hass,
         entry,
-        data={
+        {
             **entry.data,
             CONF_DEVICES: [asdict(d) for d in fresh_site.devices],
             CONF_INPUTS: [asdict(i) for i in fresh_site.inputs],
@@ -145,8 +147,13 @@ async def async_add_device(
             CONF_RESOURCE_SET_ID: fresh_site.resource_set_id,
             CONF_DEVICE_ADDRESSES: fresh_site.device_addresses,
         },
+        # Commissioning already happened and is non-idempotent by this point (the device is
+        # no longer advertising as unprovisioned) - raising on a reload failure here would
+        # report a successfully-added device as a failed add, with no way to retry through
+        # this same path. Only the reload itself needs a manual retry.
+        raise_on_reload_failure=False,
+        error_context="adding a device",
     )
-    await hass.config_entries.async_reload(entry.entry_id)
 
     if input_setting_errors:
         raise HomeAssistantError(f"Device added, but some input settings failed: {'; '.join(input_setting_errors)}")

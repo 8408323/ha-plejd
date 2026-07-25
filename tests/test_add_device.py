@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from bleak.backends.device import BLEDevice
 from homeassistant.exceptions import HomeAssistantError
+from plejd import schedule_ws
 from plejd.add_device import async_add_device
 from plejd.cloud import NewDeviceAddresses, PlejdCloudError, PlejdCloudRoom, PlejdCloudSite
 
@@ -43,6 +44,7 @@ def _hass(service_infos=None, ble_devices=None):
     if service_infos is None:
         service_infos = [_fake_service_info(_ADDR, {887: bytes([0x08, 0, 0, 1])})]
     return types.SimpleNamespace(
+        data={},
         service_infos=list(service_infos),
         ble_devices=ble_devices or {},
         config_entries=types.SimpleNamespace(
@@ -132,6 +134,128 @@ async def test_add_device_commissions_and_reloads(monkeypatch):
 
     assert commissioned[0] == {"name": "Bedroom", "hw": "1", "room_id": "r1"}
     hass.config_entries.async_reload.assert_awaited_once_with("e1")
+    # the reload lock must not leak past a successful call, or a later, genuinely
+    # concurrent options/data change would be wrongly suppressed by _async_reload_entry
+    assert not schedule_ws.async_get_reload_lock(hass, entry.entry_id).locked()
+
+
+async def test_add_device_does_not_raise_when_only_the_reload_fails(monkeypatch, caplog):
+    # Commissioning already happened (non-idempotent - the device is no longer advertising
+    # as unprovisioned) by the time the reload is attempted - raising here would report a
+    # successfully-added device as a failed add, with no way to retry through this path.
+    hass = _hass(ble_devices={_ADDR: _device()})
+    entry = _entry()
+    monkeypatch.setattr("plejd.add_device.async_login", AsyncMock(return_value="tok"))
+    monkeypatch.setattr("plejd.add_device.async_get_site", AsyncMock(return_value=_site()))
+
+    async def _fake_commission(
+        http_session, token, site, ble_device, name, hw="0", fw=0, room_id=None, room_title=None, room_category=None
+    ):
+        return NewDeviceAddresses(device_address=5, output_addresses={0: 50})
+
+    monkeypatch.setattr("plejd.add_device.async_commission_device", _fake_commission)
+    hass.config_entries.async_reload = AsyncMock(return_value=False)
+
+    await async_add_device(hass, entry, address=_ADDR, name="Bedroom")
+
+    assert "entry failed to reload after adding a device" in caplog.text
+
+
+async def test_add_device_does_not_double_reload_for_its_own_update(monkeypatch):
+    # The real update listener (not an injected flag) must observe the reload lock as
+    # held and defer to add_device's own reload - this exercises the actual mechanism
+    # the guard is meant to prevent a race in.
+    import asyncio
+
+    from plejd import _async_reload_entry
+
+    hass = _hass(ble_devices={_ADDR: _device()})
+    entry = _entry()
+    monkeypatch.setattr("plejd.add_device.async_login", AsyncMock(return_value="tok"))
+    monkeypatch.setattr("plejd.add_device.async_get_site", AsyncMock(return_value=_site()))
+
+    async def _fake_commission(
+        http_session, token, site, ble_device, name, hw="0", fw=0, room_id=None, room_title=None, room_category=None
+    ):
+        return NewDeviceAddresses(device_address=5, output_addresses={0: 50})
+
+    monkeypatch.setattr("plejd.add_device.async_commission_device", _fake_commission)
+
+    listener_tasks: list[asyncio.Task] = []
+
+    def _update_entry(e, data):
+        e.data = data
+        # Real HA schedules the update listener as a new task rather than running it
+        # inline - mirror that so it actually races the reload below, not just a flag.
+        listener_tasks.append(asyncio.ensure_future(_async_reload_entry(hass, e)))
+
+    hass.config_entries.async_update_entry = _update_entry
+
+    real_reload = AsyncMock(return_value=True)
+
+    async def _reload(entry_id):
+        await asyncio.sleep(0)  # let the just-scheduled listener task run while still locked
+        return await real_reload(entry_id)
+
+    hass.config_entries.async_reload = AsyncMock(side_effect=_reload)
+
+    await async_add_device(hass, entry, address=_ADDR, name="Bedroom")
+    await asyncio.gather(*listener_tasks)
+
+    # Only add_device's own explicit reload happened - the listener deferred to it
+    # instead of racing a second, concurrent one for the same change.
+    real_reload.assert_awaited_once_with("e1")
+
+
+async def test_add_device_runs_a_follow_up_reload_for_a_genuinely_concurrent_change(monkeypatch):
+    # A DIFFERENT, unrelated write to the same entry landing while add_device's own
+    # reload is still in flight is not anticipated by add_device's own self-reload
+    # marker - the real listener must mark it pending, and add_device must run a
+    # follow-up reload for it once its own reload is done, not drop it silently.
+    import asyncio
+
+    from plejd import _async_reload_entry
+
+    hass = _hass(ble_devices={_ADDR: _device()})
+    entry = _entry()
+    monkeypatch.setattr("plejd.add_device.async_login", AsyncMock(return_value="tok"))
+    monkeypatch.setattr("plejd.add_device.async_get_site", AsyncMock(return_value=_site()))
+
+    async def _fake_commission(
+        http_session, token, site, ble_device, name, hw="0", fw=0, room_id=None, room_title=None, room_category=None
+    ):
+        return NewDeviceAddresses(device_address=5, output_addresses={0: 50})
+
+    monkeypatch.setattr("plejd.add_device.async_commission_device", _fake_commission)
+
+    listener_tasks: list[asyncio.Task] = []
+
+    def _update_entry(e, data):
+        e.data = data
+        listener_tasks.append(asyncio.ensure_future(_async_reload_entry(hass, e)))
+
+    hass.config_entries.async_update_entry = _update_entry
+
+    real_reload = AsyncMock(return_value=True)
+    concurrent_write_done = False
+
+    async def _reload(entry_id):
+        nonlocal concurrent_write_done
+        if not concurrent_write_done:
+            # Simulate an unrelated write (e.g. a different service call) landing while
+            # add_device's own reload is in flight and still holds the lock.
+            concurrent_write_done = True
+            hass.config_entries.async_update_entry(entry, {**entry.data, "concurrent": True})
+        await asyncio.sleep(0)  # let both listener tasks run while still locked
+        return await real_reload(entry_id)
+
+    hass.config_entries.async_reload = AsyncMock(side_effect=_reload)
+
+    await async_add_device(hass, entry, address=_ADDR, name="Bedroom")
+    await asyncio.gather(*listener_tasks)
+
+    # add_device's own reload, then a follow-up for the concurrent change - not dropped.
+    assert real_reload.await_count == 2
 
 
 async def test_add_device_refreshes_gateway_metadata(monkeypatch):

@@ -10,7 +10,12 @@ import pytest
 from homeassistant.exceptions import HomeAssistantError
 from plejd import schedule_ws
 from plejd.cloud import PlejdAuthError, PlejdCloudError, PlejdCloudSceneInfo, PlejdCloudSite
-from plejd.manage_schedule import async_create_schedule, async_remove_schedule, async_update_schedule
+from plejd.manage_schedule import (
+    _sync_cloud_schedules_cache,
+    async_create_schedule,
+    async_remove_schedule,
+    async_update_schedule,
+)
 
 _KEY = bytes(range(16))
 _STEP = {"device_id": "d1", "output": 0, "state": "On", "value": 255}
@@ -464,6 +469,36 @@ async def test_create_schedule_succeeds_and_caches_it(monkeypatch):
     assert hass.bus.fired == [("plejd_schedule_created", {"schedule_id": "te1"})]
 
 
+async def test_create_schedule_does_not_raise_when_only_the_reload_fails(monkeypatch, caplog):
+    # The schedule was already created on the cloud (non-idempotent) by the time the
+    # reload is attempted - raising here would make the whole service call look failed,
+    # inviting a retry that creates a duplicate schedule. The id must still be returned.
+    hass = _hass()
+    entry = _entry()
+    monkeypatch.setattr("plejd.manage_schedule.async_login", AsyncMock(return_value="tok"))
+    monkeypatch.setattr("plejd.manage_schedule.async_get_site", AsyncMock(return_value=_site()))
+    monkeypatch.setattr("plejd.manage_schedule.async_cloud_create_scene", AsyncMock(return_value="new-scene-id"))
+    monkeypatch.setattr(
+        "plejd.manage_schedule.async_cloud_create_time_event", AsyncMock(return_value={"eventId": "te1"})
+    )
+    monkeypatch.setattr("plejd.manage_schedule.async_cloud_update_scene", AsyncMock(return_value=True))
+    hass.config_entries.async_reload = AsyncMock(return_value=False)
+
+    schedule_id = await async_create_schedule(
+        hass,
+        entry,
+        title="Garage",
+        scene_steps=[_STEP],
+        start_event="sunset",
+        start_offset=15,
+        end_event="sunrise",
+        end_offset=0,
+    )
+
+    assert schedule_id == "te1"
+    assert "entry failed to reload after a schedule create" in caplog.text
+
+
 async def test_create_schedule_logs_when_createdby_backfill_is_rejected(monkeypatch, caplog):
     # The schedule works even if this backfill fails (the scene(s) and trigger are already
     # live) - so a rejection is logged, not raised.
@@ -854,6 +889,7 @@ async def test_create_schedule_runs_a_follow_up_reload_for_a_concurrent_change(m
         calls.append(entry_id)
         if len(calls) == 1:
             hass.data[schedule_ws.DATA_RELOAD_PENDING] = entry_id
+        return True
 
     hass.config_entries.async_reload = AsyncMock(side_effect=_reload_sets_pending)
 
@@ -1658,3 +1694,25 @@ async def test_remove_schedule_serializes_via_the_lock(monkeypatch):
     await async_remove_schedule(hass, entry, schedule_id="te1")
 
     assert entry.data["cloud_schedules"] == []
+
+
+async def test_sync_cloud_schedules_cache_runs_a_follow_up_reload_for_a_concurrent_change():
+    hass = _hass()
+    entry = _entry()
+    hass.data[schedule_ws.DATA_RELOAD_PENDING] = "e1"
+
+    await _sync_cloud_schedules_cache(hass, entry, [])
+
+    hass.config_entries.async_reload.assert_awaited_once_with("e1")
+    assert schedule_ws.DATA_RELOAD_PENDING not in hass.data
+
+
+async def test_sync_cloud_schedules_cache_logs_when_the_follow_up_reload_raises(caplog):
+    hass = _hass()
+    entry = _entry()
+    hass.data[schedule_ws.DATA_RELOAD_PENDING] = "e1"
+    hass.config_entries.async_reload = AsyncMock(side_effect=RuntimeError("boom"))
+
+    await _sync_cloud_schedules_cache(hass, entry, [])
+
+    assert "follow-up reload for a concurrent change failed" in caplog.text
