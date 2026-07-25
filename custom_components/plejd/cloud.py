@@ -1018,6 +1018,10 @@ def parse_site(site: dict) -> PlejdCloudSite:
     non_light_groups: set[int] = set()
     for device_id, out_map in output_groups.items():
         if not isinstance(out_map, dict):
+            # Skipping keeps the parse alive, but it drops this device's group memberships,
+            # which shrinks or empties the room list - a caching caller would read that as a
+            # real change and remove those room entities. Flag rather than lose them quietly.
+            malformed.add("rooms")
             continue  # untrusted cloud data: skip a malformed per-device group-membership map
         dev_out_addr = output_address.get(device_id)
         dev_out_addr = dev_out_addr if isinstance(dev_out_addr, dict) else {}

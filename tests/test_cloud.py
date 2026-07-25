@@ -1357,6 +1357,14 @@ def test_parse_site_flags_rather_than_crashes_on_a_non_string_id(key, record, la
     assert labels <= site.malformed
 
 
+def test_parse_site_flags_rooms_for_a_malformed_per_device_output_group_map():
+    # Skipping the bad per-device entry keeps the parse alive but drops that device's group
+    # memberships, shrinking or emptying the room list - which the diffing poll would read as
+    # a real change and use to remove those room entities.
+    site = parse_site({**_SITE, "roomAddress": {"r1": 14}, "outputGroups": {"d1": "truncated"}})
+    assert "rooms" in site.malformed
+
+
 @pytest.mark.parametrize(
     "bad_entry",
     [

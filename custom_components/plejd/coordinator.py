@@ -511,8 +511,13 @@ class PlejdCoordinator:
         # as "no usable gateway" (see config_flow's own has_gateway check), so flagging it
         # would block every future poll for such a site - the exact trap the malformed
         # checks above were added to avoid.
+        # Only reusable while the gateway set is UNCHANGED: a cached grant belongs to the
+        # gateway it was issued for, so copying it onto a replacement gateway (gw-old swapped
+        # for gw-new) would keep has_gateway true and rebuild the connection with an obsolete
+        # resource set forever - every later poll would see the same cached value and never
+        # repair it. A changed set falls through to None, which correctly degrades to BLE.
         resource_set_id = site.resource_set_id
-        if gateways and resource_set_id is None:
+        if gateways and resource_set_id is None and gateways == (entry.data.get(CONF_GATEWAYS) or []):
             resource_set_id = entry.data.get(CONF_RESOURCE_SET_ID)
         # Mirrors manage_device.py's own device-removal refresh: drop a forced gateway-only
         # preference once there's no usable gateway left, or a gateway disappearing here
@@ -569,6 +574,7 @@ class PlejdCoordinator:
         # values from before any concurrent operation that landed while we waited for the lock.
         overwritten_data: dict[str, Any] = {}
         overwritten_transport: tuple[str, ...] = ()
+        written_transport: str | None = None  # what we actually wrote, to detect a newer edit
         # What the site-derived keys looked like when the diff above was computed. If they
         # differ once we hold the lock, a management operation (device/room/scene/schedule)
         # landed in between and its result is NEWER than this poll's fetch - applying our
@@ -578,7 +584,14 @@ class PlejdCoordinator:
         lock = schedule_ws.async_get_reload_lock(self.hass, entry.entry_id)
         try:
             async with lock:
-                if any(entry.data.get(key) != value for key, value in pre_lock_values.items()):
+                if self._closed:
+                    # Waiting for the lock is an await point, so the operation holding it (or an
+                    # independent unload) can have shut this coordinator down meanwhile - the
+                    # interval unsubscribe cannot stop an already-running callback. Writing now
+                    # would reload the entry after our own teardown, racing entry removal or
+                    # immediately reloading the coordinator that replaced us.
+                    _LOGGER.debug("Plejd cloud poll: coordinator was shut down while waiting for the lock")
+                elif any(entry.data.get(key) != value for key, value in pre_lock_values.items()):
                     # Skip rather than overwrite: the next interval re-fetches, and a
                     # management operation's own reload has already applied its change.
                     _LOGGER.info(
@@ -593,13 +606,11 @@ class PlejdCoordinator:
                     # discard its change permanently.
                     overwritten_data = {key: entry.data[key] for key in new_data if key in entry.data}
                     overwritten_transport = (entry.options[CONF_TRANSPORT],) if CONF_TRANSPORT in entry.options else ()
+                    written_transport = _transport_for(entry.options.get(CONF_TRANSPORT, TRANSPORT_AUTO))
                     self.hass.config_entries.async_update_entry(
                         entry,
                         data={**entry.data, **new_data},
-                        options={
-                            **entry.options,
-                            CONF_TRANSPORT: _transport_for(entry.options.get(CONF_TRANSPORT, TRANSPORT_AUTO)),
-                        },
+                        options={**entry.options, CONF_TRANSPORT: written_transport},
                     )
                     try:
                         reload_ok = await self.hass.config_entries.async_reload(entry.entry_id)
@@ -639,21 +650,24 @@ class PlejdCoordinator:
                 "snapshot so the next poll retries it"
             )
             async with lock:
-                # Restore only what this poll actually overwrote (captured inside the lock,
-                # just before the write), onto entry.data/entry.options as they are NOW - a
-                # wholesale write-back would also undo any concurrent change, whether it
-                # landed while we waited for the lock or while the failed reload was running.
+                # Restore a key only if its CURRENT value is still the one this poll wrote.
+                # Reconfigure and the options flow do not take this integration-specific lock,
+                # so a newer edit to one of these keys is reachable even here - and undoing it
+                # would be the very destruction this rollback exists to avoid.
                 reverted_data = {**entry.data}
-                for key in new_data:
+                for key, written in new_data.items():
+                    if entry.data.get(key) != written:
+                        continue  # someone edited it after us; theirs is newer, leave it alone
                     if key in overwritten_data:
                         reverted_data[key] = overwritten_data[key]
                     else:
                         reverted_data.pop(key, None)  # a key this poll introduced (e.g. installation id)
                 reverted_options = {**entry.options}
-                if overwritten_transport:
-                    reverted_options[CONF_TRANSPORT] = overwritten_transport[0]
-                else:
-                    reverted_options.pop(CONF_TRANSPORT, None)
+                if entry.options.get(CONF_TRANSPORT) == written_transport:
+                    if overwritten_transport:
+                        reverted_options[CONF_TRANSPORT] = overwritten_transport[0]
+                    else:
+                        reverted_options.pop(CONF_TRANSPORT, None)
                 schedule_ws.async_mark_expecting_self_reload(self.hass, entry.entry_id)
                 try:
                     self.hass.config_entries.async_update_entry(entry, data=reverted_data, options=reverted_options)
