@@ -899,13 +899,17 @@ def parse_site(site: dict) -> PlejdCloudSite:
     # makes a later per-input settings write target a different physical input.
     input_candidates: list[tuple[str, int, int]] = []
     for device_id, idx_map in input_address.items():
+        # Corrupt entries are skipped so the parse survives, but skipping silently drops real
+        # buttons - which the diffing poll would read as a deletion and persist, removing
+        # those event entities. Flag the collection so the snapshot is rejected instead.
         if not isinstance(idx_map, dict):
+            malformed.add("inputs")
             continue  # untrusted cloud data: a malformed per-device input map
         for idx_str, addr in idx_map.items():
             try:
                 input_candidates.append((device_id, int(idx_str), int(addr)))
             except (ValueError, TypeError):
-                continue  # malformed entry from the cloud - skip it, not fatal
+                malformed.add("inputs")  # a non-numeric index/address is the same loss
     input_candidates.sort()
     inputs: list[PlejdCloudInput] = []
     seen_addr: set[int] = set()

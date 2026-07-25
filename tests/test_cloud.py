@@ -1332,9 +1332,21 @@ def test_parse_site_flags_rather_than_crashes_on_a_non_string_id(key, record, la
     assert labels <= site.malformed
 
 
-def test_parse_site_skips_a_malformed_per_device_input_map():
-    site = parse_site({**_SITE, "inputAddress": {"d1": "not-a-dict", "d3": {"0": 31}}})
+@pytest.mark.parametrize(
+    "bad_entry",
+    [
+        {"d1": "not-a-dict"},  # the whole per-device map is corrupt
+        {"d1": {"nope": 11}},  # non-numeric input index
+        {"d1": {"0": "nope"}},  # non-numeric address
+    ],
+)
+def test_parse_site_flags_inputs_for_a_malformed_input_entry(bad_entry):
+    # The bad entry is skipped so the parse survives, but skipping silently drops real
+    # buttons - which the diffing poll would read as a deletion and persist, removing those
+    # event entities. The collection must be flagged so the snapshot is rejected instead.
+    site = parse_site({**_SITE, "inputAddress": {**bad_entry, "d3": {"0": 31}}})
     assert [(i.device_id, i.address) for i in site.inputs] == [("d3", 31)]  # the good one survives
+    assert "inputs" in site.malformed
 
 
 def test_parse_site_skips_a_motion_sensor_with_a_non_string_id():
