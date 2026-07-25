@@ -152,7 +152,10 @@ async def test_remove_device_succeeds_and_reloads(monkeypatch):
     hass.config_entries.async_reload.assert_awaited_once_with("e1")
 
 
-async def test_remove_device_raises_when_reload_fails(monkeypatch):
+async def test_remove_device_does_not_raise_when_only_the_reload_fails(monkeypatch, caplog):
+    # The device's cloud removal already happened (non-idempotent - retrying just gets
+    # "not found") by the time the reload is attempted - raising here would report a
+    # successful removal as a failed one, with no way to retry through this same path.
     hass = _hass()
     entry = _entry()
     hass.config_entries.async_reload = AsyncMock(return_value=False)
@@ -160,8 +163,9 @@ async def test_remove_device_raises_when_reload_fails(monkeypatch):
     monkeypatch.setattr("plejd.manage_device.async_get_site", AsyncMock(side_effect=[_site([_device()]), _site([])]))
     monkeypatch.setattr("plejd.manage_device.async_cloud_remove_device", AsyncMock(return_value=True))
 
-    with pytest.raises(HomeAssistantError, match="reloading the integration failed"):
-        await async_remove_device(hass, entry, device_id="d1")
+    await async_remove_device(hass, entry, device_id="d1")
+
+    assert "entry failed to reload after removing a device" in caplog.text
 
 
 async def test_remove_device_finds_input_devices(monkeypatch):

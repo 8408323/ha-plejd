@@ -123,10 +123,9 @@ async def test_update_room_forwards_fields_and_reloads(monkeypatch):
     update_mock.assert_awaited_once_with(None, "tok", "S1", "r1", title="Kök", order=1, category="Kitchen")
     assert entry.data["rooms"] == []  # refreshed from fresh_site.rooms (unrelated light-grouping list)
     hass.config_entries.async_reload.assert_awaited_once_with("e1")
-    # the manual-reload guard must not leak past a successful call, or a later, genuinely
+    # the reload lock must not leak past a successful call, or a later, genuinely
     # concurrent options/data change would be wrongly suppressed by _async_reload_entry
-    assert schedule_ws.DATA_MANUAL_RELOAD not in hass.data
-    assert schedule_ws.DATA_MANUAL_RELOAD_SEEN not in hass.data
+    assert not schedule_ws.async_get_reload_lock(hass, entry.entry_id).locked()
 
 
 async def test_update_room_runs_a_follow_up_reload_for_a_concurrent_change(monkeypatch):
@@ -148,6 +147,7 @@ async def test_update_room_runs_a_follow_up_reload_for_a_concurrent_change(monke
         calls.append(entry_id)
         if len(calls) == 1:  # only the first reload race-loses to the concurrent change
             hass.data[schedule_ws.DATA_RELOAD_PENDING] = entry_id
+        return True
 
     hass.config_entries.async_reload = AsyncMock(side_effect=_reload_sets_pending)
 
