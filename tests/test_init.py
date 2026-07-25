@@ -1490,3 +1490,22 @@ async def test_setup_survives_remote_profile_load_failure(monkeypatch):
     monkeypatch.setattr(plejd, "PlejdRemoteProfiles", _BadProfiles)
     hass, entry = _hass(), _entry()
     assert await async_setup_entry(hass, entry) is True  # storage error must not abort setup
+
+
+async def test_remove_entry_clears_the_persistent_repair_issue():
+    # The malformed-cloud issue is persistent, and its only other clear paths (a healthy
+    # poll, a successful reconfigure) are unreachable once the entry is gone - so without
+    # this the user keeps an orphaned warning about an integration they removed.
+    from plejd import async_remove_entry
+    from plejd.coordinator import DATA_LAST_SELF_HEAL, DATA_MALFORMED_POLLS
+
+    hass, entry = _hass(), _entry()
+    hass.created_issues = {f"malformed_cloud_site_{entry.entry_id}": {"domain": "plejd"}}
+    hass.data[DATA_MALFORMED_POLLS] = {entry.entry_id: 3}
+    hass.data[DATA_LAST_SELF_HEAL] = {entry.entry_id: 1_000.0}
+
+    await async_remove_entry(hass, entry)
+
+    assert f"malformed_cloud_site_{entry.entry_id}" not in hass.created_issues
+    assert entry.entry_id not in hass.data[DATA_MALFORMED_POLLS]
+    assert entry.entry_id not in hass.data[DATA_LAST_SELF_HEAL]

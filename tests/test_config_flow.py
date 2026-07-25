@@ -227,7 +227,7 @@ async def test_reauth_routes_to_confirm():
 
 async def test_reauth_confirm_success_updates_password(monkeypatch):
     _patch_cloud(monkeypatch, login="tok")
-    flow = _reauth_flow(types.SimpleNamespace(data={CONF_EMAIL: "u@x.se", CONF_PASSWORD: "old"}))
+    flow = _reauth_flow(types.SimpleNamespace(entry_id="e1", data={CONF_EMAIL: "u@x.se", CONF_PASSWORD: "old"}))
     res = await flow.async_step_reauth_confirm({CONF_PASSWORD: "newpw"})
     assert res["type"] == "abort" and res["reason"] == "reauth_successful"
     assert res["data_updates"] == {CONF_PASSWORD: "newpw"}
@@ -709,3 +709,19 @@ async def test_reconfigure_clears_the_malformed_cloud_repair_issue(monkeypatch):
     res = await flow.async_step_reconfigure({})
     assert res["reason"] == "reconfigure_successful"
     assert "malformed_cloud_site_e1" not in flow.hass.created_issues
+
+
+async def test_reauth_success_releases_the_self_heal_cooldown(monkeypatch):
+    # The cooldown is deliberately held through an auth failure, so the setup retry that
+    # follows a successful reauth would otherwise wait it out - at the exact moment it could
+    # finally fetch the crypto key/gateway data that reauth itself does not touch.
+    from plejd.coordinator import DATA_LAST_SELF_HEAL
+
+    entry = _stored_entry()
+    _patch_cloud(monkeypatch, login="tok")
+    flow = _flow()
+    flow._reauth_entry = entry
+    flow.hass.data[DATA_LAST_SELF_HEAL] = {entry.entry_id: 1_000.0}
+    res = await flow.async_step_reauth_confirm({CONF_PASSWORD: "new-pw"})
+    assert res["reason"] == "reauth_successful"
+    assert entry.entry_id not in flow.hass.data[DATA_LAST_SELF_HEAL]

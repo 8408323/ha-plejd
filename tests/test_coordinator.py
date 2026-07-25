@@ -2707,12 +2707,8 @@ async def test_start_self_heal_retries_once_the_cooldown_has_elapsed(monkeypatch
     monkeypatch.setattr(coordinator_mod, "async_login", _login)
     monkeypatch.setattr(coordinator_mod, "async_get_site", _get_site)
 
-    from datetime import timedelta
-
-    from homeassistant.util import dt as dt_util
-
-    clock = dt_util.now()
-    monkeypatch.setattr(coordinator_mod.dt_util, "now", lambda: clock)
+    clock = 1_000.0
+    monkeypatch.setattr(coordinator_mod.time, "monotonic", lambda: clock)
 
     entry = _cloud_poll_entry()
     hass = _hass()
@@ -2727,8 +2723,8 @@ async def test_start_self_heal_retries_once_the_cooldown_has_elapsed(monkeypatch
         await PlejdCoordinator(hass, entry).async_start()
     assert fetches == 1
 
-    clock += coordinator_mod.SELF_HEAL_COOLDOWN + timedelta(seconds=1)
-    monkeypatch.setattr(coordinator_mod.dt_util, "now", lambda: clock)
+    clock += coordinator_mod.SELF_HEAL_COOLDOWN_SECONDS + 1
+    monkeypatch.setattr(coordinator_mod.time, "monotonic", lambda: clock)
     with pytest.raises(ConfigEntryNotReady):
         await PlejdCoordinator(hass, entry).async_start()
     assert fetches == 2  # allowed through again
@@ -3559,11 +3555,10 @@ async def test_cloud_poll_marks_the_malformed_repair_issue_persistent(monkeypatc
     assert hass.created_issues["malformed_cloud_site_e1"]["is_persistent"] is True
 
 
-async def test_self_heal_cooldown_is_returned_when_the_poll_hits_an_auth_failure(monkeypatch):
-    # The cooldown is recorded before the poll runs. If that poll only discovers the
-    # credentials are stale, it learned nothing about the site - and reauth alone does not
-    # refresh the crypto key or gateway data, so the retry right after still needs a
-    # self-heal. Holding the cooldown would suppress it for up to 15 minutes.
+async def test_self_heal_cooldown_is_held_through_an_auth_failure(monkeypatch):
+    # Until the user actually completes reauth the credentials stay bad, so releasing the
+    # cooldown here would let every setup retry call async_login again - exactly the stream
+    # of cloud logins the cooldown exists to prevent. The successful reauth path clears it.
     from plejd.cloud import PlejdAuthError
 
     async def _login(session, email, password):
@@ -3584,5 +3579,25 @@ async def test_self_heal_cooldown_is_returned_when_the_poll_hits_an_auth_failure
     assert c._should_attempt_self_heal() is True  # records the attempt
     await c._async_poll_cloud(None, reload=False)
 
-    # given back, so the post-reauth setup retry is allowed to try again immediately
+    assert c._should_attempt_self_heal() is False  # still throttled
+
+    # ...until reauth succeeds, which is the point a fresh attempt could actually work
+    coordinator_mod.async_reset_self_heal_cooldown(hass, entry.entry_id)
     assert c._should_attempt_self_heal() is True
+
+
+async def test_self_heal_cooldown_survives_a_backwards_wall_clock_step(monkeypatch):
+    # An NTP correction stepping the wall clock backwards would make a wall-clock gap
+    # negative and suppress self-healing until real time caught up - far longer than the
+    # cooldown intends. The throttle is monotonic, so a wall-clock step cannot affect it.
+    entry = _cloud_poll_entry()
+    hass = _hass()
+    c = PlejdCoordinator(hass, entry)
+
+    clock = 1_000.0
+    monkeypatch.setattr(coordinator_mod.time, "monotonic", lambda: clock)
+    assert c._should_attempt_self_heal() is True
+    assert c._should_attempt_self_heal() is False  # inside the cooldown
+
+    clock += coordinator_mod.SELF_HEAL_COOLDOWN_SECONDS + 1
+    assert c._should_attempt_self_heal() is True  # released purely on elapsed monotonic time

@@ -58,7 +58,7 @@ from .const import (
     TRANSPORT_GATEWAY,
     WEEKDAYS,
 )
-from .coordinator import async_clear_malformed_site_issue
+from .coordinator import async_clear_malformed_site_issue, async_reset_self_heal_cooldown
 from .discovery import async_bluetooth_available, async_scan_unprovisioned
 
 if TYPE_CHECKING:
@@ -222,6 +222,11 @@ class PlejdConfigFlow(ConfigFlow, domain=DOMAIN):
                 _LOGGER.debug("Plejd reauth: cloud unreachable", exc_info=True)
                 errors["base"] = "cannot_connect"
             else:
+                # The credentials work again, so let the setup retry that follows attempt a
+                # self-heal immediately instead of waiting out a cooldown recorded while
+                # they were still bad - reauth only replaces the password, so that retry
+                # still needs the crypto key/gateway data it could not fetch before.
+                async_reset_self_heal_cooldown(self.hass, entry.entry_id)
                 return self.async_update_reload_and_abort(
                     entry,
                     data_updates={CONF_PASSWORD: user_input[CONF_PASSWORD]},

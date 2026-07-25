@@ -12,9 +12,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import Callable, Coroutine
 from dataclasses import asdict, dataclass
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Any
 from uuid import uuid4
 
@@ -100,15 +101,30 @@ CLOUD_POLL_INTERVAL = timedelta(hours=24)  # how often to check for site changes
 # CLOUD_POLL_INTERVAL because a real repair should take effect on the next setup retry rather
 # than a day later, but long enough that HA's rapid setup-retry backoff cannot turn a
 # persistently out-of-range BLE mesh into a stream of cloud logins.
-SELF_HEAL_COOLDOWN = timedelta(minutes=15)
-# Last self-heal attempt, keyed by entry_id. Lives in hass.data, not on the coordinator:
-# every setup retry constructs a brand new coordinator, so instance state would never
-# survive to throttle anything.
+SELF_HEAL_COOLDOWN_SECONDS = timedelta(minutes=15).total_seconds()
+# Last self-heal attempt as a MONOTONIC timestamp, keyed by entry_id. Lives in hass.data,
+# not on the coordinator: every setup retry constructs a brand new coordinator, so instance
+# state would never survive to throttle anything. Monotonic rather than wall clock because
+# this measures elapsed time within one process - an NTP correction stepping the wall clock
+# backwards would otherwise make the gap negative and suppress self-healing until real time
+# caught back up, far longer than the cooldown intends.
 DATA_LAST_SELF_HEAL = f"{DOMAIN}_last_self_heal"
 # Consecutive malformed-response skips per entry, and how many it takes to tell the user.
 # One bad response is transient; several in a row means the sync is effectively dead.
 DATA_MALFORMED_POLLS = f"{DOMAIN}_malformed_polls"
 MALFORMED_POLLS_BEFORE_REPAIR = 2
+
+
+def async_reset_self_heal_cooldown(hass: HomeAssistant, entry_id: str) -> None:
+    """Allow an immediate setup self-heal again for `entry_id`.
+
+    Called when reauth succeeds: the cooldown is held through an auth failure so repeated
+    setup retries cannot hammer the cloud with logins that cannot work, but reauth only
+    updates the password - the retry right afterwards still needs a self-heal to fetch the
+    crypto key/gateway data, and making it wait out the cooldown would strand setup for up
+    to 15 more minutes at the exact moment it could finally succeed.
+    """
+    hass.data.get(DATA_LAST_SELF_HEAL, {}).pop(entry_id, None)
 
 
 def async_clear_malformed_site_issue(hass: HomeAssistant, entry_id: str) -> None:
@@ -512,13 +528,13 @@ class PlejdCoordinator:
         simply out of range that retry can repeat indefinitely - without this, every attempt
         would mean a fresh login + getSiteById against the Plejd cloud.
         """
-        last: datetime | None = self.hass.data.get(DATA_LAST_SELF_HEAL, {}).get(self._entry_id)
-        now = dt_util.now()
-        if last is not None and now - last < SELF_HEAL_COOLDOWN:
+        last: float | None = self.hass.data.get(DATA_LAST_SELF_HEAL, {}).get(self._entry_id)
+        now = time.monotonic()
+        if last is not None and now - last < SELF_HEAL_COOLDOWN_SECONDS:
             _LOGGER.debug(
-                "Plejd: skipping the setup self-heal, last attempt was %s ago (cooldown %s)",
+                "Plejd: skipping the setup self-heal, last attempt was %.0fs ago (cooldown %.0fs)",
                 now - last,
-                SELF_HEAL_COOLDOWN,
+                SELF_HEAL_COOLDOWN_SECONDS,
             )
             return False
         self.hass.data.setdefault(DATA_LAST_SELF_HEAL, {})[self._entry_id] = now
@@ -544,11 +560,12 @@ class PlejdCoordinator:
             if self._closed:
                 return
             _LOGGER.warning("Plejd cloud poll: credentials rejected — starting reauth")
-            # Give the cooldown back: this attempt learned nothing about the site, and once
-            # the user finishes reauth the immediate setup retry still needs a self-heal to
-            # fetch the crypto key/gateway data that reauth itself does not touch. Holding
-            # the cooldown would suppress that for up to 15 minutes.
-            self.hass.data.get(DATA_LAST_SELF_HEAL, {}).pop(self._entry_id, None)
+            # The cooldown is deliberately NOT released here. Until the user actually
+            # completes reauth the credentials stay bad, so every setup retry would call
+            # async_login again - exactly the stream of cloud logins the cooldown exists to
+            # stop. The successful reauth path clears it instead (see
+            # async_reset_self_heal_cooldown), which is the point at which a fresh attempt
+            # can actually succeed.
             self._entry.async_start_reauth(self.hass)
             return
         except (PlejdCloudError, ClientError, OSError):

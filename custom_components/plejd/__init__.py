@@ -22,7 +22,7 @@ from .const import (
     SCHEDULE_OFFSET_MAX,
     SCHEDULE_OFFSET_MIN,
 )
-from .coordinator import PlejdCoordinator
+from .coordinator import PlejdCoordinator, async_clear_malformed_site_issue, async_reset_self_heal_cooldown
 from .discovery import async_bluetooth_available, async_scan_unprovisioned
 from .holiday_mode import DATA_HOLIDAY_MODE, PlejdHolidayMode
 from .manage_device import async_remove_device
@@ -466,3 +466,13 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     elif was_holiday_mode_running:
         await holiday_mode.async_start()
     return unload_ok
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Clean up state that outlives the entry itself."""
+    # The malformed-cloud repair issue is persistent, so nothing else would ever delete it
+    # once the entry is gone: its only other clear paths are a healthy poll or a successful
+    # reconfigure, neither of which can happen after removal. Without this the user is left
+    # with an orphaned warning about an integration they no longer have, surviving restarts.
+    async_clear_malformed_site_issue(hass, entry.entry_id)
+    async_reset_self_heal_cooldown(hass, entry.entry_id)
