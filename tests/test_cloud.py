@@ -1357,6 +1357,54 @@ def test_parse_site_flags_rather_than_crashes_on_a_non_string_id(key, record, la
     assert labels <= site.malformed
 
 
+@pytest.mark.parametrize(
+    ("mutation", "why"),
+    [
+        # d3 is single-output with no outputAddress entry, so it relies on deviceAddress
+        ({"deviceAddress": {"d1": 1, "d2": 2, "w1": 33}}, "no address resolves for d3"),
+        ({"plejdDevices": [{"deviceId": "d2", "hardwareId": "18"}]}, "no hardware record for d1/d3"),
+    ],
+)
+def test_parse_site_flags_devices_when_one_does_not_fully_resolve(mutation, why):
+    # An outcome check rather than per-map coverage checks: a device only works if it resolved
+    # to BOTH an address and a hardware record, and a truncated response can break either.
+    # A device that came out address-less or hardware-unknown is what the light/switch
+    # platforms silently drop, so it must never be cached over a working snapshot.
+    site = parse_site({**_SITE, **mutation})
+    assert "devices" in site.malformed, why
+
+
+def test_parse_site_flags_inputs_for_a_non_string_device_key():
+    # Mixed key types would also make the candidate sort compare int with str and raise,
+    # aborting the parse instead of returning a site the caller can reject.
+    site = parse_site({**_SITE, "inputAddress": {7: {"0": 41}, "d3": {"0": 31}}})
+    assert "inputs" in site.malformed
+    assert [i.device_id for i in site.inputs] == ["d3"]
+
+
+@pytest.mark.parametrize(
+    "groups",
+    [
+        {"d1": {"0": "truncated"}},  # per-output value is not a list
+        {"d1": {"0": ["not-a-number"]}},  # a group entry that is not numeric
+    ],
+)
+def test_parse_site_flags_rooms_for_a_malformed_per_output_group_list(groups):
+    # Each of these silently loses a group membership, shrinking site.rooms into something the
+    # unattended poll would persist and use to remove the affected room entity.
+    site = parse_site({**_SITE, "roomAddress": {"r1": 14}, "outputGroups": groups})
+    assert "rooms" in site.malformed
+
+
+def test_parse_site_flags_gateways_for_a_non_string_resource_set_id():
+    # The value goes straight into the WebSocket's Resource-Set-ID header, and persisting a
+    # truthy non-string over a working cached id would fail every connection while matching
+    # the cached snapshot, so later polls would see no change and never repair it.
+    site = parse_site({**_SITE, "gateways": [{"deviceId": "gw1", "resourceSetId": 123}]})
+    assert "gateways" in site.malformed
+    assert site.resource_set_id is None
+
+
 def test_parse_site_flags_rooms_for_a_malformed_per_device_output_group_map():
     # Skipping the bad per-device entry keeps the parse alive but drops that device's group
     # memberships, shrinking or emptying the room list - which the diffing poll would read as

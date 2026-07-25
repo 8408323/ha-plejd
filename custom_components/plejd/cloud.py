@@ -906,6 +906,16 @@ def parse_site(site: dict) -> PlejdCloudSite:
             )
         )
 
+    # Outcome check, deliberately instead of validating each source map's coverage separately:
+    # a device only works if it resolved to BOTH a mesh address and a hardware record, and it
+    # can fail to for many reasons (deviceAddress truncated, outputAddress missing this output,
+    # plejdDevices missing this record, an out-of-range address...). Asserting the result
+    # covers every one of those at once, including shapes not enumerated here - and a device
+    # that came out address-less or hardware-unknown is exactly what the light/switch platforms
+    # silently drop and what the settings entities lose, so it must not be cached over a
+    # working snapshot.
+    if any(d.address is None or d.device_id not in hardware_by_id for d in devices):
+        malformed.add("devices")
     name_by_device = {info.get("deviceId"): info.get("title") for info in raw_devices if isinstance(info, dict)}
     # Several inputs can share one mesh address (the same physical button reported under more
     # than one index), and only the first is kept. Collect every candidate and order them
@@ -918,6 +928,11 @@ def parse_site(site: dict) -> PlejdCloudSite:
         # Corrupt entries are skipped so the parse survives, but skipping silently drops real
         # buttons - which the diffing poll would read as a deletion and persist, removing
         # those event entities. Flag the collection so the snapshot is rejected instead.
+        if not isinstance(device_id, str):
+            # Mixed key types would also make the candidate sort below compare int with str
+            # and raise, aborting the whole parse instead of returning a rejectable site.
+            malformed.add("inputs")
+            continue
         if not isinstance(idx_map, dict):
             malformed.add("inputs")
             continue  # untrusted cloud data: a malformed per-device input map
@@ -994,11 +1009,23 @@ def parse_site(site: dict) -> PlejdCloudSite:
     # The gateway's own resourceSetId is authoritative. Only fall back to a site
     # resourceSet when there's exactly one (otherwise we can't tell which grants access).
     resource_sets = site.get("resourceSets") or []
+
+    def _grant(value: object) -> str | None:
+        # Must be a non-empty string: it goes straight into the WebSocket's Resource-Set-ID
+        # header, so a truthy non-string (e.g. 123) would be persisted over a working cached
+        # id and then fail every gateway connection - and, because the bad value now matches
+        # the cached snapshot, later polls would see no change and never repair it.
+        if isinstance(value, str) and value:
+            return value
+        if value is not None:
+            malformed.add("gateways")
+        return None
+
     resource_set_id = next(
-        (g.get("resourceSetId") for g in gateway_objs if isinstance(g, dict) and g.get("resourceSetId")), None
+        (grant for g in gateway_objs if isinstance(g, dict) and (grant := _grant(g.get("resourceSetId")))), None
     )
     if resource_set_id is None and len(resource_sets) == 1:
-        resource_set_id = resource_sets[0].get("objectId")
+        resource_set_id = _grant(resource_sets[0].get("objectId")) if isinstance(resource_sets[0], dict) else None
 
     # Rooms carry a group mesh address (roomAddress: roomId -> address); outputGroups maps
     # each output to the group addresses it belongs to. Dimming a room = one 0x0098 to its
@@ -1026,20 +1053,27 @@ def parse_site(site: dict) -> PlejdCloudSite:
         dev_out_addr = output_address.get(device_id)
         dev_out_addr = dev_out_addr if isinstance(dev_out_addr, dict) else {}
         for out_idx, groups in out_map.items():
+            # Every skip below loses a group membership, so each one flags too - see above.
+            if not isinstance(groups, list):
+                malformed.add("rooms")
+                continue
             # Mirror the device parser's own fallback: a single-output light can be
             # missing from outputAddress and controlled via its deviceAddress instead.
             out_addr = dev_out_addr.get(str(out_idx), device_address.get(device_id))
             if out_addr is None:
+                malformed.add("rooms")
                 continue
             try:
                 addr = int(out_addr)
             except (TypeError, ValueError):
+                malformed.add("rooms")
                 continue
             is_light = category_by_address.get(addr) == CATEGORY_LIGHT
-            for group in groups if isinstance(groups, list) else []:
+            for group in groups:
                 try:
                     group_addr = int(group)
                 except (TypeError, ValueError):
+                    malformed.add("rooms")
                     continue
                 if is_light:
                     members_by_group.setdefault(group_addr, []).append(addr)
