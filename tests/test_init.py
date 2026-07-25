@@ -84,6 +84,7 @@ class _FakeConfigEntries:
 
     async def async_reload(self, entry_id):
         self.reloaded = entry_id
+        return getattr(self, "reload_result", True)
 
     def async_update_entry(self, entry, *, data=None, **kwargs):
         if data is not None:
@@ -229,6 +230,55 @@ async def test_reload_listener_reloads_entry():
     hass, entry = _hass(), _entry()
     await _async_reload_entry(hass, entry)
     assert hass.config_entries.reloaded == "e1"
+
+
+async def test_reload_listener_clears_a_stale_pending_marker_after_reloading():
+    # A follow-up reload that failed deliberately leaves DATA_RELOAD_PENDING set. This
+    # direct reload applies whatever the entry currently holds, including that change - so
+    # leaving the marker would make the next management operation reload a second time for
+    # something already live, a needless teardown and BLE/gateway reconnect.
+    from plejd import _async_reload_entry, schedule_ws
+
+    hass, entry = _hass(), _entry()
+    hass.data[schedule_ws.DATA_RELOAD_PENDING] = entry.entry_id
+    await _async_reload_entry(hass, entry)
+    assert hass.config_entries.reloaded == "e1"
+    assert schedule_ws.DATA_RELOAD_PENDING not in hass.data
+
+
+async def test_reload_listener_keeps_a_pending_marker_created_during_its_own_reload():
+    # A change landing AFTER this reload read the entry is not covered by it, so its marker
+    # must survive - otherwise the lock holder skips the follow-up and that change never
+    # gets applied until some later reload or a restart.
+    from plejd import _async_reload_entry, schedule_ws
+
+    hass, entry = _hass(), _entry()
+    schedule_ws.async_mark_reload_pending(hass, entry.entry_id)  # an older, covered change
+    covered_token = schedule_ws.async_reload_pending_token(hass, entry.entry_id)
+
+    async def _reload_then_a_change_lands(entry_id):
+        hass.config_entries.reloaded = entry_id
+        schedule_ws.async_mark_reload_pending(hass, entry_id)  # a NEWER one, mid-reload
+        return True
+
+    hass.config_entries.async_reload = _reload_then_a_change_lands
+    await _async_reload_entry(hass, entry)
+
+    # the newer marker survives, and is genuinely a different one
+    assert hass.data[schedule_ws.DATA_RELOAD_PENDING] == entry.entry_id
+    assert schedule_ws.async_reload_pending_token(hass, entry.entry_id) != covered_token
+
+
+async def test_reload_listener_keeps_the_pending_marker_when_the_reload_is_rejected():
+    # Only a reload that actually applied may clear it - otherwise the concurrent change it
+    # stands for would be silently dropped.
+    from plejd import _async_reload_entry, schedule_ws
+
+    hass, entry = _hass(), _entry()
+    hass.config_entries.reload_result = False
+    hass.data[schedule_ws.DATA_RELOAD_PENDING] = entry.entry_id
+    await _async_reload_entry(hass, entry)
+    assert hass.data[schedule_ws.DATA_RELOAD_PENDING] == entry.entry_id
 
 
 async def test_reload_listener_skips_when_reload_lock_is_held():
@@ -1463,3 +1513,20 @@ async def test_setup_survives_remote_profile_load_failure(monkeypatch):
     monkeypatch.setattr(plejd, "PlejdRemoteProfiles", _BadProfiles)
     hass, entry = _hass(), _entry()
     assert await async_setup_entry(hass, entry) is True  # storage error must not abort setup
+
+
+async def test_remove_entry_clears_the_persistent_repair_issue():
+    # The malformed-cloud issue is persistent, and its only other clear paths (a healthy
+    # poll, a successful reconfigure) are unreachable once the entry is gone - so without
+    # this the user keeps an orphaned warning about an integration they removed.
+    from plejd import async_remove_entry
+    from plejd.coordinator import DATA_LAST_SELF_HEAL
+
+    hass, entry = _hass(), _entry()
+    hass.created_issues = {f"malformed_cloud_site_{entry.entry_id}": {"domain": "plejd"}}
+    hass.data[DATA_LAST_SELF_HEAL] = {entry.entry_id: 1_000.0}
+
+    await async_remove_entry(hass, entry)
+
+    assert f"malformed_cloud_site_{entry.entry_id}" not in hass.created_issues
+    assert entry.entry_id not in hass.data[DATA_LAST_SELF_HEAL]

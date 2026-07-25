@@ -29,7 +29,6 @@ import asyncio
 import json
 import logging
 import re
-from dataclasses import asdict
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
@@ -47,14 +46,6 @@ from .cloud import async_update_scene as async_cloud_update_scene
 from .cloud import async_update_time_event as async_cloud_update_time_event
 from .const import (
     CONF_CLOUD_SCHEDULES,
-    CONF_DEVICE_ADDRESSES,
-    CONF_DEVICES,
-    CONF_GATEWAYS,
-    CONF_INPUTS,
-    CONF_MOTION,
-    CONF_RESOURCE_SET_ID,
-    CONF_ROOMS,
-    CONF_SCENES,
     CONF_SITE_ID,
     DOMAIN,
     SCHEDULE_ASTRO_EVENTS,
@@ -116,18 +107,7 @@ async def _async_refresh_and_reload(
     await schedule_ws.async_reload_entry_with_lock(
         hass,
         entry,
-        {
-            **entry.data,
-            CONF_DEVICES: [asdict(d) for d in fresh_site.devices],
-            CONF_INPUTS: [asdict(i) for i in fresh_site.inputs],
-            CONF_MOTION: [asdict(m) for m in fresh_site.motion],
-            CONF_SCENES: [asdict(s) for s in fresh_site.scenes],
-            CONF_ROOMS: [asdict(r) for r in fresh_site.rooms],
-            CONF_GATEWAYS: fresh_site.gateways,
-            CONF_RESOURCE_SET_ID: fresh_site.resource_set_id,
-            CONF_DEVICE_ADDRESSES: fresh_site.device_addresses,
-            CONF_CLOUD_SCHEDULES: cloud_schedules,
-        },
+        lambda e: schedule_ws.site_data_overlay(e, fresh_site, {CONF_CLOUD_SCHEDULES: cloud_schedules}),
         # A create/remove's cloud mutation has already happened and isn't safely retryable
         # by the time this runs - raising on a reload failure here would make the whole
         # service call look failed: retrying a create makes a duplicate schedule, retrying
@@ -170,8 +150,7 @@ async def _sync_cloud_schedules_cache(hass: HomeAssistant, entry: ConfigEntry, c
         # Defensive: clears it even if the listener never ran within this session (e.g. a
         # genuinely no-op write), so it can't leak into a later, unrelated one.
         schedule_ws.async_consume_expected_self_reload(hass, entry.entry_id)
-    if hass.data.get(schedule_ws.DATA_RELOAD_PENDING) == entry.entry_id:
-        hass.data.pop(schedule_ws.DATA_RELOAD_PENDING, None)
+    if schedule_ws.async_take_reload_pending(hass, entry.entry_id):
         async with lock:
             try:
                 await hass.config_entries.async_reload(entry.entry_id)

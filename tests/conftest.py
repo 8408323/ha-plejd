@@ -478,6 +478,27 @@ except ImportError:
     _restore.RestoreEntity = _RestoreEntity  # type: ignore[attr-defined]
     sys.modules.setdefault("homeassistant.helpers.restore_state", _restore)
 
+    _ir = types.ModuleType("homeassistant.helpers.issue_registry")
+
+    def _ir_create_issue(hass, domain, issue_id, **kwargs):
+        hass.created_issues = getattr(hass, "created_issues", {})
+        hass.created_issues[issue_id] = {"domain": domain, **kwargs}
+
+    def _ir_delete_issue(hass, domain, issue_id):
+        getattr(hass, "created_issues", {}).pop(issue_id, None)
+        hass.deleted_issues = getattr(hass, "deleted_issues", [])
+        hass.deleted_issues.append(issue_id)
+
+    _ir.async_create_issue = _ir_create_issue  # type: ignore[attr-defined]
+    _ir.async_delete_issue = _ir_delete_issue  # type: ignore[attr-defined]
+
+    class _IssueSeverity:
+        ERROR = "error"
+        WARNING = "warning"
+
+    _ir.IssueSeverity = _IssueSeverity  # type: ignore[attr-defined]
+    sys.modules.setdefault("homeassistant.helpers.issue_registry", _ir)
+
     _dr = types.ModuleType("homeassistant.helpers.device_registry")
 
     class _DeviceInfo(dict):

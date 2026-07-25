@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import Callable, Coroutine
 from dataclasses import asdict, dataclass
 from datetime import timedelta
@@ -24,7 +25,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady, HomeAssistantError
-from homeassistant.helpers import device_registry
+from homeassistant.helpers import device_registry, issue_registry
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import async_call_later, async_track_time_interval
 from homeassistant.util import dt as dt_util
@@ -96,6 +97,47 @@ RECONNECT_INITIAL_DELAY = 1.0
 RECONNECT_MAX_DELAY = 60.0
 NOTIFY_POLL_INTERVAL = timedelta(minutes=10)  # device-health (NotifyEvents) poll cadence
 CLOUD_POLL_INTERVAL = timedelta(hours=24)  # how often to check for site changes (added/renamed devices)
+# Minimum gap between setup-time self-heal attempts (see async_start). Much shorter than
+# CLOUD_POLL_INTERVAL because a real repair should take effect on the next setup retry rather
+# than a day later, but long enough that HA's rapid setup-retry backoff cannot turn a
+# persistently out-of-range BLE mesh into a stream of cloud logins.
+SELF_HEAL_COOLDOWN_SECONDS = timedelta(minutes=15).total_seconds()
+# Last self-heal attempt as a MONOTONIC timestamp, keyed by entry_id. Lives in hass.data,
+# not on the coordinator: every setup retry constructs a brand new coordinator, so instance
+# state would never survive to throttle anything. Monotonic rather than wall clock because
+# this measures elapsed time within one process - an NTP correction stepping the wall clock
+# backwards would otherwise make the gap negative and suppress self-healing until real time
+# caught back up, far longer than the cooldown intends.
+DATA_LAST_SELF_HEAL = f"{DOMAIN}_last_self_heal"
+# Deliberately no streak counter. Counting consecutive skips before warning needed state
+# that survives restarts (hass.data does not), and a system restarted between daily polls
+# could then skip malformed snapshots forever without ever warning. With a 24h interval a
+# single skipped poll already means a full day without syncing, which is worth saying out
+# loud - and the issue clears itself on the next usable response, so it cannot nag.
+
+
+def async_reset_self_heal_cooldown(hass: HomeAssistant, entry_id: str) -> None:
+    """Allow an immediate setup self-heal again for `entry_id`.
+
+    Called when reauth succeeds: the cooldown is held through an auth failure so repeated
+    setup retries cannot hammer the cloud with logins that cannot work, but reauth only
+    updates the password - the retry right afterwards still needs a self-heal to fetch the
+    crypto key/gateway data, and making it wait out the cooldown would strand setup for up
+    to 15 more minutes at the exact moment it could finally succeed.
+    """
+    hass.data.get(DATA_LAST_SELF_HEAL, {}).pop(entry_id, None)
+
+
+def async_clear_malformed_site_issue(hass: HomeAssistant, entry_id: str) -> None:
+    """Drop the malformed-cloud repair issue (and its streak) for `entry_id`.
+
+    Exposed because the repair tells the user to try Reconfigure, and that path proves the
+    cloud is healthy again without going through the poll - the replacement coordinator
+    would otherwise leave the warning up until its first scheduled poll, a day later.
+    """
+    issue_registry.async_delete_issue(hass, DOMAIN, f"malformed_cloud_site_{entry_id}")
+
+
 FIRMWARE_REFRESH_INTERVAL = timedelta(days=1)
 
 
@@ -432,13 +474,58 @@ class PlejdCoordinator:
             # THIS entry - reloading it reentrantly here could hang or be rejected instead of
             # taking effect. Persist the repaired snapshot only; the re-raise below triggers
             # HA's own setup retry, which re-reads entry.data fresh on its next attempt.
-            try:
-                await self._async_poll_cloud(None, reload=False)
-            except Exception:  # noqa: BLE001 - best-effort; the original ConfigEntryNotReady below still applies
-                _LOGGER.warning("Plejd: cloud self-heal attempt during setup failed", exc_info=True)
+            if self._should_attempt_self_heal():
+                try:
+                    await self._async_poll_cloud(None, reload=False)
+                except Exception:  # noqa: BLE001 - best-effort; the original ConfigEntryNotReady below still applies
+                    _LOGGER.warning("Plejd: cloud self-heal attempt during setup failed", exc_info=True)
             raise
         self._cloud_poll_unsub = async_track_time_interval(self.hass, self._async_poll_cloud, CLOUD_POLL_INTERVAL)
         self._schedule_firmware_checks()
+
+    def _note_malformed_poll(self, collections: list[str]) -> None:
+        """Raise a repair issue for a skipped sync.
+
+        Skipping a malformed snapshot is the right call, but it is also completely silent:
+        without this, a site whose daily sync has been skipped looks identical to one that
+        simply has not changed.
+        """
+        issue_registry.async_create_issue(
+            self.hass,
+            DOMAIN,
+            f"malformed_cloud_site_{self._entry_id}",
+            is_fixable=False,
+            # Repair issues are dropped on restart unless persisted, and the streak counter
+            # lives in hass.data so it resets too - between them, restarting mid-incident
+            # would hide the warning and then need two more 24h polls to earn it back.
+            is_persistent=True,
+            severity=issue_registry.IssueSeverity.WARNING,
+            translation_key="malformed_cloud_site",
+            translation_placeholders={"collections": ", ".join(collections)},
+        )
+
+    def _clear_malformed_polls(self) -> None:
+        """Drop the repair issue once the cloud serves a usable snapshot again."""
+        async_clear_malformed_site_issue(self.hass, self._entry_id)
+
+    def _should_attempt_self_heal(self) -> bool:
+        """True at most once per SELF_HEAL_COOLDOWN, recording the attempt.
+
+        HA retries a failed setup on its own schedule, and for a BLE-only site whose mesh is
+        simply out of range that retry can repeat indefinitely - without this, every attempt
+        would mean a fresh login + getSiteById against the Plejd cloud.
+        """
+        last: float | None = self.hass.data.get(DATA_LAST_SELF_HEAL, {}).get(self._entry_id)
+        now = time.monotonic()
+        if last is not None and now - last < SELF_HEAL_COOLDOWN_SECONDS:
+            _LOGGER.debug(
+                "Plejd: skipping the setup self-heal, last attempt was %.0fs ago (cooldown %.0fs)",
+                now - last,
+                SELF_HEAL_COOLDOWN_SECONDS,
+            )
+            return False
+        self.hass.data.setdefault(DATA_LAST_SELF_HEAL, {})[self._entry_id] = now
+        return True
 
     async def _async_poll_cloud(self, _now: object, *, reload: bool = True) -> None:
         """Detect site changes and reload the integration if anything differs.
@@ -460,6 +547,12 @@ class PlejdCoordinator:
             if self._closed:
                 return
             _LOGGER.warning("Plejd cloud poll: credentials rejected — starting reauth")
+            # The cooldown is deliberately NOT released here. Until the user actually
+            # completes reauth the credentials stay bad, so every setup retry would call
+            # async_login again - exactly the stream of cloud logins the cooldown exists to
+            # stop. The successful reauth path clears it instead (see
+            # async_reset_self_heal_cooldown), which is the point at which a fresh attempt
+            # can actually succeed.
             self._entry.async_start_reauth(self.hass)
             return
         except (PlejdCloudError, ClientError, OSError):
@@ -499,7 +592,9 @@ class PlejdCoordinator:
                 "Plejd cloud poll: site response is malformed (%s) - skipping this poll",
                 ", ".join(sorted(site.malformed)),
             )
+            self._note_malformed_poll(sorted(site.malformed))
             return
+        self._clear_malformed_polls()
         # A response that still lists the gateway but transiently drops its resourceSetId
         # (and the resourceSets fallback) must not be read as "the gateway is gone": keeping
         # the cached id lets the gateway transport carry on, whereas overwriting it with None
@@ -620,8 +715,7 @@ class PlejdCoordinator:
         finally:
             schedule_ws.async_consume_expected_self_reload(self.hass, entry.entry_id)
         follow_up_ok = False
-        if self.hass.data.get(schedule_ws.DATA_RELOAD_PENDING) == entry.entry_id:
-            self.hass.data.pop(schedule_ws.DATA_RELOAD_PENDING, None)
+        if schedule_ws.async_take_reload_pending(self.hass, entry.entry_id):
             async with lock:
                 try:
                     follow_up_ok = await self.hass.config_entries.async_reload(entry.entry_id)
@@ -634,7 +728,7 @@ class PlejdCoordinator:
                 # poll or any other operation) picks it up, instead of leaving the running
                 # coordinator stale until an unrelated site/option change happens to retry it.
                 _LOGGER.warning("Plejd cloud poll: follow-up reload for a concurrent change failed; leaving it pending")
-                self.hass.data[schedule_ws.DATA_RELOAD_PENDING] = entry.entry_id
+                schedule_ws.async_mark_reload_pending(self.hass, entry.entry_id)
         if not reload_ok and not follow_up_ok:
             # Revert the cached snapshot rather than just logging: leaving entry.data
             # already matching the fresh site would make every later poll's comparison
