@@ -16,7 +16,9 @@ from collections.abc import Callable, Coroutine
 from dataclasses import asdict, dataclass
 from datetime import timedelta
 from typing import Any
+from uuid import uuid4
 
+from aiohttp import ClientError
 from homeassistant.components import bluetooth
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
@@ -27,10 +29,11 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import async_call_later, async_track_time_interval
 from homeassistant.util import dt as dt_util
 
-from . import protocol
+from . import protocol, schedule_ws
 from .cloud import (
     PlejdAuthError,
     PlejdCloudDevice,
+    PlejdCloudError,
     PlejdCloudInput,
     PlejdCloudMotion,
     PlejdCloudRoom,
@@ -91,8 +94,9 @@ _LOGGER = logging.getLogger(__name__)
 
 RECONNECT_INITIAL_DELAY = 1.0
 RECONNECT_MAX_DELAY = 60.0
-FIRMWARE_REFRESH_INTERVAL = timedelta(days=1)
 NOTIFY_POLL_INTERVAL = timedelta(minutes=10)  # device-health (NotifyEvents) poll cadence
+CLOUD_POLL_INTERVAL = timedelta(hours=24)  # how often to check for site changes (added/renamed devices)
+FIRMWARE_REFRESH_INTERVAL = timedelta(days=1)
 
 
 @dataclass
@@ -171,9 +175,11 @@ class PlejdCoordinator:
         self.site_id = entry.data.get(CONF_SITE_ID, entry.entry_id)
         self._preferred = entry.data.get(CONF_DISCOVERED_ADDRESS)
         self._transport_pref = (getattr(entry, "options", None) or {}).get(CONF_TRANSPORT, TRANSPORT_AUTO)
-        # Cloud credentials are used for the gateway token and the firmware-update check.
-        self._email = entry.data.get(CONF_EMAIL)
-        self._password = entry.data.get(CONF_PASSWORD)
+        # Cloud credentials are used for the gateway token, the firmware-update check, and the cloud poll.
+        self._email = entry.data.get(CONF_EMAIL, "")
+        self._password = entry.data.get(CONF_PASSWORD, "")
+        self._site_id = entry.data.get(CONF_SITE_ID, "")
+        self._entry_id = entry.entry_id
         self._connection = PlejdConnection(
             bytes.fromhex(entry.data[CONF_CRYPTO_KEY]), self._on_event, self._handle_disconnect
         )
@@ -196,13 +202,14 @@ class PlejdCoordinator:
         self._listeners: list[Callable[[], None]] = []
         self._button_listeners: list[Callable[[int, bool], None]] = []
         self._motion_listeners: list[Callable[[MotionEvent], None]] = []
-        self.firmware: dict[str, PlejdFirmwareStatus] = {}  # device_id -> firmware status
         self._fault_listeners: list[Callable[[int, frozenset[str]], None]] = []
         self._faults: dict[int, frozenset[str]] = {}
+        self.firmware: dict[str, PlejdFirmwareStatus] = {}  # device_id -> firmware status
         self._clock_unsub: Callable[[], None] | None = None
+        self._faults_unsub: Callable[[], None] | None = None
+        self._cloud_poll_unsub: Callable[[], None] | None = None
         self._firmware_unsub: Callable[[], None] | None = None
         self._firmware_now_unsub: Callable[[], None] | None = None
-        self._faults_unsub: Callable[[], None] | None = None
         self._available = False
         self._active: str | None = None  # "gateway" | "ble"
         self._closed = False
@@ -409,8 +416,273 @@ class PlejdCoordinator:
 
     async def async_start(self) -> None:
         """Connect to the mesh — gateway-first when one exists, else BLE."""
-        await self._async_select_and_connect()
+        try:
+            await self._async_select_and_connect()
+        except ConfigEntryNotReady:
+            # A stale gateway/crypto-key/etc is exactly what the cloud poll below exists to
+            # repair, but its recurring timer never gets registered when connect fails here,
+            # and a setup retry would otherwise keep reusing the same stale entry data
+            # forever - make one best-effort attempt to refresh it before giving up this
+            # attempt, so the next retry (which re-reads entry.data fresh) has a shot at it.
+            # An unexpected failure from that attempt (e.g. a malformed cloud response) must
+            # not replace this ConfigEntryNotReady - HA's setup-retry path is keyed on this
+            # exact exception type, and the cached site may still work once BLE is back in
+            # range even if the repair attempt itself failed.
+            # reload=False: async_setup_entry (which called this) is still in progress for
+            # THIS entry - reloading it reentrantly here could hang or be rejected instead of
+            # taking effect. Persist the repaired snapshot only; the re-raise below triggers
+            # HA's own setup retry, which re-reads entry.data fresh on its next attempt.
+            try:
+                await self._async_poll_cloud(None, reload=False)
+            except Exception:  # noqa: BLE001 - best-effort; the original ConfigEntryNotReady below still applies
+                _LOGGER.warning("Plejd: cloud self-heal attempt during setup failed", exc_info=True)
+            raise
+        self._cloud_poll_unsub = async_track_time_interval(self.hass, self._async_poll_cloud, CLOUD_POLL_INTERVAL)
         self._schedule_firmware_checks()
+
+    async def _async_poll_cloud(self, _now: object, *, reload: bool = True) -> None:
+        """Detect site changes and reload the integration if anything differs.
+
+        reload=False persists a repaired snapshot without reloading - see async_start's
+        setup-time self-heal call, which must not reload the entry it's still setting up.
+        """
+        entry = self.hass.config_entries.async_get_entry(self._entry_id)
+        if entry is None:
+            return
+        session = async_get_clientsession(self.hass)
+        try:
+            token = await async_login(session, self._email, self._password)
+            site = await async_get_site(session, token, self._site_id)
+        except PlejdAuthError:
+            # No gateway connect path exists in BLE-only setups, so prompt reauth here -
+            # otherwise a rejected password leaves the daily poll silently broken forever
+            # (Reconfigure alone can't fix it: it reuses the stored, now-invalid password).
+            if self._closed:
+                return
+            _LOGGER.warning("Plejd cloud poll: credentials rejected — starting reauth")
+            self._entry.async_start_reauth(self.hass)
+            return
+        except (PlejdCloudError, ClientError, OSError):
+            # Transport/cloud-API failure (DNS/socket/TLS/timeout/non-JSON 5xx) is a missed
+            # poll, not a bug; retry at the next interval. An unexpected parse/programming
+            # error is NOT caught here and propagates, per error-handling.md.
+            _LOGGER.debug("Plejd cloud poll: cloud unreachable, will retry at next interval", exc_info=True)
+            return
+        if self._closed:
+            # Shutdown began while the two cloud calls above were in flight; the interval
+            # timer is already unregistered, but this already-running call must not act on
+            # a possibly-removed entry (start reauth, persist a stale snapshot) after that.
+            return
+        # NOTE(8408323): if a move_device_to_room move is still pending (cloud not yet
+        # converged), this snapshot's device room_id/room membership can overwrite that
+        # move's local correction before it converges - the same class of "we can only
+        # protect what we ourselves touch" tradeoff manage_device_room.py's own module
+        # docstring already documents and accepts for every other feature's refresh cycle,
+        # now also triggered by this poll. Not solved here for the same reason: doing so
+        # would need pending-move awareness plumbed through this poll too.
+        # No sorting needed here: parse_site() already returns every collection in a canonical
+        # order, so the config flow's stored snapshot and this diff agree by construction.
+        devices = [asdict(d) for d in site.devices]
+        inputs = [asdict(i) for i in site.inputs]
+        motion = [asdict(m) for m in site.motion]
+        scenes = [asdict(s) for s in site.scenes]
+        rooms = [asdict(r) for r in site.rooms]
+        gateways = list(site.gateways)
+        # parse_site() distinguishes "this collection's raw source field was absent or the
+        # wrong type" (site.malformed) from "the cloud correctly reports zero of these now"
+        # (a real, empty list) - only the former is untrustworthy. Treating emptiness alone
+        # as suspicious would also block a legitimate last-scene/last-room deletion (and any
+        # other unrelated site change) from ever syncing, since every later poll's diff
+        # would keep finding the same "still empty" non-difference forever.
+        if site.malformed:
+            _LOGGER.warning(
+                "Plejd cloud poll: site response is malformed (%s) - skipping this poll",
+                ", ".join(sorted(site.malformed)),
+            )
+            return
+        # A response that still lists the gateway but transiently drops its resourceSetId
+        # (and the resourceSets fallback) must not be read as "the gateway is gone": keeping
+        # the cached id lets the gateway transport carry on, whereas overwriting it with None
+        # takes a gateway-only install offline until the next poll a whole day later. If
+        # access really was revoked the transport just fails and falls back to BLE, which is
+        # the far cheaper wrong guess. A genuinely removed gateway (empty gateways) still
+        # clears it. Deliberately not treated as a malformed response: a gateway with no
+        # resourceSetId is a representable state the rest of the integration already handles
+        # as "no usable gateway" (see config_flow's own has_gateway check), so flagging it
+        # would block every future poll for such a site - the exact trap the malformed
+        # checks above were added to avoid.
+        # Only reusable while the gateway set is UNCHANGED: a cached grant belongs to the
+        # gateway it was issued for, so copying it onto a replacement gateway (gw-old swapped
+        # for gw-new) would keep has_gateway true and rebuild the connection with an obsolete
+        # resource set forever - every later poll would see the same cached value and never
+        # repair it. A changed set falls through to None, which correctly degrades to BLE.
+        resource_set_id = site.resource_set_id
+        if gateways and resource_set_id is None and gateways == (entry.data.get(CONF_GATEWAYS) or []):
+            resource_set_id = entry.data.get(CONF_RESOURCE_SET_ID)
+        # Mirrors manage_device.py's own device-removal refresh: drop a forced gateway-only
+        # preference once there's no usable gateway left, or a gateway disappearing here
+        # (removed in the app) would leave the coordinator stuck raising ConfigEntryNotReady
+        # forever on reload instead of falling back to BLE.
+        has_gateway = bool(gateways and resource_set_id)
+
+        def _transport_for(current: str) -> str:
+            # Only a gateway-only preference actually becomes impossible without a gateway. An
+            # explicit BLE choice stays valid and must survive, or an unrelated site change
+            # would silently downgrade it to AUTO and start using a gateway added later on
+            # its own. Deferred into a callable because the answer depends on the preference
+            # as it is when we actually write, which may be newer than what we read here.
+            return TRANSPORT_AUTO if not has_gateway and current == TRANSPORT_GATEWAY else current
+
+        new_transport = _transport_for(entry.options.get(CONF_TRANSPORT, TRANSPORT_AUTO))
+        new_data = {
+            CONF_CRYPTO_KEY: site.crypto_key.hex(),
+            CONF_DEVICES: devices,
+            CONF_INPUTS: inputs,
+            CONF_MOTION: motion,
+            CONF_SCENES: scenes,
+            CONF_ROOMS: rooms,
+            CONF_GATEWAYS: gateways,
+            CONF_RESOURCE_SET_ID: resource_set_id,
+            CONF_DEVICE_ADDRESSES: site.device_addresses,
+        }
+        # A gateway newly appearing on an entry that predates CONF_INSTALLATION_ID (or
+        # never had one) must seed it now - the gateway transport requires it and the
+        # reload below would otherwise crash with a KeyError instead of applying this.
+        if gateways and not entry.data.get(CONF_INSTALLATION_ID):
+            new_data[CONF_INSTALLATION_ID] = str(uuid4())
+        changed = [k for k, v in new_data.items() if entry.data.get(k) != v]
+        new_options = {**entry.options, CONF_TRANSPORT: new_transport}
+        transport_changed = new_options[CONF_TRANSPORT] != entry.options.get(CONF_TRANSPORT, TRANSPORT_AUTO)
+        if not changed and not transport_changed:
+            return
+        if not reload:
+            # Setup-time self-heal (see async_start): persist only, no reload - the caller's
+            # own re-raised ConfigEntryNotReady triggers HA's setup retry instead.
+            _LOGGER.info(
+                "Plejd site changed (%s) — persisting for the next setup retry", ", ".join(changed) or "transport"
+            )
+            self.hass.config_entries.async_update_entry(entry, data={**entry.data, **new_data}, options=new_options)
+            return
+        _LOGGER.info("Plejd site changed (%s) — reloading to apply updates", ", ".join(changed) or "transport")
+        # Reload explicitly (rather than relying on the entry's update listener alone) so a
+        # rejected reload (e.g. a platform refused to unload) is actually noticed - otherwise
+        # entry.data already matches the fresh site and the running coordinator never
+        # reflects it. Guarded by the shared per-entry reload lock so the listener doesn't
+        # also fire a second, racing reload for this same change.
+        # Populated inside the lock, immediately before the write, so the rollback restores
+        # exactly what this poll overwrote - a snapshot taken out here would instead restore
+        # values from before any concurrent operation that landed while we waited for the lock.
+        overwritten_data: dict[str, Any] = {}
+        overwritten_transport: tuple[str, ...] = ()
+        written_transport: str | None = None  # what we actually wrote, to detect a newer edit
+        # What the site-derived keys looked like when the diff above was computed. If they
+        # differ once we hold the lock, a management operation (device/room/scene/schedule)
+        # landed in between and its result is NEWER than this poll's fetch - applying our
+        # overlay would revert the thing the user just did.
+        pre_lock_values = {key: entry.data.get(key) for key in new_data}
+        reload_ok = True
+        lock = schedule_ws.async_get_reload_lock(self.hass, entry.entry_id)
+        try:
+            async with lock:
+                if self._closed:
+                    # Waiting for the lock is an await point, so the operation holding it (or an
+                    # independent unload) can have shut this coordinator down meanwhile - the
+                    # interval unsubscribe cannot stop an already-running callback. Writing now
+                    # would reload the entry after our own teardown, racing entry removal or
+                    # immediately reloading the coordinator that replaced us.
+                    _LOGGER.debug("Plejd cloud poll: coordinator was shut down while waiting for the lock")
+                elif any(entry.data.get(key) != value for key, value in pre_lock_values.items()):
+                    # Skip rather than overwrite: the next interval re-fetches, and a
+                    # management operation's own reload has already applied its change.
+                    _LOGGER.info(
+                        "Plejd cloud poll: the entry changed while waiting for the reload lock — "
+                        "skipping this poll so the newer change stands"
+                    )
+                else:
+                    schedule_ws.async_mark_expecting_self_reload(self.hass, entry.entry_id)
+                    # Everything is read HERE, inside the lock, not from the pre-lock snapshot
+                    # the diff above was computed from: if another operation held the lock
+                    # while we waited, writing back anything captured before that would
+                    # discard its change permanently.
+                    overwritten_data = {key: entry.data[key] for key in new_data if key in entry.data}
+                    overwritten_transport = (entry.options[CONF_TRANSPORT],) if CONF_TRANSPORT in entry.options else ()
+                    written_transport = _transport_for(entry.options.get(CONF_TRANSPORT, TRANSPORT_AUTO))
+                    self.hass.config_entries.async_update_entry(
+                        entry,
+                        data={**entry.data, **new_data},
+                        options={**entry.options, CONF_TRANSPORT: written_transport},
+                    )
+                    try:
+                        reload_ok = await self.hass.config_entries.async_reload(entry.entry_id)
+                    except Exception:  # noqa: BLE001 - treated like a rejected reload below
+                        _LOGGER.exception("Plejd cloud poll: reload after a site change raised")
+                        reload_ok = False
+        finally:
+            schedule_ws.async_consume_expected_self_reload(self.hass, entry.entry_id)
+        follow_up_ok = False
+        if self.hass.data.get(schedule_ws.DATA_RELOAD_PENDING) == entry.entry_id:
+            self.hass.data.pop(schedule_ws.DATA_RELOAD_PENDING, None)
+            async with lock:
+                try:
+                    follow_up_ok = await self.hass.config_entries.async_reload(entry.entry_id)
+                except Exception:  # noqa: BLE001 - treated like a rejected follow-up reload below
+                    _LOGGER.exception("Plejd cloud poll: follow-up reload for a concurrent change raised")
+                    follow_up_ok = False
+            if not follow_up_ok:
+                # A rejected (not raised) reload is silently dropping someone else's change
+                # otherwise - re-mark it pending so the next successful reload (from this
+                # poll or any other operation) picks it up, instead of leaving the running
+                # coordinator stale until an unrelated site/option change happens to retry it.
+                _LOGGER.warning("Plejd cloud poll: follow-up reload for a concurrent change failed; leaving it pending")
+                self.hass.data[schedule_ws.DATA_RELOAD_PENDING] = entry.entry_id
+        if not reload_ok and not follow_up_ok:
+            # Revert the cached snapshot rather than just logging: leaving entry.data
+            # already matching the fresh site would make every later poll's comparison
+            # find no difference and never retry, stranding the running coordinator (which
+            # never actually got the new data live) stale until an unrelated cloud change
+            # or an HA restart. Reverting means the next poll's diff naturally retries this.
+            #
+            # A follow-up reload that succeeded is deliberately treated as this poll having
+            # landed after all: it reloaded the entry with our data already written, so the
+            # sync IS live and rolling back would undo a working state.
+            _LOGGER.warning(
+                "Plejd cloud poll: reload after a site change failed; reverting the cached "
+                "snapshot so the next poll retries it"
+            )
+            async with lock:
+                # Restore a key only if its CURRENT value is still the one this poll wrote.
+                # Reconfigure and the options flow do not take this integration-specific lock,
+                # so a newer edit to one of these keys is reachable even here - and undoing it
+                # would be the very destruction this rollback exists to avoid.
+                reverted_data = {**entry.data}
+                for key, written in new_data.items():
+                    if entry.data.get(key) != written:
+                        continue  # someone edited it after us; theirs is newer, leave it alone
+                    if key in overwritten_data:
+                        reverted_data[key] = overwritten_data[key]
+                    else:
+                        reverted_data.pop(key, None)  # a key this poll introduced (e.g. installation id)
+                reverted_options = {**entry.options}
+                if entry.options.get(CONF_TRANSPORT) == written_transport:
+                    if overwritten_transport:
+                        reverted_options[CONF_TRANSPORT] = overwritten_transport[0]
+                    else:
+                        reverted_options.pop(CONF_TRANSPORT, None)
+                schedule_ws.async_mark_expecting_self_reload(self.hass, entry.entry_id)
+                try:
+                    self.hass.config_entries.async_update_entry(entry, data=reverted_data, options=reverted_options)
+                    # A reload that unloaded the old entry but then failed to set the new one
+                    # up has already torn down this coordinator - including the poll timer
+                    # that the revert above is counting on for the retry. Bring the entry back
+                    # up on the known-good snapshot instead of leaving nothing loaded and
+                    # nothing scheduled, which would strand it until an HA restart.
+                    try:
+                        if not await self.hass.config_entries.async_reload(entry.entry_id):
+                            _LOGGER.warning("Plejd cloud poll: reload of the reverted snapshot was rejected")
+                    except Exception:  # noqa: BLE001 - best-effort recovery, already logging a failure
+                        _LOGGER.exception("Plejd cloud poll: reload of the reverted snapshot raised")
+                finally:
+                    schedule_ws.async_consume_expected_self_reload(self.hass, entry.entry_id)
 
     def _schedule_firmware_checks(self) -> None:
         """Check firmware shortly after start, then daily; both are best-effort."""
@@ -929,19 +1201,22 @@ class PlejdCoordinator:
 
     async def async_shutdown(self) -> None:
         self._closed = True
+        if self._cloud_poll_unsub is not None:
+            self._cloud_poll_unsub()
+            self._cloud_poll_unsub = None
         self.dim_ramp.shutdown()
         if self._clock_unsub is not None:
             self._clock_unsub()
             self._clock_unsub = None
+        if self._faults_unsub is not None:
+            self._faults_unsub()
+            self._faults_unsub = None
         if self._firmware_unsub is not None:
             self._firmware_unsub()
             self._firmware_unsub = None
         if self._firmware_now_unsub is not None:
             self._firmware_now_unsub()
             self._firmware_now_unsub = None
-        if self._faults_unsub is not None:
-            self._faults_unsub()
-            self._faults_unsub = None
         if self._reconnect_task is not None:
             self._reconnect_task.cancel()
             self._reconnect_task = None

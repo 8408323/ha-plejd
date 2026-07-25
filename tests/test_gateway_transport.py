@@ -283,6 +283,27 @@ def test_handle_push_ignores_non_output_command():
     assert conn.state == {} and fired == []
 
 
+def test_handle_push_forwards_every_decoded_command_to_on_event():
+    from plejd.const import CMD_NOTIFY_EVENTS
+    from plejd.protocol import encode_command
+
+    events = []
+    conn = _conn(_FakeWS(), on_event=lambda command: events.append(command))
+    # NotifyEvents (fault) push - not an output-state command, but on_event still fires
+    # with the decoded Command so the coordinator's own dispatch (faults, motion,
+    # button) works the same as it does for BLE, not just output-state changes.
+    conn._handle_frame(json.dumps(_push_frame(10, encode_command(10, CMD_NOTIFY_EVENTS, bytes([1])))))
+    assert len(events) == 1 and events[0].address == 10 and events[0].command == CMD_NOTIFY_EVENTS
+
+
+def test_handle_push_without_on_event_does_not_crash():
+    from plejd.const import CMD_NOTIFY_EVENTS
+    from plejd.protocol import encode_command
+
+    conn = _conn(_FakeWS())  # on_event defaults to None
+    conn._handle_frame(json.dumps(_push_frame(10, encode_command(10, CMD_NOTIFY_EVENTS, bytes([1])))))
+
+
 def test_handle_push_routes_state_command_to_on_event_instead_of_on_state():
     state_fired = []
     events = []

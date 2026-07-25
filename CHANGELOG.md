@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **Automatic cloud sync.** Every 24 hours the integration checks the Plejd cloud
+  for site changes (devices/rooms/scenes added or renamed via the Plejd app,
+  gateway added) and reloads automatically if anything differs — no manual
+  Reconfigure needed, though Reconfigure still works for an immediate sync.
+
 ## [0.11.0] - 2026-07-20
 
 ### Added

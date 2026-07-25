@@ -52,6 +52,11 @@ _OUTPUT_TYPE_CATEGORY = {
 }
 
 
+# Parse's error code for rejected login credentials (returned with a 404). The ONLY signal
+# that a login failure is about the credentials rather than the request - see async_login.
+PARSE_ERROR_INVALID_LOGIN = 101
+
+
 class PlejdCloudError(Exception):
     """A Plejd cloud request failed."""
 
@@ -185,6 +190,12 @@ class PlejdCloudSite:
     all_rooms: list[PlejdCloudRoomInfo] = field(default_factory=list)
     # every scene on the site, for scene management - see PlejdCloudSceneInfo.
     all_scenes: list[PlejdCloudSceneInfo] = field(default_factory=list)
+    # names of collections (devices/inputs/motion/scenes/rooms/gateways) whose raw source
+    # field(s) were missing or the wrong type in this response, as opposed to present and
+    # genuinely empty (e.g. the user deleted their last scene) - callers that cache and diff
+    # this site (coordinator.py's cloud poll) must not treat a malformed field the same as a
+    # real, intentional deletion.
+    malformed: frozenset[str] = frozenset()
 
 
 def _headers(token: str | None = None) -> dict[str, str]:
@@ -204,7 +215,19 @@ async def async_login(session: ClientSession, email: str, password: str) -> str:
         data = await resp.json()
         token = data.get("sessionToken") if isinstance(data, dict) else None
         if resp.status != 200 or not token:
-            raise PlejdAuthError(str(data.get("error", "login failed")) if isinstance(data, dict) else "login failed")
+            message = str(data.get("error", "login failed")) if isinstance(data, dict) else "login failed"
+            # Callers start HA's reauth flow on PlejdAuthError, so ONLY Parse's own
+            # credential-rejection code may map to it. Parse answers a bad username/password
+            # on this endpoint with code 101 (confirmed by our own capture), so anything
+            # without that code did not establish that the stored password is wrong: a 403
+            # from a WAF, a 404 during an endpoint rollout, a 200 carrying no sessionToken, a
+            # timeout or a 5xx are all request failures. Treating those as auth failures
+            # prompts the user to re-enter a password that was never the problem, and in the
+            # unattended daily poll that prompt is pure noise.
+            code = data.get("code") if isinstance(data, dict) else None
+            if code == PARSE_ERROR_INVALID_LOGIN:
+                raise PlejdAuthError(message)
+            raise PlejdCloudError(message)
         return token
 
 
@@ -735,22 +758,114 @@ def parse_site(site: dict) -> PlejdCloudSite:
     key_hex = mesh.get("cryptoKey")
     if not key_hex:
         raise PlejdCloudError("site has no cryptoKey")
-    # cryptoKey is dash-separated hex ("XX-XX-..", 16 bytes) — validated against the API.
+    # cryptoKey is dash-separated hex ("XX-XX-..", 16 bytes). The BLE auth path requires
+    # exactly 16 bytes; accepting any other length here would let a malformed cloud
+    # response silently replace a known-good cached key with one that can never
+    # authenticate, stranding the mesh until a human notices and re-triggers setup.
     crypto_key = bytes.fromhex(key_hex.replace("-", ""))
+    if len(crypto_key) != 16:
+        raise PlejdCloudError("site cryptoKey is not 16 bytes")
     # meshKey is a dash-separated hex string used as the BLE AccessAddress during commissioning.
     mesh_key: str = mesh.get("meshKey") or ""
 
-    device_address = site.get("deviceAddress") or {}
-    output_address = site.get("outputAddress")
-    output_address = output_address if isinstance(output_address, dict) else {}
-    hardware_by_id = {d.get("deviceId"): d for d in site.get("plejdDevices") or []}
+    # A field's raw source key being absent or the wrong type means this response is
+    # truncated/malformed, not that the user emptied that collection - the difference
+    # matters to callers (coordinator.py's cloud poll) that must not treat "cloud sent
+    # garbage" the same as "cloud correctly reports zero scenes now". An empty list/dict
+    # of the right type is a genuine, trustworthy "there are none".
+    # Each raw field is normalized to an empty container of the right type as it is checked,
+    # and everything below parses those locals rather than re-reading site[...]: a wrong-typed
+    # but non-empty value (e.g. devices as an object, inputAddress as a list) would otherwise
+    # blow up mid-parse with AttributeError/TypeError before `malformed` could reach the
+    # caller at all, turning a skippable bad response into an unhandled exception.
+    # A collection is also malformed when a companion map it is parsed against is the wrong
+    # type: scenes with a wrong-typed sceneIndex yields no executable scenes, and rooms with a
+    # wrong-typed outputGroups yields no room entities - both parse "successfully" to an empty
+    # list that would look like a genuine deletion and destroy those entities on the next poll.
+    #
+    # Whether an ABSENT key is malformed depends on the key, because omission means two very
+    # different things depending on which collection it is:
+    #
+    #  - OPTIONAL (the default): omission is how the API says the site has none of them. A
+    #    BLE-only site has no `gateways`; a site with no rooms has no
+    #    `rooms`/`roomAddress`/`outputGroups`; a site of only lights/relays has no
+    #    `inputAddress`; a site with no scenes has no `scenes`/`sceneIndex`. Flagging those
+    #    would refuse setup, refuse reconfigure and stop the poll syncing for such a site -
+    #    a far worse failure than the one the flag exists to prevent.
+    #  - REQUIRED (`required=True`): the site cannot meaningfully exist without it, so
+    #    omission means the response is truncated, not that the collection is empty.
+    #    `devices` is the clearest case; `plejdDevices`/`deviceAddress` are required only
+    #    once `devices` is non-empty, since those devices must have hardware entries and
+    #    mesh addresses. Normalizing THOSE to empty is what would silently wipe every
+    #    entity, which is exactly what the flag is for.
+    malformed: set[str] = set()
+
+    def _checked_list(key: str, *labels: str, id_field: str | None = None, required: bool = False) -> list:
+        raw = site.get(key)
+        if raw is None:
+            if required:
+                malformed.update(labels)
+            return []  # see the required/optional note above
+        if not isinstance(raw, list):
+            malformed.update(labels)
+            return []
+        if id_field is not None and any(
+            not isinstance(item, dict) or not isinstance(item.get(id_field), str) for item in raw
+        ):
+            # A stray non-object element, or a record whose id is missing or not a string,
+            # means this array is itself truncated/corrupt. The loops below still skip such
+            # an element so the parse survives, but that silently drops a real
+            # device/scene/room from the snapshot - which a caching, diffing caller (the
+            # cloud poll) would read as a deliberate deletion and persist, losing the entity.
+            malformed.update(labels)
+        return raw
+
+    def _checked_dict(key: str, *labels: str, required: bool = False) -> dict:
+        raw = site.get(key)
+        if raw is None:
+            if required:
+                malformed.update(labels)
+            return {}  # see the required/optional note above
+        if isinstance(raw, dict):
+            return raw
+        malformed.update(labels)
+        return {}
+
+    # devices is required: a site without it is a truncated response, not an empty site, and
+    # normalizing it away is what would wipe every entity the integration has.
+    raw_devices = _checked_list("devices", "devices", id_field="deviceId", required=True)
+    has_devices = bool(raw_devices)
+    input_address = _checked_dict("inputAddress", "inputs")
+    # plejdDevices feeds both the motion sensors and every device's hardware id/model, so a
+    # corrupt element there makes both collections untrustworthy. Required once there are
+    # devices at all, since each of those must have a hardware entry here.
+    plejd_devices = _checked_list("plejdDevices", "motion", "devices", id_field="deviceId", required=has_devices)
+    raw_scenes = _checked_list("scenes", "scenes", id_field="sceneId")
+    scene_index = _checked_dict("sceneIndex", "scenes")
+    # These two carry every mesh address there is: outputAddress is what control commands
+    # target, deviceAddress is the physical-device fallback (and what fault polling and the
+    # motion sensors use). Losing either silently yields devices with address=None - parsed
+    # "successfully" into entities that can never be commanded - so they count as malformed
+    # device (and, for deviceAddress, motion) data rather than an empty-but-valid map.
+    # outputAddress stays optional: a single-output device legitimately falls back to its
+    # deviceAddress, so its absence is survivable rather than proof of truncation.
+    output_address = _checked_dict("outputAddress", "devices")
+    device_address = _checked_dict("deviceAddress", "devices", "motion", required=has_devices)
+    raw_rooms = _checked_list("rooms", "rooms", id_field="roomId")
+    room_address = _checked_dict("roomAddress", "rooms")
+    output_groups = _checked_dict("outputGroups", "rooms")
+    gateways_raw = _checked_list("gateways", "gateways", id_field="deviceId")
+
+    hardware_by_id = {d.get("deviceId"): d for d in plejd_devices if isinstance(d, dict)}
 
     devices: list[PlejdCloudDevice] = []
     seen_outputs: dict[str, int] = {}  # deviceId -> next output index (devices[] is one entry per output)
-    for info in site.get("devices") or []:
+    for info in raw_devices:
+        if not isinstance(info, dict):
+            continue  # untrusted cloud data: a non-object entry in devices[]
         device_id = info.get("deviceId")
-        if device_id is None:
-            continue
+        if not isinstance(device_id, str):
+            continue  # untrusted cloud data: a non-string id would also break the sort below
         output_index = seen_outputs.get(device_id, 0)
         seen_outputs[device_id] = output_index + 1
         hardware = hardware_by_id.get(device_id, {})
@@ -759,9 +874,15 @@ def parse_site(site: dict) -> PlejdCloudSite:
         output_type = (info.get("outputType") or "UNKNOWN").upper()
         category = _OUTPUT_TYPE_CATEGORY.get(output_type) or DEFAULT_CATEGORY.get(hardware_id, CATEGORY_NONE)
         out_map = output_address.get(device_id) or {}
-        outputs = [int(a) for a in out_map.values()]
+        # Sorted, not in outputAddress's own key order: this list is only ever used as a set
+        # of the device's output addresses (a multi-output check), and leaving it in the
+        # cloud's arbitrary JSON object order would make an unchanged site compare unequal
+        # to its cached snapshot and reload the integration for nothing (coordinator.py's
+        # cloud poll diffs entry.data against this).
+        outputs = sorted(int(a) for a in out_map.values())
+        phys_address = device_address.get(device_id)
         # Control targets the output's own mesh address; fall back to the device address.
-        address = out_map.get(str(output_index), device_address.get(device_id))
+        address = out_map.get(str(output_index), phys_address)
         # Prefer the per-output Dimmable trait; fall back to category when the cloud
         # omits traits (a light-category output can still be on/off only).
         traits = int(info.get("traits") or 0)
@@ -785,33 +906,65 @@ def parse_site(site: dict) -> PlejdCloudSite:
             )
         )
 
-    input_address = site.get("inputAddress") or {}
-    name_by_device = {info.get("deviceId"): info.get("title") for info in site.get("devices") or []}
+    # Outcome check, deliberately instead of validating each source map's coverage separately:
+    # a device only works if it resolved to BOTH a mesh address and a hardware record, and it
+    # can fail to for many reasons (deviceAddress truncated, outputAddress missing this output,
+    # plejdDevices missing this record, an out-of-range address...). Asserting the result
+    # covers every one of those at once, including shapes not enumerated here - and a device
+    # that came out address-less or hardware-unknown is exactly what the light/switch platforms
+    # silently drop and what the settings entities lose, so it must not be cached over a
+    # working snapshot.
+    if any(d.address is None or d.device_id not in hardware_by_id for d in devices):
+        malformed.add("devices")
+    name_by_device = {info.get("deviceId"): info.get("title") for info in raw_devices if isinstance(info, dict)}
+    # Several inputs can share one mesh address (the same physical button reported under more
+    # than one index), and only the first is kept. Collect every candidate and order them
+    # BEFORE deduplicating, so the winner is the lowest (device_id, input_index) rather than
+    # whichever the cloud's arbitrary JSON key order happened to put first: otherwise the
+    # cached input_index flips between polls, which both reloads an unchanged integration and
+    # makes a later per-input settings write target a different physical input.
+    input_candidates: list[tuple[str, int, int]] = []
+    for device_id, idx_map in input_address.items():
+        # Corrupt entries are skipped so the parse survives, but skipping silently drops real
+        # buttons - which the diffing poll would read as a deletion and persist, removing
+        # those event entities. Flag the collection so the snapshot is rejected instead.
+        if not isinstance(device_id, str):
+            # Mixed key types would also make the candidate sort below compare int with str
+            # and raise, aborting the whole parse instead of returning a rejectable site.
+            malformed.add("inputs")
+            continue
+        if not isinstance(idx_map, dict):
+            malformed.add("inputs")
+            continue  # untrusted cloud data: a malformed per-device input map
+        for idx_str, addr in idx_map.items():
+            try:
+                input_candidates.append((device_id, int(idx_str), int(addr)))
+            except (ValueError, TypeError):
+                malformed.add("inputs")  # a non-numeric index/address is the same loss
+    input_candidates.sort()
     inputs: list[PlejdCloudInput] = []
     seen_addr: set[int] = set()
-    for device_id, idx_map in input_address.items():
-        for idx_str, addr in (idx_map or {}).items():
-            try:
-                address = int(addr)
-                input_index = int(idx_str)
-            except (ValueError, TypeError):
-                continue  # malformed entry from the cloud - skip it, not fatal
-            if address in seen_addr:
-                continue
-            seen_addr.add(address)
-            inputs.append(
-                PlejdCloudInput(
-                    device_id=device_id,
-                    name=name_by_device.get(device_id) or "Button",
-                    address=address,
-                    input_index=input_index,
-                )
+    for device_id, input_index, address in input_candidates:
+        if address in seen_addr:
+            continue
+        seen_addr.add(address)
+        inputs.append(
+            PlejdCloudInput(
+                device_id=device_id,
+                name=name_by_device.get(device_id) or "Button",
+                address=address,
+                input_index=input_index,
             )
+        )
 
     motion: list[PlejdCloudMotion] = []
-    for phys in site.get("plejdDevices") or []:
+    for phys in plejd_devices:
+        if not isinstance(phys, dict):
+            continue  # untrusted cloud data: a non-object entry in plejdDevices[]
         if int(phys.get("hardwareId") or 0) == HARDWARE_WMS_01:
             device_id = phys.get("deviceId")
+            if not isinstance(device_id, str):
+                continue  # untrusted cloud data: a non-string id would also break the sort below
             addr = device_address.get(device_id)
             if addr is not None:
                 motion.append(PlejdCloudMotion(device_id=device_id, name="Motion sensor", address=int(addr)))
@@ -821,7 +974,9 @@ def parse_site(site: dict) -> PlejdCloudSite:
     # Gateways live in gateways[], not plejdDevices, and carry the firmware dict under
     # `firmwareObject` (their `firmware` is a bare buildTime int), so prefer that.
     firmware_by_device: dict[str, PlejdDeviceFirmware] = {}
-    for phys in (site.get("plejdDevices") or []) + (site.get("gateways") or []):
+    for phys in plejd_devices + gateways_raw:
+        if not isinstance(phys, dict):
+            continue  # untrusted cloud data: a non-object entry in plejdDevices[]/gateways[]
         device_id = phys.get("deviceId")
         if device_id is None:
             continue
@@ -834,38 +989,47 @@ def parse_site(site: dict) -> PlejdCloudSite:
             faceplate_id=str(faceplate) if faceplate is not None else None,
         )
 
-    scene_index = site.get("sceneIndex") or {}
     scenes = [
         PlejdCloudScene(scene_id=sc["sceneId"], name=sc.get("title") or sc["sceneId"], index=int(idx))
-        for sc in site.get("scenes") or []
-        if isinstance(sc, dict) and (idx := scene_index.get(sc.get("sceneId"))) is not None
+        for sc in raw_scenes
+        if isinstance(sc, dict)
+        and isinstance(sc.get("sceneId"), str)
+        and (idx := scene_index.get(sc.get("sceneId"))) is not None
     ]
     all_scenes = [
         PlejdCloudSceneInfo(scene_id=sc["sceneId"], name=sc.get("title") or sc["sceneId"])
-        for sc in site.get("scenes") or []
+        for sc in raw_scenes
         if isinstance(sc, dict) and isinstance(sc.get("sceneId"), str)
     ]
 
     # A gateway (GWY-01) has no controllable output, so it is absent from devices[];
     # it lives only in gateways[]. Its resourceSetId authorises the remote WebSocket.
-    gateway_objs = site.get("gateways") or []
-    gateways = [g["deviceId"] for g in gateway_objs if g.get("deviceId")]
+    gateway_objs = gateways_raw
+    gateways = [g["deviceId"] for g in gateway_objs if isinstance(g, dict) and isinstance(g.get("deviceId"), str)]
     # The gateway's own resourceSetId is authoritative. Only fall back to a site
     # resourceSet when there's exactly one (otherwise we can't tell which grants access).
     resource_sets = site.get("resourceSets") or []
-    resource_set_id = next((g.get("resourceSetId") for g in gateway_objs if g.get("resourceSetId")), None)
+
+    def _grant(value: object) -> str | None:
+        # Must be a non-empty string: it goes straight into the WebSocket's Resource-Set-ID
+        # header, so a truthy non-string (e.g. 123) would be persisted over a working cached
+        # id and then fail every gateway connection - and, because the bad value now matches
+        # the cached snapshot, later polls would see no change and never repair it.
+        if isinstance(value, str) and value:
+            return value
+        if value is not None:
+            malformed.add("gateways")
+        return None
+
+    resource_set_id = next(
+        (grant for g in gateway_objs if isinstance(g, dict) and (grant := _grant(g.get("resourceSetId")))), None
+    )
     if resource_set_id is None and len(resource_sets) == 1:
-        resource_set_id = resource_sets[0].get("objectId")
+        resource_set_id = _grant(resource_sets[0].get("objectId")) if isinstance(resource_sets[0], dict) else None
 
     # Rooms carry a group mesh address (roomAddress: roomId -> address); outputGroups maps
     # each output to the group addresses it belongs to. Dimming a room = one 0x0098 to its
     # group address (every member responds at once), the way the app controls a room.
-    room_address = site.get("roomAddress")
-    room_address = room_address if isinstance(room_address, dict) else {}
-    output_groups = site.get("outputGroups")
-    output_groups = output_groups if isinstance(output_groups, dict) else {}
-    raw_rooms = site.get("rooms")
-    raw_rooms = raw_rooms if isinstance(raw_rooms, list) else []
     room_titles = {
         r.get("roomId"): (r.get("title") if isinstance(r.get("title"), str) else "").strip()
         for r in raw_rooms
@@ -881,24 +1045,35 @@ def parse_site(site: dict) -> PlejdCloudSite:
     non_light_groups: set[int] = set()
     for device_id, out_map in output_groups.items():
         if not isinstance(out_map, dict):
+            # Skipping keeps the parse alive, but it drops this device's group memberships,
+            # which shrinks or empties the room list - a caching caller would read that as a
+            # real change and remove those room entities. Flag rather than lose them quietly.
+            malformed.add("rooms")
             continue  # untrusted cloud data: skip a malformed per-device group-membership map
         dev_out_addr = output_address.get(device_id)
         dev_out_addr = dev_out_addr if isinstance(dev_out_addr, dict) else {}
         for out_idx, groups in out_map.items():
+            # Every skip below loses a group membership, so each one flags too - see above.
+            if not isinstance(groups, list):
+                malformed.add("rooms")
+                continue
             # Mirror the device parser's own fallback: a single-output light can be
             # missing from outputAddress and controlled via its deviceAddress instead.
             out_addr = dev_out_addr.get(str(out_idx), device_address.get(device_id))
             if out_addr is None:
+                malformed.add("rooms")
                 continue
             try:
                 addr = int(out_addr)
             except (TypeError, ValueError):
+                malformed.add("rooms")
                 continue
             is_light = category_by_address.get(addr) == CATEGORY_LIGHT
-            for group in groups if isinstance(groups, list) else []:
+            for group in groups:
                 try:
                     group_addr = int(group)
                 except (TypeError, ValueError):
+                    malformed.add("rooms")
                     continue
                 if is_light:
                     members_by_group.setdefault(group_addr, []).append(addr)
@@ -972,6 +1147,24 @@ def parse_site(site: dict) -> PlejdCloudSite:
             continue  # mesh addresses are single-byte (encode_command masks with & 0xFF); 0 is broadcast-like
         device_addresses[device_id] = addr_int
 
+    # Canonical ordering, applied once here so EVERY caller that stores a snapshot (the
+    # config flow's setup and reconfigure steps, coordinator.py's cloud poll) writes the
+    # same order for the same site. getSiteById is JSON-object-keyed for several of these
+    # (inputAddress, roomAddress, per-output address maps, ...) and object key order is not
+    # semantically meaningful, so the same site can otherwise produce differently ordered
+    # lists across requests - and a stored snapshot in source order would make the very
+    # first poll after setup/reconfigure diff unequal and reload the integration for
+    # nothing. Sorting at the source keeps that impossible rather than relying on each
+    # write site to remember.
+    devices.sort(key=lambda d: (d.device_id, d.output_index))
+    inputs.sort(key=lambda i: (i.device_id, i.input_index))
+    motion.sort(key=lambda m: m.device_id)
+    scenes.sort(key=lambda s: s.scene_id)
+    rooms.sort(key=lambda r: r.room_id)
+    all_rooms.sort(key=lambda r: r.room_id)
+    all_scenes.sort(key=lambda s: s.scene_id)
+    gateways.sort()
+
     return PlejdCloudSite(
         site_id=meta.get("siteId") or "",
         title=meta.get("title") or "Plejd",
@@ -988,4 +1181,5 @@ def parse_site(site: dict) -> PlejdCloudSite:
         rooms=rooms,
         all_rooms=all_rooms,
         all_scenes=all_scenes,
+        malformed=frozenset(malformed),
     )

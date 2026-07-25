@@ -5,6 +5,7 @@ from __future__ import annotations
 import types
 
 import pytest
+from aiohttp import ClientError
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
 from plejd import config_flow as cf
 from plejd.cloud import (
@@ -40,7 +41,7 @@ def _flow():
     return flow
 
 
-def _site(site_id="S1"):
+def _site(site_id="S1", malformed=None):
     dev = PlejdCloudDevice(
         device_id="d1",
         name="Kitchen",
@@ -67,6 +68,7 @@ def _site(site_id="S1"):
         gateways=["gw1"],
         resource_set_id="rsABC",
         device_addresses={"d1": 1, "w1": 33},
+        malformed=frozenset(malformed or ()),
     )
 
 
@@ -104,6 +106,26 @@ async def test_invalid_auth(monkeypatch):
 
 async def test_cannot_connect(monkeypatch):
     _patch_cloud(monkeypatch, sites=PlejdCloudError("down"))
+    result = await _flow().async_step_user(_LOGIN)
+    assert result["errors"] == {"base": "cannot_connect"}
+
+
+@pytest.mark.parametrize(
+    "error",
+    [ConnectionResetError("connection reset"), TimeoutError("timed out"), ClientError("client error")],
+)
+async def test_user_step_handles_login_transport_failure(monkeypatch, error):
+    _patch_cloud(monkeypatch, login=error)
+    result = await _flow().async_step_user(_LOGIN)
+    assert result["errors"] == {"base": "cannot_connect"}
+
+
+@pytest.mark.parametrize(
+    "error",
+    [ConnectionResetError("connection reset"), TimeoutError("timed out"), ClientError("client error")],
+)
+async def test_user_step_handles_site_list_transport_failure(monkeypatch, error):
+    _patch_cloud(monkeypatch, login="tok", sites=error)
     result = await _flow().async_step_user(_LOGIN)
     assert result["errors"] == {"base": "cannot_connect"}
 
@@ -149,6 +171,24 @@ async def test_site_step_shows_form_when_no_input(monkeypatch):
 
 async def test_create_entry_handles_site_fetch_error(monkeypatch):
     _patch_cloud(monkeypatch, sites=[{"siteId": "S1"}], site=PlejdCloudError("nope"))
+    result = await _flow().async_step_user(_LOGIN)
+    assert result["type"] == "form" and result["errors"] == {"base": "cannot_connect"}
+
+
+@pytest.mark.parametrize(
+    "error",
+    [ConnectionResetError("connection reset"), TimeoutError("timed out"), ClientError("client error")],
+)
+async def test_create_entry_handles_site_fetch_transport_failure(monkeypatch, error):
+    _patch_cloud(monkeypatch, sites=[{"siteId": "S1"}], site=error)
+    result = await _flow().async_step_user(_LOGIN)
+    assert result["type"] == "form" and result["errors"] == {"base": "cannot_connect"}
+
+
+async def test_create_entry_refuses_a_malformed_site_response(monkeypatch):
+    # A truncated/wrong-typed collection parses into an empty one, so setting up on it would
+    # create an entry missing whole device/scene/room sets. Refuse it like any bad response.
+    _patch_cloud(monkeypatch, sites=[{"siteId": "S1"}], site=_site(malformed={"devices"}))
     result = await _flow().async_step_user(_LOGIN)
     assert result["type"] == "form" and result["errors"] == {"base": "cannot_connect"}
 
@@ -200,8 +240,17 @@ async def test_reauth_confirm_invalid_auth(monkeypatch):
     assert res["errors"] == {"base": "invalid_auth"}
 
 
-async def test_reauth_confirm_cannot_connect(monkeypatch):
-    _patch_cloud(monkeypatch, login=PlejdCloudError("down"))
+@pytest.mark.parametrize(
+    "error",
+    [
+        PlejdCloudError("down"),
+        ConnectionResetError("connection reset"),
+        TimeoutError("timed out"),
+        ClientError("client error"),
+    ],
+)
+async def test_reauth_confirm_cannot_connect(monkeypatch, error):
+    _patch_cloud(monkeypatch, login=error)
     flow = _reauth_flow(types.SimpleNamespace(data={CONF_EMAIL: "u@x.se"}))
     res = await flow.async_step_reauth_confirm({CONF_PASSWORD: "x"})
     assert res["errors"] == {"base": "cannot_connect"}
@@ -241,6 +290,19 @@ async def test_reconfigure_fetches_and_updates_entry(monkeypatch):
     assert updates[CONF_DEVICE_ADDRESSES] == {"d1": 1, "w1": 33}
     assert updates[CONF_RESOURCE_SET_ID] == "rsABC"
     assert updates[CONF_CRYPTO_KEY] == bytes(16).hex()
+    # _stored_entry() predates CONF_INSTALLATION_ID; a gateway showing up must seed one
+    # now, or the gateway transport this reload constructs would KeyError on it.
+    assert updates[CONF_INSTALLATION_ID]
+
+
+async def test_reconfigure_does_not_overwrite_existing_installation_id(monkeypatch):
+    new_site = _site()
+    _patch_cloud(monkeypatch, login="tok", site=new_site)
+    entry = _stored_entry()
+    entry.data[CONF_INSTALLATION_ID] = "already-set"
+    flow = _reconfigure_flow(entry)
+    res = await flow.async_step_reconfigure({})
+    assert CONF_INSTALLATION_ID not in res["data_updates"]  # left untouched, not regenerated
 
 
 async def test_reconfigure_invalid_auth(monkeypatch):
@@ -259,6 +321,27 @@ async def test_reconfigure_cannot_connect(monkeypatch):
 
 async def test_reconfigure_cannot_connect_on_site_fetch(monkeypatch):
     _patch_cloud(monkeypatch, login="tok", site=PlejdCloudError("down"))
+    flow = _reconfigure_flow(_stored_entry())
+    res = await flow.async_step_reconfigure({})
+    assert res["type"] == "form" and res["errors"] == {"base": "cannot_connect"}
+
+
+async def test_reconfigure_refuses_a_malformed_site_response(monkeypatch):
+    # Replacing the cached snapshot with normalized-empty collections would remove every
+    # entity of the affected kind - the entry must be left untouched instead.
+    entry = _stored_entry()
+    before = dict(entry.data)
+    _patch_cloud(monkeypatch, login="tok", site=_site(malformed={"scenes"}))
+    flow = _reconfigure_flow(entry)
+    res = await flow.async_step_reconfigure({})
+    assert res["type"] == "form" and res["errors"] == {"base": "cannot_connect"}
+    assert entry.data == before  # nothing persisted
+
+
+async def test_reconfigure_cannot_connect_on_transport_failure(monkeypatch):
+    # A raw transport failure (DNS/socket/TLS/timeout) isn't a PlejdCloudError, but must
+    # still show cannot_connect rather than crash the flow with an unhandled exception.
+    _patch_cloud(monkeypatch, login=OSError("connection reset"))
     flow = _reconfigure_flow(_stored_entry())
     res = await flow.async_step_reconfigure({})
     assert res["type"] == "form" and res["errors"] == {"base": "cannot_connect"}
