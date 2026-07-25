@@ -431,15 +431,18 @@ async def _async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
         # Not anticipated by the current lock holder, so it's a genuinely different,
         # concurrent change that landed while the lock was held - mark it pending instead
         # of assuming it's already covered; the lock holder checks this once it's done.
-        hass.data[schedule_ws.DATA_RELOAD_PENDING] = entry.entry_id
+        schedule_ws.async_mark_reload_pending(hass, entry.entry_id)
         return
+    # Captured BEFORE the reload: this reload can only be said to cover a change already
+    # pending when it started. A marker set while it runs belongs to a change that landed
+    # after the entry was read, so consuming it would skip a follow-up that is still needed.
+    pending_token = schedule_ws.async_reload_pending_token(hass, entry.entry_id)
     if await hass.config_entries.async_reload(entry.entry_id):
-        # This reload applied whatever the entry currently holds, which includes any change
-        # still marked pending from an earlier follow-up that failed. Leaving the marker set
-        # would make the next management operation reload a second time for a change already
-        # live - a needless teardown and BLE/gateway reconnect.
-        if hass.data.get(schedule_ws.DATA_RELOAD_PENDING) == entry.entry_id:
-            hass.data.pop(schedule_ws.DATA_RELOAD_PENDING, None)
+        # This reload applied whatever the entry held when it started, which includes any
+        # change still marked pending from an earlier follow-up that failed. Leaving that
+        # marker set would make the next management operation reload a second time for a
+        # change already live - a needless teardown and BLE/gateway reconnect.
+        schedule_ws.async_take_reload_pending_token(hass, entry.entry_id, pending_token)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

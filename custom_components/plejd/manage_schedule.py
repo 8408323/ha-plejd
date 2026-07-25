@@ -150,8 +150,7 @@ async def _sync_cloud_schedules_cache(hass: HomeAssistant, entry: ConfigEntry, c
         # Defensive: clears it even if the listener never ran within this session (e.g. a
         # genuinely no-op write), so it can't leak into a later, unrelated one.
         schedule_ws.async_consume_expected_self_reload(hass, entry.entry_id)
-    if hass.data.get(schedule_ws.DATA_RELOAD_PENDING) == entry.entry_id:
-        hass.data.pop(schedule_ws.DATA_RELOAD_PENDING, None)
+    if schedule_ws.async_take_reload_pending(hass, entry.entry_id):
         async with lock:
             try:
                 await hass.config_entries.async_reload(entry.entry_id)

@@ -109,10 +109,11 @@ SELF_HEAL_COOLDOWN_SECONDS = timedelta(minutes=15).total_seconds()
 # backwards would otherwise make the gap negative and suppress self-healing until real time
 # caught back up, far longer than the cooldown intends.
 DATA_LAST_SELF_HEAL = f"{DOMAIN}_last_self_heal"
-# Consecutive malformed-response skips per entry, and how many it takes to tell the user.
-# One bad response is transient; several in a row means the sync is effectively dead.
-DATA_MALFORMED_POLLS = f"{DOMAIN}_malformed_polls"
-MALFORMED_POLLS_BEFORE_REPAIR = 2
+# Deliberately no streak counter. Counting consecutive skips before warning needed state
+# that survives restarts (hass.data does not), and a system restarted between daily polls
+# could then skip malformed snapshots forever without ever warning. With a 24h interval a
+# single skipped poll already means a full day without syncing, which is worth saying out
+# loud - and the issue clears itself on the next usable response, so it cannot nag.
 
 
 def async_reset_self_heal_cooldown(hass: HomeAssistant, entry_id: str) -> None:
@@ -134,7 +135,6 @@ def async_clear_malformed_site_issue(hass: HomeAssistant, entry_id: str) -> None
     cloud is healthy again without going through the poll - the replacement coordinator
     would otherwise leave the warning up until its first scheduled poll, a day later.
     """
-    hass.data.get(DATA_MALFORMED_POLLS, {}).pop(entry_id, None)
     issue_registry.async_delete_issue(hass, DOMAIN, f"malformed_cloud_site_{entry_id}")
 
 
@@ -484,17 +484,12 @@ class PlejdCoordinator:
         self._schedule_firmware_checks()
 
     def _note_malformed_poll(self, collections: list[str]) -> None:
-        """Raise a repair issue once the cloud has served unusable data repeatedly.
+        """Raise a repair issue for a skipped sync.
 
         Skipping a malformed snapshot is the right call, but it is also completely silent:
-        without this, a site whose daily sync has been skipped for days looks identical to one
-        that simply has not changed. Only flag it after more than one consecutive skip, since a
-        single bad response is transient and self-healing.
+        without this, a site whose daily sync has been skipped looks identical to one that
+        simply has not changed.
         """
-        counts: dict[str, int] = self.hass.data.setdefault(DATA_MALFORMED_POLLS, {})
-        counts[self._entry_id] = counts.get(self._entry_id, 0) + 1
-        if counts[self._entry_id] < MALFORMED_POLLS_BEFORE_REPAIR:
-            return
         issue_registry.async_create_issue(
             self.hass,
             DOMAIN,
@@ -506,19 +501,11 @@ class PlejdCoordinator:
             is_persistent=True,
             severity=issue_registry.IssueSeverity.WARNING,
             translation_key="malformed_cloud_site",
-            translation_placeholders={
-                "collections": ", ".join(collections),
-                "count": str(counts[self._entry_id]),
-            },
+            translation_placeholders={"collections": ", ".join(collections)},
         )
 
     def _clear_malformed_polls(self) -> None:
-        """Drop the repair issue once the cloud serves a usable snapshot again.
-
-        Deletes unconditionally rather than only when the streak reached the threshold: the
-        issue outlives a restart but the counter does not, so gating on the counter would
-        strand a persisted issue on screen forever once the cloud recovered.
-        """
+        """Drop the repair issue once the cloud serves a usable snapshot again."""
         async_clear_malformed_site_issue(self.hass, self._entry_id)
 
     def _should_attempt_self_heal(self) -> bool:
@@ -728,8 +715,7 @@ class PlejdCoordinator:
         finally:
             schedule_ws.async_consume_expected_self_reload(self.hass, entry.entry_id)
         follow_up_ok = False
-        if self.hass.data.get(schedule_ws.DATA_RELOAD_PENDING) == entry.entry_id:
-            self.hass.data.pop(schedule_ws.DATA_RELOAD_PENDING, None)
+        if schedule_ws.async_take_reload_pending(self.hass, entry.entry_id):
             async with lock:
                 try:
                     follow_up_ok = await self.hass.config_entries.async_reload(entry.entry_id)
@@ -742,7 +728,7 @@ class PlejdCoordinator:
                 # poll or any other operation) picks it up, instead of leaving the running
                 # coordinator stale until an unrelated site/option change happens to retry it.
                 _LOGGER.warning("Plejd cloud poll: follow-up reload for a concurrent change failed; leaving it pending")
-                self.hass.data[schedule_ws.DATA_RELOAD_PENDING] = entry.entry_id
+                schedule_ws.async_mark_reload_pending(self.hass, entry.entry_id)
         if not reload_ok and not follow_up_ok:
             # Revert the cached snapshot rather than just logging: leaving entry.data
             # already matching the fresh site would make every later poll's comparison

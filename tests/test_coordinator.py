@@ -3430,9 +3430,11 @@ async def test_poll_faults_without_credentials_or_cache_is_noop(monkeypatch):
     assert attempted == []
 
 
-async def test_cloud_poll_raises_a_repair_issue_after_repeated_malformed_responses(monkeypatch):
+async def test_cloud_poll_raises_a_repair_issue_for_a_skipped_sync(monkeypatch):
     # Skipping a malformed snapshot is right but completely silent: a site whose daily sync
-    # has been skipped for days looks identical to one that simply has not changed.
+    # has been skipped looks identical to one that simply has not changed. Deliberately no
+    # "wait for N in a row" threshold - that needed state a restart would erase, and with a
+    # 24h interval one skip already means a full day without syncing.
     async def _login(session, email, password):
         return "TOKEN"
 
@@ -3453,21 +3455,17 @@ async def test_cloud_poll_raises_a_repair_issue_after_repeated_malformed_respons
     c = PlejdCoordinator(hass, entry)
 
     await c._async_poll_cloud(None)
-    # one bad response is transient and self-healing - don't nag about it
-    assert not getattr(hass, "created_issues", {})
 
-    await c._async_poll_cloud(None)
     issue = hass.created_issues["malformed_cloud_site_e1"]
     assert issue["severity"] == "warning"
     assert issue["translation_key"] == "malformed_cloud_site"
     assert issue["translation_placeholders"]["collections"] == "devices"
-    assert issue["translation_placeholders"]["count"] == "2"
 
 
 async def test_cloud_poll_clears_the_repair_issue_once_the_cloud_recovers(monkeypatch):
     from plejd.cloud import PlejdCloudDevice
 
-    responses = [_fake_site(malformed=["devices"]), _fake_site(malformed=["devices"]), _fake_site()]
+    responses = [_fake_site(malformed=["devices"]), _fake_site()]
 
     async def _login(session, email, password):
         return "TOKEN"
@@ -3489,7 +3487,6 @@ async def test_cloud_poll_clears_the_repair_issue_once_the_cloud_recovers(monkey
     )
     c = PlejdCoordinator(hass, entry)
 
-    await c._async_poll_cloud(None)
     await c._async_poll_cloud(None)
     assert "malformed_cloud_site_e1" in hass.created_issues
 
@@ -3521,7 +3518,6 @@ async def test_cloud_poll_clears_a_repair_issue_that_outlived_a_restart(monkeypa
     )
     # what a restart looks like: the persisted issue survived, hass.data did not
     hass.created_issues = {"malformed_cloud_site_e1": {"domain": "plejd"}}
-    assert coordinator_mod.DATA_MALFORMED_POLLS not in hass.data
 
     await PlejdCoordinator(hass, entry)._async_poll_cloud(None)
 
@@ -3548,9 +3544,7 @@ async def test_cloud_poll_marks_the_malformed_repair_issue_persistent(monkeypatc
         async_update_entry=lambda e, data, options=None: pytest.fail("must not persist a malformed snapshot"),
         async_reload=AsyncMock(),
     )
-    c = PlejdCoordinator(hass, entry)
-    await c._async_poll_cloud(None)
-    await c._async_poll_cloud(None)
+    await PlejdCoordinator(hass, entry)._async_poll_cloud(None)
 
     assert hass.created_issues["malformed_cloud_site_e1"]["is_persistent"] is True
 

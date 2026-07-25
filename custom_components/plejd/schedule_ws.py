@@ -66,7 +66,54 @@ DATA_RELOAD_PENDING = f"{DOMAIN}_schedule_reload_pending"
 # can never leak into a later, unrelated session if the listener never got a chance to run.
 _DATA_EXPECTING_SELF_RELOAD = f"{DOMAIN}_reload_expecting_self_reload"
 
+# Bumped every time the pending marker is set, so a holder can tell "the marker I saw
+# before my reload" from "a NEW marker set while my reload was running". Without it, a
+# reload that started before a change landed would wrongly consume that change's marker
+# and its required follow-up reload would never happen.
+_DATA_RELOAD_PENDING_SEQ = f"{DOMAIN}_reload_pending_seq"
+
 _NEXT_ID_KEY = "next_schedule_id"
+
+
+def async_mark_reload_pending(hass: HomeAssistant, entry_id: str) -> None:
+    """Record that `entry_id` has a change still needing a reload."""
+    hass.data[_DATA_RELOAD_PENDING_SEQ] = hass.data.get(_DATA_RELOAD_PENDING_SEQ, 0) + 1
+    hass.data[DATA_RELOAD_PENDING] = entry_id
+
+
+def async_reload_pending_token(hass: HomeAssistant, entry_id: str) -> int | None:
+    """Token identifying the current pending marker, or None if nothing is pending."""
+    if hass.data.get(DATA_RELOAD_PENDING) != entry_id:
+        return None
+    return hass.data.get(_DATA_RELOAD_PENDING_SEQ, 0)
+
+
+def async_take_reload_pending(hass: HomeAssistant, entry_id: str) -> bool:
+    """Claim any pending marker for `entry_id`, returning whether there was one.
+
+    For a caller that is about to reload with the entry's CURRENT contents, so whatever the
+    marker stands for is covered either way.
+    """
+    if hass.data.get(DATA_RELOAD_PENDING) != entry_id:
+        return False  # nothing pending, or it belongs to a different entry
+    hass.data.pop(DATA_RELOAD_PENDING, None)
+    return True
+
+
+def async_take_reload_pending_token(hass: HomeAssistant, entry_id: str, token: int | None) -> None:
+    """Claim the marker `token` came from, and only that one.
+
+    Deliberately a separate function rather than an optional argument: a caller whose reload
+    has already read the entry must not swallow a marker created after that point (the change
+    it stands for is not in the reload being performed), and `token=None` means there was
+    nothing pending to claim - which as an optional "no filter" argument reads exactly like
+    "claim anything" and would do the opposite of what is wanted.
+    """
+    if token is None or hass.data.get(DATA_RELOAD_PENDING) != entry_id:
+        return
+    if hass.data.get(_DATA_RELOAD_PENDING_SEQ, 0) != token:
+        return  # a newer change landed while the reload ran; its follow-up is still needed
+    hass.data.pop(DATA_RELOAD_PENDING, None)
 
 
 def async_get_reload_lock(hass: HomeAssistant, entry_id: str) -> asyncio.Lock:
@@ -153,10 +200,9 @@ async def async_reload_entry_with_lock(
                 reloaded = False
     finally:
         hass.data.pop(_DATA_EXPECTING_SELF_RELOAD, None)
-        if hass.data.get(DATA_RELOAD_PENDING) == entry.entry_id:
+        if async_take_reload_pending(hass, entry.entry_id):
             # A concurrent change's own reload was suppressed by the lock above while ours
             # was in flight; give it a reload of its own instead of dropping it silently.
-            hass.data.pop(DATA_RELOAD_PENDING, None)
             async with lock:
                 follow_up_ok = False
                 try:
@@ -168,7 +214,7 @@ async def async_reload_entry_with_lock(
                     # dropping that would lose someone else's change entirely - leave it
                     # pending so the next reload from any operation picks it up.
                     _LOGGER.warning("Plejd: follow-up reload for a concurrent change failed; leaving it pending")
-                    hass.data[DATA_RELOAD_PENDING] = entry.entry_id
+                    async_mark_reload_pending(hass, entry.entry_id)
     if not reloaded:
         if not raise_on_reload_failure:
             _LOGGER.warning("Plejd: entry failed to reload after %s; the cloud change was still made", error_context)
@@ -350,11 +396,10 @@ async def _async_persist(
                     reloaded = False
         finally:
             hass.data.pop(_DATA_EXPECTING_SELF_RELOAD, None)
-    if hass.data.get(DATA_RELOAD_PENDING) == entry.entry_id:
+    if async_take_reload_pending(hass, entry.entry_id):
         # A concurrent options change's own reload was suppressed by the lock above while
         # ours was in flight; it may have landed after we already read entry state, so give
         # it a reload of its own instead of dropping it silently (see _async_reload_entry).
-        hass.data.pop(DATA_RELOAD_PENDING, None)
         async with lock:
             follow_up_ok = False
             try:
@@ -365,7 +410,7 @@ async def _async_persist(
                 # A rejected reload reports failure by returning False without raising;
                 # dropping it would lose that concurrent change, so leave it pending.
                 _LOGGER.warning("Plejd: follow-up reload for a concurrent option change failed; leaving it pending")
-                hass.data[DATA_RELOAD_PENDING] = entry.entry_id
+                async_mark_reload_pending(hass, entry.entry_id)
     if save_failed:
         connection.send_error(msg["id"], "save_failed", "Could not save schedules")
         return

@@ -194,7 +194,7 @@
   "issues": {
     "malformed_cloud_site": {
       "title": "Plejd cloud is returning unusable site data",
-      "description": "Home Assistant has skipped the daily Plejd site sync {count} times in a row because the cloud returned data it could not trust (affected: {collections}).\n\nYour lights and devices keep working from the last good copy, and nothing has been removed - the sync is skipped deliberately rather than applying incomplete data. New devices, rooms or scenes added in the Plejd app will not appear until this clears.\n\nThis usually resolves itself. If it persists, reloading the integration or using Reconfigure to re-fetch the site will retry immediately."
+      "description": "The daily Plejd site sync was skipped because the cloud returned data Home Assistant could not trust (affected: {collections}).\n\nYour lights and devices keep working from the last good copy, and nothing has been removed - the sync is skipped deliberately rather than applying incomplete data. New devices, rooms or scenes added in the Plejd app will not appear until it succeeds.\n\nThis usually resolves itself by the next daily sync. To retry straight away, use Reconfigure on the Plejd integration - that re-fetches the site immediately. (Reloading the integration does not: it only re-arms the daily timer.)"
     }
   }
 }
