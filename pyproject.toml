@@ -13,11 +13,20 @@ dev = [
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
     "pytest-cov>=7.1.0",
-    "ruff>=0.15.21",
+    "ruff>=0.16.0",
     "voluptuous>=0.16.0",
     "bleak>=3.0.2",
-    "bleak-retry-connector>=4.6.1",
+    "bleak-retry-connector>=4.6.3",
     "cryptography>=49.0.0",
+    # Capped below 3.14 because aioresponses (test-only) has not shipped support for it:
+    # 3.14 made ClientResponse's `stream_writer` a required kwarg, which aioresponses 0.7.9
+    # does not pass, so every mocked-HTTP test dies with a TypeError. A one-file fix is open
+    # and mergeable upstream (pnuckowski/aioresponses#288, tracked in #289) but was not
+    # included in 0.7.9; the maintainer is intermittently active rather than absent, so this
+    # may clear on its own. NOTE: aiohttp is dev/test-only here (project dependencies and
+    # manifest requirements are both empty) - at runtime the integration uses Home
+    # Assistant's own aiohttp, so this cap does not hold users on an old version.
+    # Lift it once an aioresponses release supports aiohttp 3.14.
     "aiohttp>=3.13.5,<3.14",
     "aioresponses>=0.7.9",
 ]
