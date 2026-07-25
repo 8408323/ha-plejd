@@ -1296,6 +1296,31 @@ def test_parse_site_still_skips_a_device_record_missing_its_id():
     assert {d.device_id for d in site.devices} == {"d1", "d2", "d3"}
 
 
+@pytest.mark.parametrize(
+    ("missing", "labels"),
+    [
+        ("devices", {"devices"}),
+        ("plejdDevices", {"devices", "motion"}),
+        ("deviceAddress", {"devices", "motion"}),
+    ],
+)
+def test_parse_site_flags_a_required_collection_that_is_absent(missing, labels):
+    # These cannot legitimately be omitted by a site that has devices: omission means the
+    # response is truncated, and normalizing it to empty is exactly what would persist
+    # CONF_DEVICES=[] and wipe every entity on the next poll.
+    site = {**_SITE}
+    del site[missing]
+    assert labels <= parse_site(site).malformed
+
+
+def test_parse_site_does_not_flag_a_devices_free_site_missing_its_companions():
+    # The companion requirement is conditional on there being devices at all - a site with
+    # none has nothing to describe, so omitting plejdDevices/deviceAddress is consistent
+    # rather than truncated, and must not block setup.
+    site = {"siteId": "S1", "plejdMesh": {"cryptoKey": "00" * 16}, "devices": []}
+    assert parse_site(site).malformed == frozenset()
+
+
 def test_parse_site_does_not_flag_a_site_that_simply_has_no_rooms_or_gateway():
     # Omitting a collection is how the API says the site has none: a BLE-only site has no
     # gateways, a site with no rooms has no rooms/roomAddress/outputGroups. Flagging those
@@ -1389,14 +1414,24 @@ async def test_login_request_timeout_is_transient_not_an_auth_failure():
     assert not isinstance(excinfo.value, PlejdAuthError)
 
 
-async def test_login_unrecognized_4xx_without_a_code_is_still_an_auth_failure():
-    # Deliberately the safer default: without Parse's code we can't prove it was transient,
-    # and misreading a genuine rejection as transient would never surface reauth at all.
+@pytest.mark.parametrize(
+    ("status", "payload"),
+    [
+        (403, {"error": "forbidden"}),  # e.g. a WAF in front of the API
+        (404, {"error": "not found"}),  # e.g. an endpoint rollout, no Parse code
+        (400, {"error": "bad request"}),
+    ],
+)
+async def test_login_unrecognized_4xx_without_a_code_is_transient(status, payload):
+    # Parse answers a rejected username/password with code 101, so a 4xx carrying no code did
+    # not establish that the stored password is wrong - treating it as auth would prompt the
+    # user to re-enter a perfectly valid password (and in the daily poll, do so unattended).
     with aioresponses() as m:
-        m.post(_LOGIN, status=403, payload={"error": "forbidden"})
+        m.post(_LOGIN, status=status, payload=payload)
         async with aiohttp.ClientSession() as s:
-            with pytest.raises(PlejdAuthError, match="forbidden"):
+            with pytest.raises(PlejdCloudError) as excinfo:
                 await async_login(s, "u@x.se", "pw")
+    assert not isinstance(excinfo.value, PlejdAuthError)
 
 
 async def test_login_parse_invalid_login_code_is_an_auth_failure():

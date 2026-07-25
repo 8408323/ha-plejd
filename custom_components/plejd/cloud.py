@@ -52,11 +52,9 @@ _OUTPUT_TYPE_CATEGORY = {
 }
 
 
-# Parse's error code for rejected login credentials (returned with a 404).
+# Parse's error code for rejected login credentials (returned with a 404). The ONLY signal
+# that a login failure is about the credentials rather than the request - see async_login.
 PARSE_ERROR_INVALID_LOGIN = 101
-
-# Login statuses that are retryable rather than a verdict on the credentials.
-_TRANSIENT_LOGIN_STATUSES = frozenset({408, 425, 429})
 
 
 class PlejdCloudError(Exception):
@@ -218,19 +216,18 @@ async def async_login(session: ClientSession, email: str, password: str) -> str:
         token = data.get("sessionToken") if isinstance(data, dict) else None
         if resp.status != 200 or not token:
             message = str(data.get("error", "login failed")) if isinstance(data, dict) else "login failed"
-            # Callers start HA's reauth flow on PlejdAuthError, so only a response that
-            # actually denotes rejected credentials may map to it - prompting a user to
-            # re-enter a password that was never the problem is its own bug.
+            # Callers start HA's reauth flow on PlejdAuthError, so ONLY Parse's own
+            # credential-rejection code may map to it. Parse answers a bad username/password
+            # on this endpoint with code 101 (confirmed by our own capture), so anything
+            # without that code did not establish that the stored password is wrong: a 403
+            # from a WAF, a 404 during an endpoint rollout, a 200 carrying no sessionToken, a
+            # timeout or a 5xx are all request failures. Treating those as auth failures
+            # prompts the user to re-enter a password that was never the problem, and in the
+            # unattended daily poll that prompt is pure noise.
             code = data.get("code") if isinstance(data, dict) else None
             if code == PARSE_ERROR_INVALID_LOGIN:
-                raise PlejdAuthError(message)  # Parse's own "invalid login" signal
-            # No credential-rejection code: a 200 carrying no sessionToken (malformed), an
-            # explicitly retryable status, and any 5xx are all transient. An unrecognized 4xx
-            # still falls through to auth, which is the safer default - misreading a genuine
-            # rejection as transient would silently never surface reauth at all.
-            if resp.status == 200 or resp.status in _TRANSIENT_LOGIN_STATUSES or resp.status >= 500:
-                raise PlejdCloudError(message)
-            raise PlejdAuthError(message)
+                raise PlejdAuthError(message)
+            raise PlejdCloudError(message)
         return token
 
 
@@ -786,18 +783,29 @@ def parse_site(site: dict) -> PlejdCloudSite:
     # wrong-typed outputGroups yields no room entities - both parse "successfully" to an empty
     # list that would look like a genuine deletion and destroy those entities on the next poll.
     #
-    # An ABSENT key is deliberately NOT malformed. Omitting a collection is how the API says
-    # the site has none of them: a BLE-only site has no `gateways`, a site with no rooms has no
-    # `rooms`/`roomAddress`/`outputGroups`. Flagging those would refuse setup, refuse
-    # reconfigure, and stop the poll ever syncing for such a site - a far worse failure than
-    # the one the flag exists to prevent. Only a value that is present and the wrong shape is
-    # provably corrupt, so only that is flagged.
+    # Whether an ABSENT key is malformed depends on the key, because omission means two very
+    # different things depending on which collection it is:
+    #
+    #  - OPTIONAL (the default): omission is how the API says the site has none of them. A
+    #    BLE-only site has no `gateways`; a site with no rooms has no
+    #    `rooms`/`roomAddress`/`outputGroups`; a site of only lights/relays has no
+    #    `inputAddress`; a site with no scenes has no `scenes`/`sceneIndex`. Flagging those
+    #    would refuse setup, refuse reconfigure and stop the poll syncing for such a site -
+    #    a far worse failure than the one the flag exists to prevent.
+    #  - REQUIRED (`required=True`): the site cannot meaningfully exist without it, so
+    #    omission means the response is truncated, not that the collection is empty.
+    #    `devices` is the clearest case; `plejdDevices`/`deviceAddress` are required only
+    #    once `devices` is non-empty, since those devices must have hardware entries and
+    #    mesh addresses. Normalizing THOSE to empty is what would silently wipe every
+    #    entity, which is exactly what the flag is for.
     malformed: set[str] = set()
 
-    def _checked_list(key: str, *labels: str, id_field: str | None = None) -> list:
+    def _checked_list(key: str, *labels: str, id_field: str | None = None, required: bool = False) -> list:
         raw = site.get(key)
         if raw is None:
-            return []  # absent (or explicit null) means "there are none" - see above
+            if required:
+                malformed.update(labels)
+            return []  # see the required/optional note above
         if not isinstance(raw, list):
             malformed.update(labels)
             return []
@@ -812,20 +820,26 @@ def parse_site(site: dict) -> PlejdCloudSite:
             malformed.update(labels)
         return raw
 
-    def _checked_dict(key: str, *labels: str) -> dict:
+    def _checked_dict(key: str, *labels: str, required: bool = False) -> dict:
         raw = site.get(key)
         if raw is None:
-            return {}  # absent (or explicit null) means "there are none" - see above
+            if required:
+                malformed.update(labels)
+            return {}  # see the required/optional note above
         if isinstance(raw, dict):
             return raw
         malformed.update(labels)
         return {}
 
-    raw_devices = _checked_list("devices", "devices", id_field="deviceId")
+    # devices is required: a site without it is a truncated response, not an empty site, and
+    # normalizing it away is what would wipe every entity the integration has.
+    raw_devices = _checked_list("devices", "devices", id_field="deviceId", required=True)
+    has_devices = bool(raw_devices)
     input_address = _checked_dict("inputAddress", "inputs")
     # plejdDevices feeds both the motion sensors and every device's hardware id/model, so a
-    # corrupt element there makes both collections untrustworthy.
-    plejd_devices = _checked_list("plejdDevices", "motion", "devices", id_field="deviceId")
+    # corrupt element there makes both collections untrustworthy. Required once there are
+    # devices at all, since each of those must have a hardware entry here.
+    plejd_devices = _checked_list("plejdDevices", "motion", "devices", id_field="deviceId", required=has_devices)
     raw_scenes = _checked_list("scenes", "scenes", id_field="sceneId")
     scene_index = _checked_dict("sceneIndex", "scenes")
     # These two carry every mesh address there is: outputAddress is what control commands
@@ -833,8 +847,10 @@ def parse_site(site: dict) -> PlejdCloudSite:
     # motion sensors use). Losing either silently yields devices with address=None - parsed
     # "successfully" into entities that can never be commanded - so they count as malformed
     # device (and, for deviceAddress, motion) data rather than an empty-but-valid map.
+    # outputAddress stays optional: a single-output device legitimately falls back to its
+    # deviceAddress, so its absence is survivable rather than proof of truncation.
     output_address = _checked_dict("outputAddress", "devices")
-    device_address = _checked_dict("deviceAddress", "devices", "motion")
+    device_address = _checked_dict("deviceAddress", "devices", "motion", required=has_devices)
     raw_rooms = _checked_list("rooms", "rooms", id_field="roomId")
     room_address = _checked_dict("roomAddress", "rooms")
     output_groups = _checked_dict("outputGroups", "rooms")
