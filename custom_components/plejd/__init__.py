@@ -433,7 +433,13 @@ async def _async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
         # of assuming it's already covered; the lock holder checks this once it's done.
         hass.data[schedule_ws.DATA_RELOAD_PENDING] = entry.entry_id
         return
-    await hass.config_entries.async_reload(entry.entry_id)
+    if await hass.config_entries.async_reload(entry.entry_id):
+        # This reload applied whatever the entry currently holds, which includes any change
+        # still marked pending from an earlier follow-up that failed. Leaving the marker set
+        # would make the next management operation reload a second time for a change already
+        # live - a needless teardown and BLE/gateway reconnect.
+        if hass.data.get(schedule_ws.DATA_RELOAD_PENDING) == entry.entry_id:
+            hass.data.pop(schedule_ws.DATA_RELOAD_PENDING, None)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

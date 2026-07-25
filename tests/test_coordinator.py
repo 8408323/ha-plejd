@@ -3557,3 +3557,32 @@ async def test_cloud_poll_marks_the_malformed_repair_issue_persistent(monkeypatc
     await c._async_poll_cloud(None)
 
     assert hass.created_issues["malformed_cloud_site_e1"]["is_persistent"] is True
+
+
+async def test_self_heal_cooldown_is_returned_when_the_poll_hits_an_auth_failure(monkeypatch):
+    # The cooldown is recorded before the poll runs. If that poll only discovers the
+    # credentials are stale, it learned nothing about the site - and reauth alone does not
+    # refresh the crypto key or gateway data, so the retry right after still needs a
+    # self-heal. Holding the cooldown would suppress it for up to 15 minutes.
+    from plejd.cloud import PlejdAuthError
+
+    async def _login(session, email, password):
+        raise PlejdAuthError("bad creds")
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _login)
+
+    entry = _cloud_poll_entry()
+    entry.async_start_reauth = lambda hass: None
+    hass = _hass()
+    hass.session = object()
+    hass.config_entries = types.SimpleNamespace(
+        async_get_entry=lambda eid: entry,
+        async_update_entry=lambda e, data, options=None: setattr(e, "data", data),
+        async_reload=AsyncMock(),
+    )
+    c = PlejdCoordinator(hass, entry)
+    assert c._should_attempt_self_heal() is True  # records the attempt
+    await c._async_poll_cloud(None, reload=False)
+
+    # given back, so the post-reauth setup retry is allowed to try again immediately
+    assert c._should_attempt_self_heal() is True

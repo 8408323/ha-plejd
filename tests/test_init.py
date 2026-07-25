@@ -84,6 +84,7 @@ class _FakeConfigEntries:
 
     async def async_reload(self, entry_id):
         self.reloaded = entry_id
+        return getattr(self, "reload_result", True)
 
     def async_update_entry(self, entry, *, data=None, **kwargs):
         if data is not None:
@@ -229,6 +230,32 @@ async def test_reload_listener_reloads_entry():
     hass, entry = _hass(), _entry()
     await _async_reload_entry(hass, entry)
     assert hass.config_entries.reloaded == "e1"
+
+
+async def test_reload_listener_clears_a_stale_pending_marker_after_reloading():
+    # A follow-up reload that failed deliberately leaves DATA_RELOAD_PENDING set. This
+    # direct reload applies whatever the entry currently holds, including that change - so
+    # leaving the marker would make the next management operation reload a second time for
+    # something already live, a needless teardown and BLE/gateway reconnect.
+    from plejd import _async_reload_entry, schedule_ws
+
+    hass, entry = _hass(), _entry()
+    hass.data[schedule_ws.DATA_RELOAD_PENDING] = entry.entry_id
+    await _async_reload_entry(hass, entry)
+    assert hass.config_entries.reloaded == "e1"
+    assert schedule_ws.DATA_RELOAD_PENDING not in hass.data
+
+
+async def test_reload_listener_keeps_the_pending_marker_when_the_reload_is_rejected():
+    # Only a reload that actually applied may clear it - otherwise the concurrent change it
+    # stands for would be silently dropped.
+    from plejd import _async_reload_entry, schedule_ws
+
+    hass, entry = _hass(), _entry()
+    hass.config_entries.reload_result = False
+    hass.data[schedule_ws.DATA_RELOAD_PENDING] = entry.entry_id
+    await _async_reload_entry(hass, entry)
+    assert hass.data[schedule_ws.DATA_RELOAD_PENDING] == entry.entry_id
 
 
 async def test_reload_listener_skips_when_reload_lock_is_held():

@@ -58,6 +58,7 @@ from .const import (
     TRANSPORT_GATEWAY,
     WEEKDAYS,
 )
+from .coordinator import async_clear_malformed_site_issue
 from .discovery import async_bluetooth_available, async_scan_unprovisioned
 
 if TYPE_CHECKING:
@@ -191,6 +192,11 @@ class PlejdConfigFlow(ConfigFlow, domain=DOMAIN):
                 # (or never had one) must seed it now - the gateway transport requires it.
                 if site.gateways and not entry.data.get(CONF_INSTALLATION_ID):
                     data_updates[CONF_INSTALLATION_ID] = str(uuid4())
+                # Reaching here means the cloud just served a usable site, which is exactly
+                # what the malformed-cloud repair asks the user to confirm - clear it now
+                # rather than leaving the warning up until the new coordinator's first
+                # scheduled poll, a day later.
+                async_clear_malformed_site_issue(self.hass, entry.entry_id)
                 return self.async_update_reload_and_abort(
                     entry,
                     data_updates=data_updates,

@@ -36,7 +36,7 @@ _LOGIN = {CONF_EMAIL: "user@example.com", CONF_PASSWORD: "pw"}
 
 def _flow():
     flow = PlejdConfigFlow()
-    flow.hass = types.SimpleNamespace(session=None)
+    flow.hass = types.SimpleNamespace(session=None, data={})
     flow.context = {}
     return flow
 
@@ -264,11 +264,12 @@ def _reconfigure_flow(reconfigure_entry):
 
 def _stored_entry(site_id="S1"):
     return types.SimpleNamespace(
+        entry_id="e1",
         data={
             CONF_EMAIL: "user@example.com",
             CONF_PASSWORD: "pw",
             CONF_SITE_ID: site_id,
-        }
+        },
     )
 
 
@@ -695,3 +696,16 @@ async def test_options_holiday_mode_preserves_other_options():
     assert res["type"] == "create_entry"
     assert res["data"]["show_panel"] is False
     assert res["data"]["schedules"] == [{"slot": 0}]
+
+
+async def test_reconfigure_clears_the_malformed_cloud_repair_issue(monkeypatch):
+    # The repair tells the user to try Reconfigure; succeeding here proves the cloud is
+    # healthy again. The issue is persistent and the replacement coordinator does not poll
+    # until its 24h interval, so without this the warning would linger a full day.
+    entry = _stored_entry()
+    _patch_cloud(monkeypatch, login="tok", site=_site())
+    flow = _reconfigure_flow(entry)
+    flow.hass.created_issues = {"malformed_cloud_site_e1": {"domain": "plejd"}}
+    res = await flow.async_step_reconfigure({})
+    assert res["reason"] == "reconfigure_successful"
+    assert "malformed_cloud_site_e1" not in flow.hass.created_issues

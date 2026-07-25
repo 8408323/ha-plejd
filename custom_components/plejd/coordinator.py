@@ -109,6 +109,19 @@ DATA_LAST_SELF_HEAL = f"{DOMAIN}_last_self_heal"
 # One bad response is transient; several in a row means the sync is effectively dead.
 DATA_MALFORMED_POLLS = f"{DOMAIN}_malformed_polls"
 MALFORMED_POLLS_BEFORE_REPAIR = 2
+
+
+def async_clear_malformed_site_issue(hass: HomeAssistant, entry_id: str) -> None:
+    """Drop the malformed-cloud repair issue (and its streak) for `entry_id`.
+
+    Exposed because the repair tells the user to try Reconfigure, and that path proves the
+    cloud is healthy again without going through the poll - the replacement coordinator
+    would otherwise leave the warning up until its first scheduled poll, a day later.
+    """
+    hass.data.get(DATA_MALFORMED_POLLS, {}).pop(entry_id, None)
+    issue_registry.async_delete_issue(hass, DOMAIN, f"malformed_cloud_site_{entry_id}")
+
+
 FIRMWARE_REFRESH_INTERVAL = timedelta(days=1)
 
 
@@ -490,8 +503,7 @@ class PlejdCoordinator:
         issue outlives a restart but the counter does not, so gating on the counter would
         strand a persisted issue on screen forever once the cloud recovered.
         """
-        self.hass.data.get(DATA_MALFORMED_POLLS, {}).pop(self._entry_id, None)
-        issue_registry.async_delete_issue(self.hass, DOMAIN, f"malformed_cloud_site_{self._entry_id}")
+        async_clear_malformed_site_issue(self.hass, self._entry_id)
 
     def _should_attempt_self_heal(self) -> bool:
         """True at most once per SELF_HEAL_COOLDOWN, recording the attempt.
@@ -532,6 +544,11 @@ class PlejdCoordinator:
             if self._closed:
                 return
             _LOGGER.warning("Plejd cloud poll: credentials rejected — starting reauth")
+            # Give the cooldown back: this attempt learned nothing about the site, and once
+            # the user finishes reauth the immediate setup retry still needs a self-heal to
+            # fetch the crypto key/gateway data that reauth itself does not touch. Holding
+            # the cooldown would suppress that for up to 15 minutes.
+            self.hass.data.get(DATA_LAST_SELF_HEAL, {}).pop(self._entry_id, None)
             self._entry.async_start_reauth(self.hass)
             return
         except (PlejdCloudError, ClientError, OSError):
