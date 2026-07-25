@@ -36,7 +36,7 @@ _LOGIN = {CONF_EMAIL: "user@example.com", CONF_PASSWORD: "pw"}
 
 def _flow():
     flow = PlejdConfigFlow()
-    flow.hass = types.SimpleNamespace(session=None)
+    flow.hass = types.SimpleNamespace(session=None, data={})
     flow.context = {}
     return flow
 
@@ -227,7 +227,7 @@ async def test_reauth_routes_to_confirm():
 
 async def test_reauth_confirm_success_updates_password(monkeypatch):
     _patch_cloud(monkeypatch, login="tok")
-    flow = _reauth_flow(types.SimpleNamespace(data={CONF_EMAIL: "u@x.se", CONF_PASSWORD: "old"}))
+    flow = _reauth_flow(types.SimpleNamespace(entry_id="e1", data={CONF_EMAIL: "u@x.se", CONF_PASSWORD: "old"}))
     res = await flow.async_step_reauth_confirm({CONF_PASSWORD: "newpw"})
     assert res["type"] == "abort" and res["reason"] == "reauth_successful"
     assert res["data_updates"] == {CONF_PASSWORD: "newpw"}
@@ -264,11 +264,12 @@ def _reconfigure_flow(reconfigure_entry):
 
 def _stored_entry(site_id="S1"):
     return types.SimpleNamespace(
+        entry_id="e1",
         data={
             CONF_EMAIL: "user@example.com",
             CONF_PASSWORD: "pw",
             CONF_SITE_ID: site_id,
-        }
+        },
     )
 
 
@@ -695,3 +696,32 @@ async def test_options_holiday_mode_preserves_other_options():
     assert res["type"] == "create_entry"
     assert res["data"]["show_panel"] is False
     assert res["data"]["schedules"] == [{"slot": 0}]
+
+
+async def test_reconfigure_clears_the_malformed_cloud_repair_issue(monkeypatch):
+    # The repair tells the user to try Reconfigure; succeeding here proves the cloud is
+    # healthy again. The issue is persistent and the replacement coordinator does not poll
+    # until its 24h interval, so without this the warning would linger a full day.
+    entry = _stored_entry()
+    _patch_cloud(monkeypatch, login="tok", site=_site())
+    flow = _reconfigure_flow(entry)
+    flow.hass.created_issues = {"malformed_cloud_site_e1": {"domain": "plejd"}}
+    res = await flow.async_step_reconfigure({})
+    assert res["reason"] == "reconfigure_successful"
+    assert "malformed_cloud_site_e1" not in flow.hass.created_issues
+
+
+async def test_reauth_success_releases_the_self_heal_cooldown(monkeypatch):
+    # The cooldown is deliberately held through an auth failure, so the setup retry that
+    # follows a successful reauth would otherwise wait it out - at the exact moment it could
+    # finally fetch the crypto key/gateway data that reauth itself does not touch.
+    from plejd.coordinator import DATA_LAST_SELF_HEAL
+
+    entry = _stored_entry()
+    _patch_cloud(monkeypatch, login="tok")
+    flow = _flow()
+    flow._reauth_entry = entry
+    flow.hass.data[DATA_LAST_SELF_HEAL] = {entry.entry_id: 1_000.0}
+    res = await flow.async_step_reauth_confirm({CONF_PASSWORD: "new-pw"})
+    assert res["reason"] == "reauth_successful"
+    assert entry.entry_id not in flow.hass.data[DATA_LAST_SELF_HEAL]

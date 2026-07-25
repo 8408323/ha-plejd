@@ -22,7 +22,7 @@ from .const import (
     SCHEDULE_OFFSET_MAX,
     SCHEDULE_OFFSET_MIN,
 )
-from .coordinator import PlejdCoordinator
+from .coordinator import PlejdCoordinator, async_clear_malformed_site_issue, async_reset_self_heal_cooldown
 from .discovery import async_bluetooth_available, async_scan_unprovisioned
 from .holiday_mode import DATA_HOLIDAY_MODE, PlejdHolidayMode
 from .manage_device import async_remove_device
@@ -431,9 +431,18 @@ async def _async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
         # Not anticipated by the current lock holder, so it's a genuinely different,
         # concurrent change that landed while the lock was held - mark it pending instead
         # of assuming it's already covered; the lock holder checks this once it's done.
-        hass.data[schedule_ws.DATA_RELOAD_PENDING] = entry.entry_id
+        schedule_ws.async_mark_reload_pending(hass, entry.entry_id)
         return
-    await hass.config_entries.async_reload(entry.entry_id)
+    # Captured BEFORE the reload: this reload can only be said to cover a change already
+    # pending when it started. A marker set while it runs belongs to a change that landed
+    # after the entry was read, so consuming it would skip a follow-up that is still needed.
+    pending_token = schedule_ws.async_reload_pending_token(hass, entry.entry_id)
+    if await hass.config_entries.async_reload(entry.entry_id):
+        # This reload applied whatever the entry held when it started, which includes any
+        # change still marked pending from an earlier follow-up that failed. Leaving that
+        # marker set would make the next management operation reload a second time for a
+        # change already live - a needless teardown and BLE/gateway reconnect.
+        schedule_ws.async_take_reload_pending_token(hass, entry.entry_id, pending_token)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -460,3 +469,13 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     elif was_holiday_mode_running:
         await holiday_mode.async_start()
     return unload_ok
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Clean up state that outlives the entry itself."""
+    # The malformed-cloud repair issue is persistent, so nothing else would ever delete it
+    # once the entry is gone: its only other clear paths are a healthy poll or a successful
+    # reconfigure, neither of which can happen after removal. Without this the user is left
+    # with an orphaned warning about an integration they no longer have, surviving restarts.
+    async_clear_malformed_site_issue(hass, entry.entry_id)
+    async_reset_self_heal_cooldown(hass, entry.entry_id)

@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
+from dataclasses import asdict
 
 import voluptuous as vol
 from homeassistant.components import websocket_api
@@ -18,9 +20,15 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 
+from .cloud import PlejdCloudSite
 from .const import (
+    CONF_DEVICE_ADDRESSES,
+    CONF_DEVICES,
     CONF_GATEWAYS,
+    CONF_INPUTS,
+    CONF_MOTION,
     CONF_RESOURCE_SET_ID,
+    CONF_ROOMS,
     CONF_SCENES,
     CONF_SCHEDULES,
     CONF_TRANSPORT,
@@ -58,7 +66,54 @@ DATA_RELOAD_PENDING = f"{DOMAIN}_schedule_reload_pending"
 # can never leak into a later, unrelated session if the listener never got a chance to run.
 _DATA_EXPECTING_SELF_RELOAD = f"{DOMAIN}_reload_expecting_self_reload"
 
+# Bumped every time the pending marker is set, so a holder can tell "the marker I saw
+# before my reload" from "a NEW marker set while my reload was running". Without it, a
+# reload that started before a change landed would wrongly consume that change's marker
+# and its required follow-up reload would never happen.
+_DATA_RELOAD_PENDING_SEQ = f"{DOMAIN}_reload_pending_seq"
+
 _NEXT_ID_KEY = "next_schedule_id"
+
+
+def async_mark_reload_pending(hass: HomeAssistant, entry_id: str) -> None:
+    """Record that `entry_id` has a change still needing a reload."""
+    hass.data[_DATA_RELOAD_PENDING_SEQ] = hass.data.get(_DATA_RELOAD_PENDING_SEQ, 0) + 1
+    hass.data[DATA_RELOAD_PENDING] = entry_id
+
+
+def async_reload_pending_token(hass: HomeAssistant, entry_id: str) -> int | None:
+    """Token identifying the current pending marker, or None if nothing is pending."""
+    if hass.data.get(DATA_RELOAD_PENDING) != entry_id:
+        return None
+    return hass.data.get(_DATA_RELOAD_PENDING_SEQ, 0)
+
+
+def async_take_reload_pending(hass: HomeAssistant, entry_id: str) -> bool:
+    """Claim any pending marker for `entry_id`, returning whether there was one.
+
+    For a caller that is about to reload with the entry's CURRENT contents, so whatever the
+    marker stands for is covered either way.
+    """
+    if hass.data.get(DATA_RELOAD_PENDING) != entry_id:
+        return False  # nothing pending, or it belongs to a different entry
+    hass.data.pop(DATA_RELOAD_PENDING, None)
+    return True
+
+
+def async_take_reload_pending_token(hass: HomeAssistant, entry_id: str, token: int | None) -> None:
+    """Claim the marker `token` came from, and only that one.
+
+    Deliberately a separate function rather than an optional argument: a caller whose reload
+    has already read the entry must not swallow a marker created after that point (the change
+    it stands for is not in the reload being performed), and `token=None` means there was
+    nothing pending to claim - which as an optional "no filter" argument reads exactly like
+    "claim anything" and would do the opposite of what is wanted.
+    """
+    if token is None or hass.data.get(DATA_RELOAD_PENDING) != entry_id:
+        return
+    if hass.data.get(_DATA_RELOAD_PENDING_SEQ, 0) != token:
+        return  # a newer change landed while the reload ran; its follow-up is still needed
+    hass.data.pop(DATA_RELOAD_PENDING, None)
 
 
 def async_get_reload_lock(hass: HomeAssistant, entry_id: str) -> asyncio.Lock:
@@ -80,36 +135,62 @@ def async_consume_expected_self_reload(hass: HomeAssistant, entry_id: str) -> bo
     return False
 
 
+def site_data_overlay(entry: ConfigEntry, site: PlejdCloudSite, overrides: dict | None = None) -> dict:
+    """The standard site-derived entry.data overlay, merged onto `entry.data` as passed in.
+
+    Every management operation refreshes the same set of cloud-derived keys after its own
+    mutation, so they share this rather than repeating the list six times and drifting.
+    Callers hand it to async_reload_entry_with_lock as `lambda e: site_data_overlay(e, site)`
+    so `e.data` is read inside the lock - see that function's note on staleness.
+    """
+    return {
+        **entry.data,
+        CONF_DEVICES: [asdict(d) for d in site.devices],
+        CONF_INPUTS: [asdict(i) for i in site.inputs],
+        CONF_MOTION: [asdict(m) for m in site.motion],
+        CONF_SCENES: [asdict(s) for s in site.scenes],
+        CONF_ROOMS: [asdict(r) for r in site.rooms],
+        CONF_GATEWAYS: site.gateways,
+        CONF_RESOURCE_SET_ID: site.resource_set_id,
+        CONF_DEVICE_ADDRESSES: site.device_addresses,
+        **(overrides or {}),
+    }
+
+
 async def async_reload_entry_with_lock(
     hass: HomeAssistant,
     entry: ConfigEntry,
-    data: dict,
+    build_data: Callable[[ConfigEntry], dict],
     *,
-    options: dict | None = None,
+    build_options: Callable[[ConfigEntry], dict] | None = None,
     raise_on_reload_failure: bool = True,
     error_context: str,
 ) -> None:
-    """Write `data` (and optionally `options`) onto the entry and reload it under the
-    shared per-entry reload lock.
+    """Build the entry payload under the shared per-entry reload lock, write it, and reload.
 
-    Shared by every management operation (room/scene/schedule/device services, add_device,
-    ...) that needs to persist a full entry.data (and, for some, entry.options) overlay and
-    reload for it to take effect. Raises HomeAssistantError if the entry's own reload
-    reports failure, UNLESS raise_on_reload_failure=False (only logs instead) - for a
-    caller whose cloud mutation is already done and non-idempotent (e.g. a scene/schedule
-    create), raising here would make the whole operation look failed, inviting a retry that
-    duplicates the already-created cloud object; only the reload itself needs a retry. A
-    follow-up reload for a genuinely concurrent change the update listener detected
-    meanwhile (see DATA_RELOAD_PENDING) is always only logged on failure, since it isn't
-    this caller's own operation to fail loudly for either way.
+    `build_data` (and `build_options`) are invoked AFTER the lock is acquired and must read
+    `entry.data`/`entry.options` themselves rather than closing over a snapshot: acquiring
+    the lock is an await point, so another management operation can complete in between and
+    persist its own change, and a payload computed before that would silently overwrite it
+    (#125).
+
+    Raises HomeAssistantError if the entry's own reload reports failure, UNLESS
+    raise_on_reload_failure=False (only logs instead) - for a caller whose cloud mutation is
+    already done and non-idempotent (e.g. a scene/schedule create), raising here would make
+    the whole operation look failed, inviting a retry that duplicates the already-created
+    cloud object; only the reload itself needs a retry. A follow-up reload for a genuinely
+    concurrent change the update listener detected meanwhile (see DATA_RELOAD_PENDING) is
+    always only logged on failure, since it isn't this caller's own operation to fail loudly
+    for either way.
     """
     lock = async_get_reload_lock(hass, entry.entry_id)
     reloaded = True
     try:
         async with lock:
             async_mark_expecting_self_reload(hass, entry.entry_id)
-            if options is not None:
-                hass.config_entries.async_update_entry(entry, data=data, options=options)
+            data = build_data(entry)
+            if build_options is not None:
+                hass.config_entries.async_update_entry(entry, data=data, options=build_options(entry))
             else:
                 hass.config_entries.async_update_entry(entry, data=data)
             try:
@@ -119,15 +200,21 @@ async def async_reload_entry_with_lock(
                 reloaded = False
     finally:
         hass.data.pop(_DATA_EXPECTING_SELF_RELOAD, None)
-        if hass.data.get(DATA_RELOAD_PENDING) == entry.entry_id:
+        if async_take_reload_pending(hass, entry.entry_id):
             # A concurrent change's own reload was suppressed by the lock above while ours
             # was in flight; give it a reload of its own instead of dropping it silently.
-            hass.data.pop(DATA_RELOAD_PENDING, None)
             async with lock:
+                follow_up_ok = False
                 try:
-                    await hass.config_entries.async_reload(entry.entry_id)
+                    follow_up_ok = await hass.config_entries.async_reload(entry.entry_id)
                 except Exception:  # noqa: BLE001 - best-effort follow-up for someone else's change
-                    _LOGGER.warning("Plejd: follow-up reload for a concurrent change failed")
+                    _LOGGER.exception("Plejd: follow-up reload for a concurrent change raised")
+                if not follow_up_ok:
+                    # async_reload can report failure by returning False without raising, and
+                    # dropping that would lose someone else's change entirely - leave it
+                    # pending so the next reload from any operation picks it up.
+                    _LOGGER.warning("Plejd: follow-up reload for a concurrent change failed; leaving it pending")
+                    async_mark_reload_pending(hass, entry.entry_id)
     if not reloaded:
         if not raise_on_reload_failure:
             _LOGGER.warning("Plejd: entry failed to reload after %s; the cloud change was still made", error_context)
@@ -204,32 +291,38 @@ async def ws_add(hass: HomeAssistant, connection, msg) -> None:
         connection.send_error(msg["id"], "invalid_fade", "Fade must be a non-negative number of seconds")
         return
 
-    schedules: list[dict] = list(entry.options.get(CONF_SCHEDULES, []))
-    used_slots = {s["slot"] for s in schedules}
-    slot = next((i for i in range(TIME_EVENT_SLOTS) if i not in used_slots), None)
-    if slot is None:
-        connection.send_error(msg["id"], "no_free_slots", "No free schedule slots")
-        return
-
-    next_id: int = entry.options.get(_NEXT_ID_KEY, 0)
     hour, minute, second = parsed
-    schedule = {
-        "id": next_id,
-        "slot": slot,
-        "name": name,
-        "days": sorted(set(days)),
-        "time": f"{hour:02d}:{minute:02d}:{second:02d}",
-        "scene": msg["scene"],
-        "fade": fade,
-    }
-    schedules.append(schedule)
-    options = {
-        **entry.options,
-        CONF_SCHEDULES: schedules,
-        _NEXT_ID_KEY: next_id + 1,
-        CONF_TRANSPORT: _current_transport(entry),
-    }
-    await _async_persist(hass, connection, msg, entry, options, {"schedules": schedules})
+
+    def _build(current_entry: ConfigEntry) -> tuple[dict, dict]:
+        # Slot and id are allocated HERE, under the lock: another add completing while this
+        # one waited would otherwise be handed the same free slot and the same next id.
+        schedules: list[dict] = list(current_entry.options.get(CONF_SCHEDULES, []))
+        used_slots = {s["slot"] for s in schedules}
+        slot = next((i for i in range(TIME_EVENT_SLOTS) if i not in used_slots), None)
+        if slot is None:
+            connection.send_error(msg["id"], "no_free_slots", "No free schedule slots")
+            raise _NothingToPersist
+        next_id: int = current_entry.options.get(_NEXT_ID_KEY, 0)
+        schedules.append(
+            {
+                "id": next_id,
+                "slot": slot,
+                "name": name,
+                "days": sorted(set(days)),
+                "time": f"{hour:02d}:{minute:02d}:{second:02d}",
+                "scene": msg["scene"],
+                "fade": fade,
+            }
+        )
+        options = {
+            **current_entry.options,
+            CONF_SCHEDULES: schedules,
+            _NEXT_ID_KEY: next_id + 1,
+            CONF_TRANSPORT: _current_transport(current_entry),
+        }
+        return options, {"schedules": schedules}
+
+    await _async_persist(hass, connection, msg, entry, _build)
 
 
 @websocket_api.require_admin
@@ -253,22 +346,41 @@ async def ws_delete(hass: HomeAssistant, connection, msg) -> None:
     except Exception:  # noqa: BLE001 - best-effort; persist the deletion whatever the mesh does
         _LOGGER.warning("Plejd: could not clear schedule slot %s from the mesh", target["slot"])
 
-    # Re-read after the await: another schedule WS edit may have completed and persisted
-    # options while this one was in flight, and the pre-await `schedules` snapshot is stale.
-    current: list[dict] = list(entry.options.get(CONF_SCHEDULES, []))
-    kept = [s for s in current if s["id"] != msg["schedule_id"]]
-    options = {**entry.options, CONF_SCHEDULES: kept, CONF_TRANSPORT: _current_transport(entry)}
-    await _async_persist(hass, connection, msg, entry, options, {"schedules": kept})
+    def _build(current_entry: ConfigEntry) -> tuple[dict, dict]:
+        # Read HERE, under the lock: another schedule edit may have completed while this one
+        # waited for the mesh call and the lock, and a pre-lock list would undo it.
+        kept = [s for s in current_entry.options.get(CONF_SCHEDULES, []) if s["id"] != msg["schedule_id"]]
+        options = {**current_entry.options, CONF_SCHEDULES: kept, CONF_TRANSPORT: _current_transport(current_entry)}
+        return options, {"schedules": kept}
+
+    await _async_persist(hass, connection, msg, entry, _build)
 
 
-async def _async_persist(hass: HomeAssistant, connection, msg, entry, options: dict, result: dict) -> None:
-    """Save `options` on the entry, reload it, and send the WS response for `result`."""
+class _NothingToPersist(Exception):
+    """Raised by a persist builder to abort the write; it has sent its own WS error."""
+
+
+async def _async_persist(
+    hass: HomeAssistant, connection, msg, entry, build: Callable[[ConfigEntry], tuple[dict, dict]]
+) -> None:
+    """Build `(options, result)` under the reload lock, save, reload, and answer the WS msg.
+
+    `build` runs INSIDE the lock and must read `entry.options` itself. Acquiring the lock is
+    an await point, so another schedule edit can complete between this handler's validation
+    and the lock being granted; a payload built before that would overwrite the other edit,
+    and worse, could hand out a slot or id that edit just claimed (#125). It may raise
+    _NothingToPersist to abort after sending its own error response.
+    """
     # Hold the reload lock so the entry's update listener (_async_reload_entry) doesn't
     # also reload for this same options change - we need this reload's own success/failure.
     lock = async_get_reload_lock(hass, entry.entry_id)
     reloaded = True
     async with lock:
         try:
+            try:
+                options, result = build(entry)
+            except _NothingToPersist:
+                return
             async_mark_expecting_self_reload(hass, entry.entry_id)
             try:
                 hass.config_entries.async_update_entry(entry, options=options)
@@ -284,16 +396,21 @@ async def _async_persist(hass: HomeAssistant, connection, msg, entry, options: d
                     reloaded = False
         finally:
             hass.data.pop(_DATA_EXPECTING_SELF_RELOAD, None)
-    if hass.data.get(DATA_RELOAD_PENDING) == entry.entry_id:
+    if async_take_reload_pending(hass, entry.entry_id):
         # A concurrent options change's own reload was suppressed by the lock above while
         # ours was in flight; it may have landed after we already read entry state, so give
         # it a reload of its own instead of dropping it silently (see _async_reload_entry).
-        hass.data.pop(DATA_RELOAD_PENDING, None)
         async with lock:
+            follow_up_ok = False
             try:
-                await hass.config_entries.async_reload(entry.entry_id)
+                follow_up_ok = await hass.config_entries.async_reload(entry.entry_id)
             except Exception:  # noqa: BLE001 - best-effort follow-up; already logged if the underlying issue recurs
-                _LOGGER.warning("Plejd: follow-up reload for a concurrent option change failed")
+                _LOGGER.exception("Plejd: follow-up reload for a concurrent option change raised")
+            if not follow_up_ok:
+                # A rejected reload reports failure by returning False without raising;
+                # dropping it would lose that concurrent change, so leave it pending.
+                _LOGGER.warning("Plejd: follow-up reload for a concurrent option change failed; leaving it pending")
+                async_mark_reload_pending(hass, entry.entry_id)
     if save_failed:
         connection.send_error(msg["id"], "save_failed", "Could not save schedules")
         return

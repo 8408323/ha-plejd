@@ -9,7 +9,6 @@ add_device service and the "Add a device" options-flow wizard.
 from __future__ import annotations
 
 import logging
-from dataclasses import asdict
 
 from homeassistant.components import bluetooth
 from homeassistant.config_entries import ConfigEntry
@@ -27,14 +26,6 @@ from .cloud import (
 )
 from .commission import async_commission_device
 from .const import (
-    CONF_DEVICE_ADDRESSES,
-    CONF_DEVICES,
-    CONF_GATEWAYS,
-    CONF_INPUTS,
-    CONF_MOTION,
-    CONF_RESOURCE_SET_ID,
-    CONF_ROOMS,
-    CONF_SCENES,
     CONF_SITE_ID,
 )
 from .discovery import _parse_plejd_mfr_data, async_bluetooth_available
@@ -136,17 +127,7 @@ async def async_add_device(
     await schedule_ws.async_reload_entry_with_lock(
         hass,
         entry,
-        {
-            **entry.data,
-            CONF_DEVICES: [asdict(d) for d in fresh_site.devices],
-            CONF_INPUTS: [asdict(i) for i in fresh_site.inputs],
-            CONF_MOTION: [asdict(m) for m in fresh_site.motion],
-            CONF_SCENES: [asdict(s) for s in fresh_site.scenes],
-            CONF_ROOMS: [asdict(r) for r in fresh_site.rooms],
-            CONF_GATEWAYS: fresh_site.gateways,
-            CONF_RESOURCE_SET_ID: fresh_site.resource_set_id,
-            CONF_DEVICE_ADDRESSES: fresh_site.device_addresses,
-        },
+        lambda e: schedule_ws.site_data_overlay(e, fresh_site),
         # Commissioning already happened and is non-idempotent by this point (the device is
         # no longer advertising as unprovisioned) - raising on a reload failure here would
         # report a successfully-added device as a failed add, with no way to retry through
