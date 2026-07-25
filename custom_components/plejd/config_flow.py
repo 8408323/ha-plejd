@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import voluptuous as vol
+from aiohttp import ClientError
 from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlow
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
 from homeassistant.exceptions import HomeAssistantError
@@ -125,18 +126,24 @@ class PlejdConfigFlow(ConfigFlow, domain=DOMAIN):
             session = async_get_clientsession(self.hass)
             try:
                 self._token = await async_login(session, self._email, self._password)
-                self._sites = await async_get_sites(session, self._token)
             except PlejdAuthError:
                 errors["base"] = "invalid_auth"
-            except PlejdCloudError:
+            except (PlejdCloudError, ClientError, OSError):
+                _LOGGER.debug("Plejd cloud login request failed", exc_info=True)
                 errors["base"] = "cannot_connect"
             else:
-                if not self._sites:
-                    errors["base"] = "no_sites"
-                elif len(self._sites) == 1:
-                    return await self._create_entry(_site_id(self._sites[0]))
+                try:
+                    self._sites = await async_get_sites(session, self._token)
+                except (PlejdCloudError, ClientError, OSError):
+                    _LOGGER.debug("Plejd site-list fetch failed", exc_info=True)
+                    errors["base"] = "cannot_connect"
                 else:
-                    return await self.async_step_site()
+                    if not self._sites:
+                        errors["base"] = "no_sites"
+                    elif len(self._sites) == 1:
+                        return await self._create_entry(_site_id(self._sites[0]))
+                    else:
+                        return await self.async_step_site()
         return self.async_show_form(step_id="user", data_schema=STEP_USER_SCHEMA, errors=errors)
 
     async def async_step_site(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
@@ -157,22 +164,36 @@ class PlejdConfigFlow(ConfigFlow, domain=DOMAIN):
                 site = await async_get_site(session, token, entry.data[CONF_SITE_ID])
             except PlejdAuthError:
                 errors["base"] = "invalid_auth"
-            except PlejdCloudError:
+            except (PlejdCloudError, ClientError, OSError):
+                _LOGGER.debug("Plejd reconfigure: cloud unreachable", exc_info=True)
                 errors["base"] = "cannot_connect"
             else:
+                if site.malformed:
+                    # Replacing the cached snapshot with normalized-empty collections would
+                    # remove every device/scene/room entity of the affected kind - refuse the
+                    # response the same way an unreachable cloud is refused.
+                    _LOGGER.debug("Plejd reconfigure: site response malformed (%s)", ", ".join(sorted(site.malformed)))
+                    return self.async_show_form(
+                        step_id="reconfigure", data_schema=vol.Schema({}), errors={"base": "cannot_connect"}
+                    )
+                data_updates = {
+                    CONF_CRYPTO_KEY: site.crypto_key.hex(),
+                    CONF_DEVICES: [asdict(d) for d in site.devices],
+                    CONF_INPUTS: [asdict(i) for i in site.inputs],
+                    CONF_MOTION: [asdict(m) for m in site.motion],
+                    CONF_SCENES: [asdict(s) for s in site.scenes],
+                    CONF_ROOMS: [asdict(r) for r in site.rooms],
+                    CONF_GATEWAYS: site.gateways,
+                    CONF_RESOURCE_SET_ID: site.resource_set_id,
+                    CONF_DEVICE_ADDRESSES: site.device_addresses,
+                }
+                # A gateway newly appearing on an entry that predates CONF_INSTALLATION_ID
+                # (or never had one) must seed it now - the gateway transport requires it.
+                if site.gateways and not entry.data.get(CONF_INSTALLATION_ID):
+                    data_updates[CONF_INSTALLATION_ID] = str(uuid4())
                 return self.async_update_reload_and_abort(
                     entry,
-                    data_updates={
-                        CONF_CRYPTO_KEY: site.crypto_key.hex(),
-                        CONF_DEVICES: [asdict(d) for d in site.devices],
-                        CONF_INPUTS: [asdict(i) for i in site.inputs],
-                        CONF_MOTION: [asdict(m) for m in site.motion],
-                        CONF_SCENES: [asdict(s) for s in site.scenes],
-                        CONF_ROOMS: [asdict(r) for r in site.rooms],
-                        CONF_GATEWAYS: site.gateways,
-                        CONF_RESOURCE_SET_ID: site.resource_set_id,
-                        CONF_DEVICE_ADDRESSES: site.device_addresses,
-                    },
+                    data_updates=data_updates,
                     reason="reconfigure_successful",
                 )
         return self.async_show_form(step_id="reconfigure", data_schema=vol.Schema({}), errors=errors)
@@ -191,11 +212,14 @@ class PlejdConfigFlow(ConfigFlow, domain=DOMAIN):
                 await async_login(session, entry.data[CONF_EMAIL], user_input[CONF_PASSWORD])
             except PlejdAuthError:
                 errors["base"] = "invalid_auth"
-            except PlejdCloudError:
+            except (PlejdCloudError, ClientError, OSError):
+                _LOGGER.debug("Plejd reauth: cloud unreachable", exc_info=True)
                 errors["base"] = "cannot_connect"
             else:
                 return self.async_update_reload_and_abort(
-                    entry, data_updates={CONF_PASSWORD: user_input[CONF_PASSWORD]}
+                    entry,
+                    data_updates={CONF_PASSWORD: user_input[CONF_PASSWORD]},
+                    reason="reauth_successful",
                 )
         return self.async_show_form(
             step_id="reauth_confirm",
@@ -208,7 +232,14 @@ class PlejdConfigFlow(ConfigFlow, domain=DOMAIN):
         session = async_get_clientsession(self.hass)
         try:
             site = await async_get_site(session, self._token, site_id)
-        except PlejdCloudError:
+        except (PlejdCloudError, ClientError, OSError):
+            _LOGGER.debug("Plejd site fetch failed during setup", exc_info=True)
+            return self.async_show_form(step_id="user", data_schema=STEP_USER_SCHEMA, errors={"base": "cannot_connect"})
+        if site.malformed:
+            # A truncated/wrong-typed collection parses into an empty one, so setting up on it
+            # would create an entry missing entire device/scene/room sets. Fail like any other
+            # bad response and let the user retry instead.
+            _LOGGER.debug("Plejd site response malformed during setup (%s)", ", ".join(sorted(site.malformed)))
             return self.async_show_form(step_id="user", data_schema=STEP_USER_SCHEMA, errors={"base": "cannot_connect"})
         await self.async_set_unique_id(site.site_id)
         self._abort_if_unique_id_configured()

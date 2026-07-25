@@ -62,8 +62,10 @@ class PlejdGatewayConnection:
         self._get_token = get_token
         self._on_state = on_state
         self._on_disconnect = on_disconnect
-        self._on_event = on_event
         self._ws_url = ws_url
+        # Non-output-state pushes (NotifyEvents faults, motion, button presses) - same
+        # decoded Command the BLE path routes through PlejdCoordinator._on_event.
+        self._on_event = on_event
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._state: dict[int, OutputState] = {}
         self._recv_task: asyncio.Task | None = None

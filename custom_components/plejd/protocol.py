@@ -133,8 +133,9 @@ def decode_notify_events(cmd: Command) -> frozenset[str] | None:
     """Decode a NotifyEvents report (0x002B) into the set of active fault-flag names.
 
     Data is a little-endian uint64 bitfield (validated as 0 against healthy hardware);
-    returns None for non-0x002B commands or a truncated/malformed payload (never treat
-    a short frame as "no faults" — that would mask a real active fault).
+    returns None for non-0x002B commands or a payload shorter than 8 bytes (e.g. an
+    echoed 0-byte read request, or a truncated/malformed notification) - treating
+    that as an empty bitfield would incorrectly clear an active fault.
     """
     if cmd.command != CMD_NOTIFY_EVENTS or len(cmd.data) < 8:
         return None

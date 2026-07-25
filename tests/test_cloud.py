@@ -81,7 +81,6 @@ _SITE = {
         {"deviceId": "d1", "title": "Kitchen", "roomId": "r1", "outputType": "LIGHT"},
         {"deviceId": "d2", "title": "Pump", "roomId": "r1", "outputType": "RELAY"},
         {"deviceId": "d3", "title": "Blind", "roomId": "r2", "outputType": "COVERABLE"},
-        {"title": "ghost"},  # no deviceId -> skipped
     ],
     "scenes": [{"sceneId": "sc1", "title": "Movie"}, {"sceneId": "sc2", "title": "NoIndex"}],
     "sceneIndex": {"sc1": 3},
@@ -107,12 +106,16 @@ async def test_login_bad_credentials_raises_auth_error():
                 await async_login(s, "u@x.se", "bad")
 
 
-async def test_login_without_token_raises():
+async def test_login_without_token_is_transient_not_an_auth_failure():
+    # A 200 carrying no sessionToken is a malformed response, not the server saying these
+    # credentials are wrong (Parse signals that with a 4xx + error code) - so it must not
+    # start reauth for a password that was never the problem.
     with aioresponses() as m:
         m.post(_LOGIN, payload={"objectId": "u1"})  # 200 but no token
         async with aiohttp.ClientSession() as s:
-            with pytest.raises(PlejdAuthError):
+            with pytest.raises(PlejdCloudError) as excinfo:
                 await async_login(s, "u@x.se", "pw")
+    assert not isinstance(excinfo.value, PlejdAuthError)
 
 
 async def test_get_sites_returns_list():
@@ -145,7 +148,7 @@ async def test_get_site_parses_devices():
             site = await async_get_site(s, "tok", "S1")
     assert site.crypto_key == bytes.fromhex("00112233445566778899aabbccddeeff")
     by_id = {d.device_id: d for d in site.devices}
-    assert set(by_id) == {"d1", "d2", "d3"}  # ghost skipped
+    assert set(by_id) == {"d1", "d2", "d3"}
     assert by_id["d1"].category == "light" and by_id["d1"].dimmable is True
     assert by_id["d1"].model == "DIM-01" and by_id["d1"].outputs == [11]
     assert by_id["d2"].category == "switch" and by_id["d2"].dimmable is False
@@ -203,6 +206,11 @@ async def test_get_site_malformed_result_raises():
 def test_parse_site_requires_crypto_key():
     with pytest.raises(PlejdCloudError, match="cryptoKey"):
         parse_site({"siteId": "S1", "plejdMesh": {}})
+
+
+def test_parse_site_rejects_a_crypto_key_of_the_wrong_length():
+    with pytest.raises(PlejdCloudError, match="16 bytes"):
+        parse_site({"siteId": "S1", "plejdMesh": {"cryptoKey": "00" * 15}})
 
 
 def test_dimmable_follows_traits_when_present():
@@ -1126,6 +1134,393 @@ def test_parse_site_room_dimmable_addresses_excludes_on_off_only_members():
     room = rooms[0]
     assert set(room.member_addresses) == {11, 61}
     assert room.dimmable_addresses == [11]  # d1 is dimmable; d6 (traits=0) is on/off only
+
+
+def test_parse_site_marks_nothing_malformed_for_a_well_formed_empty_site():
+    # A genuinely empty-but-well-formed site (every collection key present as its correct
+    # empty type) must not be flagged - only an absent/wrong-type field is a parse concern,
+    # not a caller-level "is this data trustworthy" one.
+    site = {
+        "siteId": "S1",
+        "title": "Empty",
+        "plejdMesh": {"cryptoKey": "00" * 16},
+        "devices": [],
+        "deviceAddress": {},
+        "outputAddress": {},
+        "inputAddress": {},
+        "plejdDevices": [],
+        "scenes": [],
+        "sceneIndex": {},
+        "rooms": [],
+        "roomAddress": {},
+        "outputGroups": {},
+        "gateways": [],
+    }
+    assert parse_site(site).malformed == frozenset()
+
+
+@pytest.mark.parametrize(
+    ("key", "bad_value", "label"),
+    [
+        ("devices", {"d1": {}}, "devices"),
+        ("inputAddress", [], "inputs"),
+        ("plejdDevices", {}, "motion"),
+        ("scenes", "not-a-list", "scenes"),
+        ("rooms", "not-a-list", "rooms"),
+        ("gateways", "not-a-list", "gateways"),
+    ],
+)
+def test_parse_site_marks_a_collection_malformed_when_its_source_field_is_the_wrong_type(key, bad_value, label):
+    site = {**_SITE, key: bad_value}
+    assert label in parse_site(site).malformed
+
+
+def test_parse_site_marks_rooms_malformed_when_room_address_is_the_wrong_type():
+    site = {**_SITE, "rooms": [], "roomAddress": "not-a-dict"}
+    assert "rooms" in parse_site(site).malformed
+
+
+@pytest.mark.parametrize(
+    ("key", "bad_value", "label"),
+    [
+        ("devices", {"d1": {"deviceId": "d1"}}, "devices"),  # object instead of list
+        ("inputAddress", [{"0": 11}], "inputs"),  # list instead of object
+        ("plejdDevices", {"d1": {"hardwareId": "1"}}, "motion"),
+        ("scenes", {"sc1": {"sceneId": "sc1"}}, "scenes"),
+        ("rooms", {"r1": {"roomId": "r1"}}, "rooms"),
+        ("roomAddress", [14], "rooms"),
+        ("outputGroups", [{"d1": {"0": [14]}}], "rooms"),
+    ],
+)
+def test_parse_site_survives_a_wrong_typed_but_non_empty_collection(key, bad_value, label):
+    # A wrong-typed value that is also non-empty must still parse to a flagged-but-usable
+    # site rather than raising mid-parse (AttributeError/TypeError) - the caller can only
+    # skip a malformed snapshot if `malformed` actually reaches it.
+    site = parse_site({**_SITE, key: bad_value})
+    assert label in site.malformed
+
+
+@pytest.mark.parametrize(
+    ("key", "labels"),
+    [("outputAddress", {"devices"}), ("deviceAddress", {"devices", "motion"})],
+)
+def test_parse_site_marks_devices_malformed_when_an_address_map_is_the_wrong_type(key, labels):
+    # outputAddress is what control commands target and deviceAddress is the physical
+    # fallback (also the motion sensors' own address source) - a present-but-corrupt map
+    # parses into entities with address=None that can never be commanded, so it must not
+    # look like a valid snapshot worth caching over the working one.
+    assert labels <= parse_site({**_SITE, key: "not-a-dict"}).malformed
+
+
+async def test_login_rate_limit_is_transient_not_an_auth_failure():
+    # A 429 (the daily poll's own retries can provoke one) is not the server rejecting
+    # these credentials - mapping it to PlejdAuthError would start reauth for a password
+    # that is still perfectly valid.
+    with aioresponses() as m:
+        m.post(_LOGIN, status=429, payload={"error": "too many requests"})
+        async with aiohttp.ClientSession() as s:
+            with pytest.raises(PlejdCloudError, match="too many requests") as excinfo:
+                await async_login(s, "u@x.se", "pw")
+    assert not isinstance(excinfo.value, PlejdAuthError)
+
+
+@pytest.mark.parametrize("key", ["sceneIndex", "roomAddress", "outputGroups"])
+def test_parse_site_marks_a_collection_malformed_when_a_companion_map_is_corrupt(key):
+    # A partial response can keep the primary list while corrupting the map it is parsed
+    # against - scenes with an unusable sceneIndex parses to zero executable scenes, rooms
+    # with an unusable roomAddress/outputGroups to zero room entities. Both look like a
+    # genuine deletion unless flagged, so the poll would destroy those entities.
+    site = {**_SITE, "rooms": [{"roomId": "r1", "title": "Kok"}], "roomAddress": {"r1": 14}, "outputGroups": {}}
+    site[key] = "not-a-dict"
+    expected = "scenes" if key == "sceneIndex" else "rooms"
+    assert expected in parse_site(site).malformed
+
+
+def test_parse_site_skips_non_object_entries_inside_the_device_collections():
+    # The collections are the right type but carry a stray non-object element - those
+    # individual entries are skipped rather than crashing the whole parse (which would
+    # take the site's every other, perfectly good device with it).
+    site = parse_site(
+        {
+            **_SITE,
+            "devices": [*_SITE["devices"], "not-an-object"],
+            "plejdDevices": [*_SITE["plejdDevices"], 42],
+            "gateways": ["not-an-object"],
+        }
+    )
+    assert {d.device_id for d in site.devices} == {"d1", "d2", "d3"}  # the good ones survive
+    assert [(m.address, m.name) for m in site.motion] == [(33, "Motion sensor")]
+    assert site.gateways == []
+
+
+@pytest.mark.parametrize(
+    ("key", "labels"),
+    [
+        ("devices", {"devices"}),
+        ("plejdDevices", {"devices", "motion"}),
+        ("scenes", {"scenes"}),
+        ("rooms", {"rooms"}),
+        ("gateways", {"gateways"}),
+    ],
+)
+def test_parse_site_marks_a_collection_malformed_for_a_stray_non_object_entry(key, labels):
+    # Surviving the bad element (above) is not enough for a caching, diffing caller: the
+    # skipped entry is a device/scene/room missing from the snapshot, which the cloud poll
+    # would read as a deliberate deletion and persist. It must be flagged instead.
+    site = parse_site({**_SITE, key: [*(_SITE.get(key) or []), "not-an-object"]})
+    assert labels <= site.malformed
+
+
+@pytest.mark.parametrize(
+    ("key", "record", "labels"),
+    [
+        ("devices", {"title": "ghost"}, {"devices"}),  # no deviceId
+        ("plejdDevices", {"hardwareId": "1"}, {"devices", "motion"}),
+        ("scenes", {"title": "nameless"}, {"scenes"}),
+        ("rooms", {"title": "nameless"}, {"rooms"}),
+        ("gateways", {"resourceSetId": "rs1"}, {"gateways"}),
+    ],
+)
+def test_parse_site_marks_a_collection_malformed_for_a_record_missing_its_id(key, record, labels):
+    # A record present but missing the id everything keys off is truncated data, and the
+    # parser can only skip it - which for the diffing cloud poll reads as a deletion. Flag
+    # the collection so the snapshot is rejected rather than silently applied short a device.
+    site = parse_site({**_SITE, key: [*(_SITE.get(key) or []), record]})
+    assert labels <= site.malformed
+
+
+def test_parse_site_still_skips_a_device_record_missing_its_id():
+    # Flagging the collection must not stop the parse producing the other, good devices -
+    # a caller that only needs to read the site (not cache it) is unaffected.
+    site = parse_site({**_SITE, "devices": [*_SITE["devices"], {"title": "ghost"}]})
+    assert {d.device_id for d in site.devices} == {"d1", "d2", "d3"}
+
+
+@pytest.mark.parametrize(
+    ("missing", "labels"),
+    [
+        ("devices", {"devices"}),
+        ("plejdDevices", {"devices", "motion"}),
+        ("deviceAddress", {"devices", "motion"}),
+    ],
+)
+def test_parse_site_flags_a_required_collection_that_is_absent(missing, labels):
+    # These cannot legitimately be omitted by a site that has devices: omission means the
+    # response is truncated, and normalizing it to empty is exactly what would persist
+    # CONF_DEVICES=[] and wipe every entity on the next poll.
+    site = {**_SITE}
+    del site[missing]
+    assert labels <= parse_site(site).malformed
+
+
+def test_parse_site_does_not_flag_a_devices_free_site_missing_its_companions():
+    # The companion requirement is conditional on there being devices at all - a site with
+    # none has nothing to describe, so omitting plejdDevices/deviceAddress is consistent
+    # rather than truncated, and must not block setup.
+    site = {"siteId": "S1", "plejdMesh": {"cryptoKey": "00" * 16}, "devices": []}
+    assert parse_site(site).malformed == frozenset()
+
+
+def test_parse_site_does_not_flag_a_site_that_simply_has_no_rooms_or_gateway():
+    # Omitting a collection is how the API says the site has none: a BLE-only site has no
+    # gateways, a site with no rooms has no rooms/roomAddress/outputGroups. Flagging those
+    # would refuse setup, refuse reconfigure and stop the poll ever syncing for such a site,
+    # which is far worse than the destructive sync the flag exists to prevent.
+    assert "rooms" not in _SITE and "gateways" not in _SITE  # the representative fixture
+    assert parse_site(_SITE).malformed == frozenset()
+
+
+def test_parse_site_picks_the_lowest_input_index_for_a_shared_address():
+    # Several inputs can share one mesh address and only the first survives dedup. The winner
+    # must be the lowest index, not whichever the cloud's JSON key order happened to emit
+    # first - otherwise the cached input_index flips between polls, reloading an unchanged
+    # integration and making a later per-input settings write hit a different physical input.
+    forward = parse_site({**_SITE, "inputAddress": {"d1": {"0": 11, "1": 11}}})
+    reversed_keys = parse_site({**_SITE, "inputAddress": {"d1": {"1": 11, "0": 11}}})
+    assert [(i.address, i.input_index) for i in forward.inputs] == [(11, 0)]
+    assert [(i.address, i.input_index) for i in reversed_keys.inputs] == [(11, 0)]
+
+
+@pytest.mark.parametrize(
+    ("key", "record", "labels"),
+    [
+        ("devices", {"deviceId": 7, "title": "int id"}, {"devices"}),
+        ("scenes", {"sceneId": 7, "title": "int id"}, {"scenes"}),
+        ("gateways", {"deviceId": 7}, {"gateways"}),
+    ],
+)
+def test_parse_site_flags_rather_than_crashes_on_a_non_string_id(key, record, labels):
+    # Mixed identifier types (one string id, one int) used to blow up the canonical sort with
+    # a TypeError, so untrusted input aborted the parse instead of returning something the
+    # caller could reject. The record is skipped and the collection flagged instead.
+    site = parse_site({**_SITE, key: [*(_SITE.get(key) or []), record]})
+    assert labels <= site.malformed
+
+
+@pytest.mark.parametrize(
+    ("mutation", "why"),
+    [
+        # d3 is single-output with no outputAddress entry, so it relies on deviceAddress
+        ({"deviceAddress": {"d1": 1, "d2": 2, "w1": 33}}, "no address resolves for d3"),
+        ({"plejdDevices": [{"deviceId": "d2", "hardwareId": "18"}]}, "no hardware record for d1/d3"),
+    ],
+)
+def test_parse_site_flags_devices_when_one_does_not_fully_resolve(mutation, why):
+    # An outcome check rather than per-map coverage checks: a device only works if it resolved
+    # to BOTH an address and a hardware record, and a truncated response can break either.
+    # A device that came out address-less or hardware-unknown is what the light/switch
+    # platforms silently drop, so it must never be cached over a working snapshot.
+    site = parse_site({**_SITE, **mutation})
+    assert "devices" in site.malformed, why
+
+
+def test_parse_site_flags_inputs_for_a_non_string_device_key():
+    # Mixed key types would also make the candidate sort compare int with str and raise,
+    # aborting the parse instead of returning a site the caller can reject.
+    site = parse_site({**_SITE, "inputAddress": {7: {"0": 41}, "d3": {"0": 31}}})
+    assert "inputs" in site.malformed
+    assert [i.device_id for i in site.inputs] == ["d3"]
+
+
+@pytest.mark.parametrize(
+    "groups",
+    [
+        {"d1": {"0": "truncated"}},  # per-output value is not a list
+        {"d1": {"0": ["not-a-number"]}},  # a group entry that is not numeric
+    ],
+)
+def test_parse_site_flags_rooms_for_a_malformed_per_output_group_list(groups):
+    # Each of these silently loses a group membership, shrinking site.rooms into something the
+    # unattended poll would persist and use to remove the affected room entity.
+    site = parse_site({**_SITE, "roomAddress": {"r1": 14}, "outputGroups": groups})
+    assert "rooms" in site.malformed
+
+
+def test_parse_site_flags_gateways_for_a_non_string_resource_set_id():
+    # The value goes straight into the WebSocket's Resource-Set-ID header, and persisting a
+    # truthy non-string over a working cached id would fail every connection while matching
+    # the cached snapshot, so later polls would see no change and never repair it.
+    site = parse_site({**_SITE, "gateways": [{"deviceId": "gw1", "resourceSetId": 123}]})
+    assert "gateways" in site.malformed
+    assert site.resource_set_id is None
+
+
+def test_parse_site_flags_rooms_for_a_malformed_per_device_output_group_map():
+    # Skipping the bad per-device entry keeps the parse alive but drops that device's group
+    # memberships, shrinking or emptying the room list - which the diffing poll would read as
+    # a real change and use to remove those room entities.
+    site = parse_site({**_SITE, "roomAddress": {"r1": 14}, "outputGroups": {"d1": "truncated"}})
+    assert "rooms" in site.malformed
+
+
+@pytest.mark.parametrize(
+    "bad_entry",
+    [
+        {"d1": "not-a-dict"},  # the whole per-device map is corrupt
+        {"d1": {"nope": 11}},  # non-numeric input index
+        {"d1": {"0": "nope"}},  # non-numeric address
+    ],
+)
+def test_parse_site_flags_inputs_for_a_malformed_input_entry(bad_entry):
+    # The bad entry is skipped so the parse survives, but skipping silently drops real
+    # buttons - which the diffing poll would read as a deletion and persist, removing those
+    # event entities. The collection must be flagged so the snapshot is rejected instead.
+    site = parse_site({**_SITE, "inputAddress": {**bad_entry, "d3": {"0": 31}}})
+    assert [(i.device_id, i.address) for i in site.inputs] == [("d3", 31)]  # the good one survives
+    assert "inputs" in site.malformed
+
+
+def test_parse_site_skips_a_motion_sensor_with_a_non_string_id():
+    # The sensor is dropped rather than crashing the canonical sort, and plejdDevices is
+    # flagged so a caching caller rejects the snapshot instead of losing the sensor quietly.
+    site = parse_site({**_SITE, "plejdDevices": [*_SITE["plejdDevices"], {"deviceId": 7, "hardwareId": "70"}]})
+    assert [m.device_id for m in site.motion] == ["w1"]
+    assert "motion" in site.malformed
+
+
+def test_parse_site_returns_collections_in_a_canonical_order():
+    # parse_site is the single place ordering is normalized, so every caller that stores a
+    # snapshot (config flow setup/reconfigure, the cloud poll) writes the same order for the
+    # same site - otherwise the first poll after setup diffs unequal and reloads for nothing.
+    shuffled = {
+        **_SITE,
+        "devices": list(reversed(_SITE["devices"])),
+        "inputAddress": {"d3": {"0": 31}, "d1": {"1": 11, "0": 12}},
+        "scenes": list(reversed(_SITE["scenes"])),
+        "sceneIndex": {"sc1": 3, "sc2": 4},
+    }
+    site = parse_site(shuffled)
+    assert [(d.device_id, d.output_index) for d in site.devices] == sorted(
+        (d.device_id, d.output_index) for d in site.devices
+    )
+    assert [(i.device_id, i.input_index) for i in site.inputs] == sorted(
+        (i.device_id, i.input_index) for i in site.inputs
+    )
+    assert [s.scene_id for s in site.scenes] == sorted(s.scene_id for s in site.scenes)
+    assert [s.scene_id for s in site.all_scenes] == sorted(s.scene_id for s in site.all_scenes)
+
+
+async def test_login_request_timeout_is_transient_not_an_auth_failure():
+    # A 408 is the server giving up on the request, not a verdict on the credentials.
+    with aioresponses() as m:
+        m.post(_LOGIN, status=408, payload={"error": "request timeout"})
+        async with aiohttp.ClientSession() as s:
+            with pytest.raises(PlejdCloudError, match="request timeout") as excinfo:
+                await async_login(s, "u@x.se", "pw")
+    assert not isinstance(excinfo.value, PlejdAuthError)
+
+
+@pytest.mark.parametrize(
+    ("status", "payload"),
+    [
+        (403, {"error": "forbidden"}),  # e.g. a WAF in front of the API
+        (404, {"error": "not found"}),  # e.g. an endpoint rollout, no Parse code
+        (400, {"error": "bad request"}),
+    ],
+)
+async def test_login_unrecognized_4xx_without_a_code_is_transient(status, payload):
+    # Parse answers a rejected username/password with code 101, so a 4xx carrying no code did
+    # not establish that the stored password is wrong - treating it as auth would prompt the
+    # user to re-enter a perfectly valid password (and in the daily poll, do so unattended).
+    with aioresponses() as m:
+        m.post(_LOGIN, status=status, payload=payload)
+        async with aiohttp.ClientSession() as s:
+            with pytest.raises(PlejdCloudError) as excinfo:
+                await async_login(s, "u@x.se", "pw")
+    assert not isinstance(excinfo.value, PlejdAuthError)
+
+
+async def test_login_parse_invalid_login_code_is_an_auth_failure():
+    # Parse's own credential-rejection signal (code 101) must still reach reauth, whatever
+    # status it arrives with - that is the one case where prompting for the password is right.
+    with aioresponses() as m:
+        m.post(_LOGIN, status=404, payload={"code": 101, "error": "invalid login parameters"})
+        async with aiohttp.ClientSession() as s:
+            with pytest.raises(PlejdAuthError, match="invalid login parameters"):
+                await async_login(s, "u@x.se", "pw")
+
+
+def test_parse_site_sorts_device_outputs_regardless_of_output_address_key_order():
+    # outputAddress is a JSON object, so its key order is not semantically meaningful and
+    # can wobble between requests. `outputs` must be canonicalized, or coordinator.py's
+    # cloud-poll diff sees an unchanged site as changed and reloads for nothing.
+    forward = parse_site({**_SITE, "outputAddress": {"d2": {"0": 21, "1": 22}}})
+    reversed_keys = parse_site({**_SITE, "outputAddress": {"d2": {"1": 22, "0": 21}}})
+    d2_forward = next(d for d in forward.devices if d.device_id == "d2")
+    d2_reversed = next(d for d in reversed_keys.devices if d.device_id == "d2")
+    assert d2_forward.outputs == d2_reversed.outputs == [21, 22]
+
+
+async def test_login_server_error_is_transient_not_an_auth_failure():
+    # A 5xx means the Plejd cloud is broken, not that the stored password is wrong -
+    # callers start HA's reauth flow on PlejdAuthError, which would wrongly prompt the
+    # user to re-enter perfectly valid credentials during an outage.
+    with aioresponses() as m:
+        m.post(_LOGIN, status=503, payload={"error": "service unavailable"})
+        async with aiohttp.ClientSession() as s:
+            with pytest.raises(PlejdCloudError, match="service unavailable") as excinfo:
+                await async_login(s, "u@x.se", "pw")
+    assert not isinstance(excinfo.value, PlejdAuthError)
 
 
 async def test_update_time_event_sends_minimal_payload_without_night_reduction():
