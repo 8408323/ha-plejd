@@ -8,9 +8,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [0.12.0] - 2026-07-25
 
-Manage your Plejd site from Home Assistant instead of reaching for the Plejd
-app: rooms, scenes, schedules and device placement are now all editable from
-services, and the site keeps itself in sync automatically.
+Manage much of your Plejd site from Home Assistant: rooms, scenes, schedules
+and device placement are now editable from services, and the site keeps itself
+in sync automatically.
+
+**One caveat worth reading first:** creating or editing a scene or a cloud
+schedule writes to the Plejd cloud only. The physical mesh is programmed by the
+Plejd app, so open the app once (while it can reach your devices) before relying
+on a new or changed scene/schedule running locally.
 
 ### Added
 - **Automatic cloud sync.** Every 24 hours the integration checks the Plejd cloud
@@ -21,28 +26,33 @@ services, and the site keeps itself in sync automatically.
   Scenes were previously execute-only; they can now be created, edited and
   deleted from Home Assistant, including per-output steps (on/off, level, colour
   temperature, cover tilt, climate boost) and whether the scene is hidden from
-  the app's scene list.
+  the app's scene list. Cloud-only — see the caveat above about opening the
+  Plejd app once so the mesh is programmed.
 - **Room management (`plejd.update_room` / `remove_room`).** Rename a room,
   change its display order, or recategorise it (Kitchen, Bedroom, …), and delete
   rooms that no longer hold any devices — the delete is refused rather than
   orphaning devices if the room still has some.
 - **Move a device between rooms (`plejd.move_device_to_room`).** Reassign a
-  device without the Plejd app. Single-output devices only, since the cloud
-  models room membership per physical device.
+  device without the Plejd app. Single-output devices only for now: a capture
+  confirmed the outputs of a multi-output device can sit in different rooms, but
+  the mesh command targets the device's shared address and it is not yet
+  confirmed how it distinguishes between outputs — so rather than risk moving
+  the wrong output (or both), those devices are refused.
 - **Remove a device (`plejd.remove_device`).** Decommission a device from the
   site and drop its Home Assistant entities in one call.
 - **Cloud schedules (`plejd.create_schedule` / `update_schedule` /
   `remove_schedule`).** The app's astro schedules — run a scene between two
   sun-relative events (sunrise/sunset ± offset), optionally limited to chosen
   weekdays, with an optional night-reduction window that applies a second scene
-  overnight. Distinct from the existing on-device weekly time→scene schedules,
-  which remain available.
+  overnight. Two limits worth knowing: `update_schedule` and `remove_schedule`
+  can only target schedules created through this integration, not ones you
+  already made in the Plejd app (reading those back from the cloud is not
+  decoded yet), and only sun-relative triggers are supported — fixed
+  clock-time schedules are not. Distinct from the existing on-device weekly
+  time→scene schedules, which remain available.
 - **Room category when commissioning.** `plejd.add_device` accepts a
   `room_category` so a room created during commissioning is filed correctly
   straight away.
-- **Editable input button type.** A device's physical input configuration
-  (`Ingång`) is exposed as a `select` after commissioning, instead of being
-  fixed at the value chosen when the device was added.
 - **Bound-device classification.** Devices bound as dim remotes are now
   classified as door/window sensor, motion sensor or button remote, and the
   dashboard's binding editor adapts its controls to the device kind rather than
