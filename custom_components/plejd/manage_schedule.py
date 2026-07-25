@@ -423,7 +423,9 @@ async def async_create_schedule(
         # can learn its id (this integration can't rediscover it from getSiteById).
         await _sync_cloud_schedules_cache(hass, entry, cloud_schedules)
         hass.bus.async_fire(f"{DOMAIN}_schedule_created", {"schedule_id": schedule_id})
-        await _async_refresh_and_reload(hass, entry, http_session, token, cloud_schedules=cloud_schedules, mutation="create")
+        await _async_refresh_and_reload(
+            hass, entry, http_session, token, cloud_schedules=cloud_schedules, mutation="create"
+        )
         return schedule_id
 
 
