@@ -6,11 +6,98 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-07-25
+
+Manage much of your Plejd site from Home Assistant: rooms, scenes, schedules
+and device placement are now editable from services, and the site keeps itself
+in sync automatically.
+
+**One caveat worth reading first:** creating or editing a scene or a cloud
+schedule writes to the Plejd cloud only. The physical mesh is programmed by the
+Plejd app, so open the app once (while it can reach your devices) before relying
+on a new or changed scene/schedule running locally.
+
 ### Added
 - **Automatic cloud sync.** Every 24 hours the integration checks the Plejd cloud
   for site changes (devices/rooms/scenes added or renamed via the Plejd app,
   gateway added) and reloads automatically if anything differs — no manual
   Reconfigure needed, though Reconfigure still works for an immediate sync.
+- **Scene management (`plejd.create_scene` / `update_scene` / `remove_scene`).**
+  Scenes were previously execute-only; they can now be created, edited and
+  deleted from Home Assistant, including per-output steps (on/off, level, colour
+  temperature, cover tilt, climate boost) and whether the scene is hidden from
+  the app's scene list. Cloud-only — see the caveat above about opening the
+  Plejd app once so the mesh is programmed.
+- **Room management (`plejd.update_room` / `remove_room`).** Rename a room,
+  change its display order, or recategorise it (Kitchen, Bedroom, …), and delete
+  rooms that no longer hold any devices — the delete is refused rather than
+  orphaning devices if the room still has some.
+- **Move a device between rooms (`plejd.move_device_to_room`).** Reassign a
+  device without the Plejd app. Single-output devices only for now: a capture
+  confirmed the outputs of a multi-output device can sit in different rooms, but
+  the mesh command targets the device's shared address and it is not yet
+  confirmed how it distinguishes between outputs — so rather than risk moving
+  the wrong output (or both), those devices are refused.
+- **Remove a device (`plejd.remove_device`).** Decommission a device from the
+  site and drop its Home Assistant entities in one call.
+- **Cloud schedules (`plejd.create_schedule` / `update_schedule` /
+  `remove_schedule`).** The app's astro schedules — run a scene between two
+  sun-relative events (sunrise/sunset ± offset), optionally limited to chosen
+  weekdays, with an optional night-reduction window that applies a second scene
+  overnight. Two limits worth knowing: `update_schedule` and `remove_schedule`
+  can only target schedules created through this integration, not ones you
+  already made in the Plejd app (reading those back from the cloud is not
+  decoded yet), and only sun-relative triggers are supported — fixed
+  clock-time schedules are not. Distinct from the existing on-device weekly
+  time→scene schedules, which remain available.
+- **Room category when commissioning.** `plejd.add_device` accepts a
+  `room_category` so a room created during commissioning is filed correctly
+  straight away.
+- **Bound-device classification.** Devices bound as dim remotes are now
+  classified as door/window sensor, motion sensor or button remote, and the
+  dashboard's binding editor adapts its controls to the device kind rather than
+  offering button-remote options for everything.
+- **Repair notice when the cloud returns unusable data.** If the daily sync is
+  skipped because the Plejd cloud served a truncated or malformed site, Home
+  Assistant now raises a repair issue explaining that nothing was removed and
+  the last good copy is still in use — previously this was silent, so a site
+  that had stopped syncing looked identical to one that simply had not changed.
+  It clears itself as soon as a usable response arrives.
+
+### Fixed
+- **Concurrent management operations could overwrite each other.** Every
+  operation that edits the site (scene/room/schedule/device services, adding a
+  device, the dashboard's schedule editor) now builds its config-entry payload
+  while holding the reload lock rather than before waiting for it, so two
+  operations running together no longer discard one another's changes. Two
+  schedule additions arriving at once could previously be handed the same
+  schedule slot and id.
+- **Duplicate and missed reloads.** The reload guard is now a real per-entry
+  lock rather than a shared flag any operation could clear out from under
+  another, and a reload that a concurrent change still needs is no longer
+  dropped when a follow-up attempt fails.
+- **Commissioning a device could reload the entry twice**, racing itself.
+- **A malformed `inputAddress` entry from the cloud aborted site parsing**,
+  taking every other device with it; the bad entry is now skipped.
+- **Truncated cloud responses could silently wipe entities.** A site response
+  missing whole collections, carrying wrong-typed fields, or listing a device
+  that resolves to no mesh address or hardware record is now rejected instead of
+  cached over the working copy — previously it could remove every device, scene
+  or room entity of the affected kind until a later poll restored them.
+- **A transient cloud failure could prompt for your password.** Only Plejd's own
+  credential-rejection response starts reauthentication now; timeouts, rate
+  limiting, gateway errors and malformed replies are treated as retryable.
+- **Repeated cloud logins while the mesh was out of range.** A site whose devices
+  are unreachable at startup no longer re-attempts a cloud self-heal on every
+  Home Assistant setup retry.
+
+### Changed
+- Setup and Reconfigure refuse a malformed site response rather than storing it,
+  reporting it the same way an unreachable cloud is reported.
+
+### Docs
+- Folded the 2026-07-21 gateway protocol live capture findings into
+  `docs/gateway_protocol.md` (ping/pong cadence and message shapes).
 
 ## [0.11.0] - 2026-07-20
 
