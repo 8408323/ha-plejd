@@ -471,6 +471,10 @@ class PlejdCoordinator:
             DOMAIN,
             f"malformed_cloud_site_{self._entry_id}",
             is_fixable=False,
+            # Repair issues are dropped on restart unless persisted, and the streak counter
+            # lives in hass.data so it resets too - between them, restarting mid-incident
+            # would hide the warning and then need two more 24h polls to earn it back.
+            is_persistent=True,
             severity=issue_registry.IssueSeverity.WARNING,
             translation_key="malformed_cloud_site",
             translation_placeholders={
@@ -480,10 +484,14 @@ class PlejdCoordinator:
         )
 
     def _clear_malformed_polls(self) -> None:
-        """Drop the repair issue once the cloud serves a usable snapshot again."""
-        counts: dict[str, int] = self.hass.data.get(DATA_MALFORMED_POLLS, {})
-        if counts.pop(self._entry_id, 0) >= MALFORMED_POLLS_BEFORE_REPAIR:
-            issue_registry.async_delete_issue(self.hass, DOMAIN, f"malformed_cloud_site_{self._entry_id}")
+        """Drop the repair issue once the cloud serves a usable snapshot again.
+
+        Deletes unconditionally rather than only when the streak reached the threshold: the
+        issue outlives a restart but the counter does not, so gating on the counter would
+        strand a persisted issue on screen forever once the cloud recovered.
+        """
+        self.hass.data.get(DATA_MALFORMED_POLLS, {}).pop(self._entry_id, None)
+        issue_registry.async_delete_issue(self.hass, DOMAIN, f"malformed_cloud_site_{self._entry_id}")
 
     def _should_attempt_self_heal(self) -> bool:
         """True at most once per SELF_HEAL_COOLDOWN, recording the attempt.

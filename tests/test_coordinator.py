@@ -3500,3 +3500,60 @@ async def test_cloud_poll_clears_the_repair_issue_once_the_cloud_recovers(monkey
     await c._async_poll_cloud(None)  # a good response
     assert "malformed_cloud_site_e1" not in hass.created_issues
     assert "malformed_cloud_site_e1" in hass.deleted_issues
+
+
+async def test_cloud_poll_clears_a_repair_issue_that_outlived_a_restart(monkeypatch):
+    # The issue is persistent but the streak counter is not, so after a restart mid-incident
+    # the issue is on screen with the counter back at zero. Recovery has to clear it anyway -
+    # gating the delete on the counter would strand the warning on screen forever.
+    async def _login(session, email, password):
+        return "TOKEN"
+
+    async def _get_site(session, token, site_id):
+        return _fake_site()  # a good response, matching the cached snapshot
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _login)
+    monkeypatch.setattr(coordinator_mod, "async_get_site", _get_site)
+
+    entry = _cloud_poll_entry()
+    hass = _hass()
+    hass.session = object()
+    hass.config_entries = types.SimpleNamespace(
+        async_get_entry=lambda eid: entry,
+        async_update_entry=lambda e, data, options=None: setattr(e, "data", data),
+        async_reload=AsyncMock(return_value=True),
+    )
+    # what a restart looks like: the persisted issue survived, hass.data did not
+    hass.created_issues = {"malformed_cloud_site_e1": {"domain": "plejd"}}
+    assert coordinator_mod.DATA_MALFORMED_POLLS not in hass.data
+
+    await PlejdCoordinator(hass, entry)._async_poll_cloud(None)
+
+    assert "malformed_cloud_site_e1" not in hass.created_issues
+
+
+async def test_cloud_poll_marks_the_malformed_repair_issue_persistent(monkeypatch):
+    # Non-persistent is HA's default, and it would drop the warning on restart - leaving an
+    # ongoing incident invisible for another two 24h polls.
+    async def _login(session, email, password):
+        return "TOKEN"
+
+    async def _get_site(session, token, site_id):
+        return _fake_site(malformed=["devices"])
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _login)
+    monkeypatch.setattr(coordinator_mod, "async_get_site", _get_site)
+
+    entry = _cloud_poll_entry()
+    hass = _hass()
+    hass.session = object()
+    hass.config_entries = types.SimpleNamespace(
+        async_get_entry=lambda eid: entry,
+        async_update_entry=lambda e, data, options=None: pytest.fail("must not persist a malformed snapshot"),
+        async_reload=AsyncMock(),
+    )
+    c = PlejdCoordinator(hass, entry)
+    await c._async_poll_cloud(None)
+    await c._async_poll_cloud(None)
+
+    assert hass.created_issues["malformed_cloud_site_e1"]["is_persistent"] is True
