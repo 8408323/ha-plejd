@@ -1563,7 +1563,7 @@ def _cloud_poll_entry():
     )
 
 
-def _fake_site(devices=None, gateways=None, resource_set_id=None, device_addresses=None, rooms=None):
+def _fake_site(devices=None, gateways=None, resource_set_id=None, device_addresses=None, rooms=None, motion=None):
     """A PlejdCloudSite-like object matching _DEV by default (no change)."""
     from plejd.cloud import PlejdCloudSite
 
@@ -1576,7 +1576,7 @@ def _fake_site(devices=None, gateways=None, resource_set_id=None, device_address
         if devices is not None
         else [__import__("plejd.cloud", fromlist=["PlejdCloudDevice"]).PlejdCloudDevice(**_DEV)],
         inputs=[],
-        motion=[],
+        motion=motion or [],
         scenes=[],
         gateways=gateways or [],
         resource_set_id=resource_set_id,
@@ -1757,6 +1757,35 @@ async def test_cloud_poll_skips_a_suspiciously_empty_room_list(monkeypatch, capl
 
     entry = _cloud_poll_entry()
     entry.data[CONF_ROOMS] = [asdict(room)]  # cache has a real room
+    config_entries = types.SimpleNamespace(
+        async_get_entry=lambda eid: entry,
+        async_update_entry=lambda e, data, options=None: pytest.fail("must not persist a suspiciously empty snapshot"),
+        async_reload=AsyncMock(),
+    )
+    hass = _hass()
+    hass.session = object()
+    hass.config_entries = config_entries
+    c = PlejdCoordinator(hass, entry)
+    await c._async_poll_cloud(None)  # must not raise
+    assert "likely malformed response" in caplog.text
+    config_entries.async_reload.assert_not_awaited()
+
+
+async def test_cloud_poll_skips_a_suspiciously_empty_motion_list(monkeypatch, caplog):
+    # motion is derived from a different source key (plejdDevices) than devices[] - a
+    # response that keeps devices[] but omits plejdDevices would sail past the devices
+    # guard above while still silently wiping every motion/illuminance entity.
+    async def _login(session, email, password):
+        return "TOKEN"
+
+    async def _get_site(session, token, site_id):
+        return _fake_site(motion=[])
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _login)
+    monkeypatch.setattr(coordinator_mod, "async_get_site", _get_site)
+
+    entry = _cloud_poll_entry()
+    entry.data[CONF_MOTION] = [{"device_id": "m1", "name": "Motion sensor", "address": 42}]  # cache has a sensor
     config_entries = types.SimpleNamespace(
         async_get_entry=lambda eid: entry,
         async_update_entry=lambda e, data, options=None: pytest.fail("must not persist a suspiciously empty snapshot"),
