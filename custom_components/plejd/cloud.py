@@ -735,8 +735,13 @@ def parse_site(site: dict) -> PlejdCloudSite:
     key_hex = mesh.get("cryptoKey")
     if not key_hex:
         raise PlejdCloudError("site has no cryptoKey")
-    # cryptoKey is dash-separated hex ("XX-XX-..", 16 bytes) — validated against the API.
+    # cryptoKey is dash-separated hex ("XX-XX-..", 16 bytes). The BLE auth path requires
+    # exactly 16 bytes; accepting any other length here would let a malformed cloud
+    # response silently replace a known-good cached key with one that can never
+    # authenticate, stranding the mesh until a human notices and re-triggers setup.
     crypto_key = bytes.fromhex(key_hex.replace("-", ""))
+    if len(crypto_key) != 16:
+        raise PlejdCloudError("site cryptoKey is not 16 bytes")
     # meshKey is a dash-separated hex string used as the BLE AccessAddress during commissioning.
     mesh_key: str = mesh.get("meshKey") or ""
 

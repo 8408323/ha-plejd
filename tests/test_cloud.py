@@ -205,6 +205,11 @@ def test_parse_site_requires_crypto_key():
         parse_site({"siteId": "S1", "plejdMesh": {}})
 
 
+def test_parse_site_rejects_a_crypto_key_of_the_wrong_length():
+    with pytest.raises(PlejdCloudError, match="16 bytes"):
+        parse_site({"siteId": "S1", "plejdMesh": {"cryptoKey": "00" * 15}})
+
+
 def test_dimmable_follows_traits_when_present():
     site = parse_site(
         {

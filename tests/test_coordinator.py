@@ -1874,6 +1874,50 @@ async def test_cloud_poll_runs_a_follow_up_reload_for_a_concurrent_change(monkey
     assert schedule_ws.DATA_RELOAD_PENDING not in hass.data
 
 
+async def test_cloud_poll_logs_when_the_follow_up_reload_raises(monkeypatch, caplog):
+    # Same race as above, but the follow-up reload itself raises - that must be logged
+    # and swallowed (it's a best-effort reload for someone else's change), not propagated
+    # out of this poll and not treated as this poll's own reload having failed.
+    from plejd import schedule_ws
+    from plejd.cloud import PlejdCloudDevice
+
+    new_dev = PlejdCloudDevice(**{**_DEV, "device_id": "d2", "name": "Matbord", "address": 9})
+
+    async def _login(session, email, password):
+        return "TOKEN"
+
+    async def _get_site(session, token, site_id):
+        return _fake_site(devices=[PlejdCloudDevice(**_DEV), new_dev])
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _login)
+    monkeypatch.setattr(coordinator_mod, "async_get_site", _get_site)
+
+    entry = _cloud_poll_entry()
+    hass = _hass()
+    hass.session = object()
+    calls: list[str] = []
+
+    async def _reload(entry_id):
+        calls.append(entry_id)
+        if len(calls) == 1:
+            hass.data[schedule_ws.DATA_RELOAD_PENDING] = entry_id
+            return True
+        raise RuntimeError("boom")
+
+    hass.config_entries = types.SimpleNamespace(
+        async_get_entry=lambda eid: entry,
+        async_update_entry=lambda e, data, options=None: setattr(e, "data", data),
+        async_reload=AsyncMock(side_effect=_reload),
+    )
+    c = PlejdCoordinator(hass, entry)
+    with caplog.at_level("WARNING"):
+        await c._async_poll_cloud(None)
+
+    assert calls == ["e1", "e1"]
+    assert schedule_ws.DATA_RELOAD_PENDING not in hass.data
+    assert "follow-up reload for a concurrent change failed" in caplog.text
+
+
 async def test_cloud_poll_seeds_installation_id_for_new_gateway(monkeypatch):
     async def _login(session, email, password):
         return "TOKEN"

@@ -487,7 +487,11 @@ class PlejdCoordinator:
         # Sort by each collection's own id before storing/comparing, or an unrelated
         # ordering wobble looks like a real change and reloads the integration for nothing.
         devices = sorted((asdict(d) for d in site.devices), key=lambda d: d["device_id"])
-        inputs = sorted((asdict(i) for i in site.inputs), key=lambda i: i["device_id"])
+        # A device can have more than one input, so device_id alone isn't a stable sort key
+        # - without input_index too, Python's stable sort just preserves the cloud's
+        # arbitrary per-device iteration order for same-device inputs, and that wobbling
+        # unrelated to any real change looks like one and triggers a needless reload.
+        inputs = sorted((asdict(i) for i in site.inputs), key=lambda i: (i["device_id"], i["input_index"]))
         motion = sorted((asdict(m) for m in site.motion), key=lambda m: m["device_id"])
         scenes = sorted((asdict(s) for s in site.scenes), key=lambda s: s["scene_id"])
         rooms = sorted((asdict(r) for r in site.rooms), key=lambda r: r["room_id"])
@@ -501,6 +505,11 @@ class PlejdCoordinator:
         for label, fresh, cached_key in (
             ("devices", devices, CONF_DEVICES),
             ("inputs", inputs, CONF_INPUTS),
+            # motion is derived from plejdDevices (like devices/firmware), a different
+            # source key than devices[] - a response that omits plejdDevices while still
+            # including devices[] would otherwise slip past the devices/inputs guards
+            # above and silently empty out every motion/illuminance entity.
+            ("motion", motion, CONF_MOTION),
             ("scenes", scenes, CONF_SCENES),
             ("rooms", rooms, CONF_ROOMS),
         ):
@@ -545,49 +554,57 @@ class PlejdCoordinator:
             _LOGGER.info(
                 "Plejd site changed (%s) — persisting for the next setup retry", ", ".join(changed) or "transport"
             )
-            self.hass.config_entries.async_update_entry(
-                entry, data={**entry.data, **new_data}, options=new_options
-            )
+            self.hass.config_entries.async_update_entry(entry, data={**entry.data, **new_data}, options=new_options)
             return
         _LOGGER.info("Plejd site changed (%s) — reloading to apply updates", ", ".join(changed) or "transport")
         # Reload explicitly (rather than relying on the entry's update listener alone) so a
         # rejected reload (e.g. a platform refused to unload) is actually noticed - otherwise
         # entry.data already matches the fresh site and the running coordinator never
-        # reflects it. Guarded the same way schedule_ws's own persist is, so the listener
-        # doesn't also fire a second, racing reload for this same change.
+        # reflects it. Guarded by the shared per-entry reload lock so the listener doesn't
+        # also fire a second, racing reload for this same change.
         old_data = dict(entry.data)
         old_options = dict(entry.options)
-        self.hass.data[schedule_ws.DATA_MANUAL_RELOAD] = entry.entry_id
+        lock = schedule_ws.async_get_reload_lock(self.hass, entry.entry_id)
         try:
-            self.hass.config_entries.async_update_entry(entry, data={**entry.data, **new_data}, options=new_options)
-            try:
-                reload_ok = await self.hass.config_entries.async_reload(entry.entry_id)
-            except Exception:  # noqa: BLE001 - treated like a rejected reload below
-                _LOGGER.exception("Plejd cloud poll: reload after a site change raised")
-                reload_ok = False
+            async with lock:
+                schedule_ws.async_mark_expecting_self_reload(self.hass, entry.entry_id)
+                self.hass.config_entries.async_update_entry(entry, data={**entry.data, **new_data}, options=new_options)
+                try:
+                    reload_ok = await self.hass.config_entries.async_reload(entry.entry_id)
+                except Exception:  # noqa: BLE001 - treated like a rejected reload below
+                    _LOGGER.exception("Plejd cloud poll: reload after a site change raised")
+                    reload_ok = False
         finally:
-            self.hass.data.pop(schedule_ws.DATA_MANUAL_RELOAD, None)
-            self.hass.data.pop(schedule_ws.DATA_MANUAL_RELOAD_SEEN, None)
-            if self.hass.data.get(schedule_ws.DATA_RELOAD_PENDING) == entry.entry_id:
-                self.hass.data.pop(schedule_ws.DATA_RELOAD_PENDING, None)
-                await self.hass.config_entries.async_reload(entry.entry_id)
+            schedule_ws.async_consume_expected_self_reload(self.hass, entry.entry_id)
+        if self.hass.data.get(schedule_ws.DATA_RELOAD_PENDING) == entry.entry_id:
+            self.hass.data.pop(schedule_ws.DATA_RELOAD_PENDING, None)
+            async with lock:
+                try:
+                    await self.hass.config_entries.async_reload(entry.entry_id)
+                except Exception:  # noqa: BLE001 - best-effort follow-up for someone else's change
+                    _LOGGER.warning("Plejd cloud poll: follow-up reload for a concurrent change failed")
         if not reload_ok:
             # Revert the cached snapshot rather than just logging: leaving entry.data
             # already matching the fresh site would make every later poll's comparison
             # find no difference and never retry, stranding the running coordinator (which
             # never actually got the new data live) stale until an unrelated cloud change
             # or an HA restart. Reverting means the next poll's diff naturally retries this.
+            #
+            # NOTE(8408323): old_data/old_options is a pre-reload snapshot, so this revert
+            # can clobber a legitimate concurrent change (e.g. the follow-up reload just
+            # above, or another management operation that landed while we were reloading) -
+            # the same "whole-snapshot overwrite" class of race already tracked for
+            # schedule_ws's ws_add/ws_delete in #125; not fixed here for the same reason.
             _LOGGER.warning(
                 "Plejd cloud poll: reload after a site change failed; reverting the cached "
                 "snapshot so the next poll retries it"
             )
-            self.hass.data[schedule_ws.DATA_MANUAL_RELOAD] = entry.entry_id
-            try:
-                self.hass.config_entries.async_update_entry(entry, data=old_data, options=old_options)
-            finally:
-                self.hass.data.pop(schedule_ws.DATA_MANUAL_RELOAD, None)
-                self.hass.data.pop(schedule_ws.DATA_MANUAL_RELOAD_SEEN, None)
-                self.hass.data.pop(schedule_ws.DATA_RELOAD_PENDING, None)
+            async with lock:
+                schedule_ws.async_mark_expecting_self_reload(self.hass, entry.entry_id)
+                try:
+                    self.hass.config_entries.async_update_entry(entry, data=old_data, options=old_options)
+                finally:
+                    schedule_ws.async_consume_expected_self_reload(self.hass, entry.entry_id)
 
     def _schedule_firmware_checks(self) -> None:
         """Check firmware shortly after start, then daily; both are best-effort."""
