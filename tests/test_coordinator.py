@@ -1741,6 +1741,43 @@ async def test_cloud_poll_skips_a_malformed_site_response(monkeypatch, caplog, m
     config_entries.async_reload.assert_not_awaited()
 
 
+async def test_cloud_poll_skips_a_wrong_typed_response_without_raising(monkeypatch, caplog):
+    # End-to-end over the real parse_site (not _fake_site): a wrong-typed, non-empty
+    # collection must reach the poll as a flagged site and be skipped, not blow up mid-parse
+    # with an AttributeError the poll's narrow except clause would let escape.
+    from plejd.cloud import parse_site
+
+    async def _login(session, email, password):
+        return "TOKEN"
+
+    async def _get_site(session, token, site_id):
+        return parse_site(
+            {
+                "siteId": "S1",
+                "plejdMesh": {"cryptoKey": _KEY_HEX},
+                "devices": {"d1": {"deviceId": "d1"}},  # object instead of list
+            }
+        )
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _login)
+    monkeypatch.setattr(coordinator_mod, "async_get_site", _get_site)
+
+    entry = _cloud_poll_entry()
+    config_entries = types.SimpleNamespace(
+        async_get_entry=lambda eid: entry,
+        async_update_entry=lambda e, data, options=None: pytest.fail("must not persist a malformed snapshot"),
+        async_reload=AsyncMock(),
+    )
+    hass = _hass()
+    hass.session = object()
+    hass.config_entries = config_entries
+    c = PlejdCoordinator(hass, entry)
+    await c._async_poll_cloud(None)  # must not raise
+
+    assert "site response is malformed" in caplog.text
+    config_entries.async_reload.assert_not_awaited()
+
+
 async def test_cloud_poll_syncs_a_genuinely_empty_but_well_formed_collection(monkeypatch):
     # A well-formed response reporting zero scenes (e.g. the user deleted their last one)
     # must NOT be treated as suspicious/malformed - unlike the emptiness-based heuristic
