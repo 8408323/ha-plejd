@@ -51,7 +51,9 @@ async def _async_login_and_get_site(hass: HomeAssistant, entry: ConfigEntry):
     return http_session, token, site
 
 
-async def _async_refresh_and_reload(hass: HomeAssistant, entry: ConfigEntry, http_session, token) -> None:
+async def _async_refresh_and_reload(
+    hass: HomeAssistant, entry: ConfigEntry, http_session, token, *, removed: bool = False
+) -> None:
     try:
         fresh_site = await async_get_site(http_session, token, entry.data[CONF_SITE_ID])
     except PlejdCloudError as err:
@@ -70,7 +72,12 @@ async def _async_refresh_and_reload(hass: HomeAssistant, entry: ConfigEntry, htt
             CONF_RESOURCE_SET_ID: fresh_site.resource_set_id,
             CONF_DEVICE_ADDRESSES: fresh_site.device_addresses,
         },
-        error_context="a room update",
+        # A remove's cloud mutation has already happened and isn't safely retryable by the
+        # time this runs - raising on a reload failure here would make the whole service
+        # call look failed, and retrying just gets "not found". Only the reload itself
+        # needs a manual retry. A plain update is safe to retry as-is.
+        raise_on_reload_failure=not removed,
+        error_context="a room remove" if removed else "a room update",
     )
 
 
@@ -121,4 +128,4 @@ async def async_remove_room(hass: HomeAssistant, entry: ConfigEntry, *, room_id:
         raise HomeAssistantError(f"Plejd cloud error removing room: {err}") from err
     if not ok:
         raise HomeAssistantError(f"Plejd cloud rejected removing room '{room.name}'")
-    await _async_refresh_and_reload(hass, entry, http_session, token)
+    await _async_refresh_and_reload(hass, entry, http_session, token, removed=True)

@@ -82,6 +82,11 @@ async def _async_refresh_and_reload(hass: HomeAssistant, entry: ConfigEntry, htt
             CONF_DEVICE_ADDRESSES: fresh_site.device_addresses,
         },
         options={**entry.options, CONF_TRANSPORT: new_transport},
+        # The device's cloud mutation has already happened and isn't safely retryable by
+        # the time this runs - raising on a reload failure here would make the whole
+        # service call look failed, and retrying just gets "not found". Only the reload
+        # itself needs a manual retry.
+        raise_on_reload_failure=False,
         error_context="removing a device",
     )
 

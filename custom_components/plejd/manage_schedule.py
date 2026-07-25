@@ -102,7 +102,7 @@ async def _async_refresh_and_reload(
     token,
     *,
     cloud_schedules: list[dict],
-    created: bool = False,
+    mutation: str | None = None,
 ) -> None:
     try:
         fresh_site = await async_get_site(http_session, token, entry.data[CONF_SITE_ID])
@@ -128,12 +128,13 @@ async def _async_refresh_and_reload(
             CONF_DEVICE_ADDRESSES: fresh_site.device_addresses,
             CONF_CLOUD_SCHEDULES: cloud_schedules,
         },
-        # A create's cloud object already exists and is non-idempotent by the time this
-        # runs - raising on a reload failure here would make the whole service call look
-        # failed, inviting a retry that creates a duplicate schedule. Only the reload itself
-        # needs a manual retry.
-        raise_on_reload_failure=not created,
-        error_context="a schedule create" if created else "a schedule update",
+        # A create/remove's cloud mutation has already happened and isn't safely retryable
+        # by the time this runs - raising on a reload failure here would make the whole
+        # service call look failed: retrying a create makes a duplicate schedule, retrying
+        # a remove just gets "not found". Only the reload itself needs a manual retry. A
+        # plain update is safe to retry as-is.
+        raise_on_reload_failure=mutation is None,
+        error_context=f"a schedule {mutation}" if mutation else "a schedule update",
     )
 
 
@@ -422,7 +423,7 @@ async def async_create_schedule(
         # can learn its id (this integration can't rediscover it from getSiteById).
         await _sync_cloud_schedules_cache(hass, entry, cloud_schedules)
         hass.bus.async_fire(f"{DOMAIN}_schedule_created", {"schedule_id": schedule_id})
-        await _async_refresh_and_reload(hass, entry, http_session, token, cloud_schedules=cloud_schedules, created=True)
+        await _async_refresh_and_reload(hass, entry, http_session, token, cloud_schedules=cloud_schedules, mutation="create")
         return schedule_id
 
 
@@ -693,4 +694,6 @@ async def async_remove_schedule(hass: HomeAssistant, entry: ConfigEntry, *, sche
                 )
 
         cloud_schedules = [s for s in entry.data.get(CONF_CLOUD_SCHEDULES, []) if s["schedule_id"] != schedule_id]
-        await _async_refresh_and_reload(hass, entry, http_session, token, cloud_schedules=cloud_schedules)
+        await _async_refresh_and_reload(
+            hass, entry, http_session, token, cloud_schedules=cloud_schedules, mutation="remove"
+        )

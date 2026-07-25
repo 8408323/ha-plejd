@@ -358,3 +358,19 @@ async def test_remove_scene_succeeds_and_reloads(monkeypatch):
     remove_mock.assert_awaited_once_with(None, "tok", "S1", "s1")
     assert entry.data["scenes"] == []
     hass.config_entries.async_reload.assert_awaited_once_with("e1")
+
+
+async def test_remove_scene_does_not_raise_when_only_the_reload_fails(monkeypatch, caplog):
+    # The scene's cloud removal already happened (non-idempotent - retrying just gets
+    # "not found") by the time the reload is attempted - raising here would report a
+    # successful removal as a failed one, with no way to retry through this same path.
+    hass = _hass()
+    entry = _entry()
+    monkeypatch.setattr("plejd.manage_scene.async_login", AsyncMock(return_value="tok"))
+    monkeypatch.setattr("plejd.manage_scene.async_get_site", AsyncMock(side_effect=[_site([_scene()]), _site([])]))
+    monkeypatch.setattr("plejd.manage_scene.async_cloud_remove_scene", AsyncMock(return_value=True))
+    hass.config_entries.async_reload = AsyncMock(return_value=False)
+
+    await async_remove_scene(hass, entry, scene_id="s1")
+
+    assert "entry failed to reload after a scene remove" in caplog.text
