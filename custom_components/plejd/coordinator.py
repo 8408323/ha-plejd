@@ -574,7 +574,16 @@ class PlejdCoordinator:
         try:
             async with lock:
                 schedule_ws.async_mark_expecting_self_reload(self.hass, entry.entry_id)
-                self.hass.config_entries.async_update_entry(entry, data={**entry.data, **new_data}, options=new_options)
+                # Both overlays are merged onto entry.data/entry.options read HERE, inside the
+                # lock, not onto the pre-lock snapshot the diff above was computed from: if
+                # another operation (e.g. a schedule save) held the lock while we waited, it
+                # has already persisted its own change, and writing back a copy captured
+                # before that would discard it permanently.
+                self.hass.config_entries.async_update_entry(
+                    entry,
+                    data={**entry.data, **new_data},
+                    options={**entry.options, CONF_TRANSPORT: new_transport},
+                )
                 try:
                     reload_ok = await self.hass.config_entries.async_reload(entry.entry_id)
                 except Exception:  # noqa: BLE001 - treated like a rejected reload below
@@ -603,20 +612,38 @@ class PlejdCoordinator:
             # find no difference and never retry, stranding the running coordinator (which
             # never actually got the new data live) stale until an unrelated cloud change
             # or an HA restart. Reverting means the next poll's diff naturally retries this.
-            #
-            # NOTE(8408323): old_data/old_options is a pre-reload snapshot, so this revert
-            # can clobber a legitimate concurrent change (e.g. the follow-up reload just
-            # above, or another management operation that landed while we were reloading) -
-            # the same "whole-snapshot overwrite" class of race already tracked for
-            # schedule_ws's ws_add/ws_delete in #125; not fixed here for the same reason.
             _LOGGER.warning(
                 "Plejd cloud poll: reload after a site change failed; reverting the cached "
                 "snapshot so the next poll retries it"
             )
             async with lock:
+                # Restore only the keys this poll actually wrote, onto entry.data/entry.options
+                # as they are NOW - a wholesale write-back of the pre-reload snapshot would
+                # also undo any concurrent change that landed while we were reloading.
+                reverted_data = {**entry.data}
+                for key in new_data:
+                    if key in old_data:
+                        reverted_data[key] = old_data[key]
+                    else:
+                        reverted_data.pop(key, None)  # a key this poll introduced (e.g. installation id)
+                reverted_options = {**entry.options}
+                if CONF_TRANSPORT in old_options:
+                    reverted_options[CONF_TRANSPORT] = old_options[CONF_TRANSPORT]
+                else:
+                    reverted_options.pop(CONF_TRANSPORT, None)
                 schedule_ws.async_mark_expecting_self_reload(self.hass, entry.entry_id)
                 try:
-                    self.hass.config_entries.async_update_entry(entry, data=old_data, options=old_options)
+                    self.hass.config_entries.async_update_entry(entry, data=reverted_data, options=reverted_options)
+                    # A reload that unloaded the old entry but then failed to set the new one
+                    # up has already torn down this coordinator - including the poll timer
+                    # that the revert above is counting on for the retry. Bring the entry back
+                    # up on the known-good snapshot instead of leaving nothing loaded and
+                    # nothing scheduled, which would strand it until an HA restart.
+                    try:
+                        if not await self.hass.config_entries.async_reload(entry.entry_id):
+                            _LOGGER.warning("Plejd cloud poll: reload of the reverted snapshot was rejected")
+                    except Exception:  # noqa: BLE001 - best-effort recovery, already logging a failure
+                        _LOGGER.exception("Plejd cloud poll: reload of the reverted snapshot raised")
                 finally:
                     schedule_ws.async_consume_expected_self_reload(self.hass, entry.entry_id)
 

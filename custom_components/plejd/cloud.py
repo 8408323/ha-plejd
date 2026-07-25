@@ -212,11 +212,12 @@ async def async_login(session: ClientSession, email: str, password: str) -> str:
         if resp.status != 200 or not token:
             message = str(data.get("error", "login failed")) if isinstance(data, dict) else "login failed"
             # Callers start HA's reauth flow on PlejdAuthError, so only a response that
-            # actually denotes rejected credentials may map to it - a 5xx (cloud broken) or a
-            # 429 (rate limited, notably from the daily poll's own retries) is transient and
-            # must stay a plain PlejdCloudError, or an outage prompts the user to re-enter a
-            # password that was never the problem.
-            if resp.status >= 500 or resp.status == 429:
+            # actually denotes rejected credentials may map to it - Parse signals that with a
+            # 4xx carrying an error code. A 5xx (cloud broken), a 429 (rate limited, notably
+            # from the daily poll's own retries) and a 200 that simply carries no sessionToken
+            # (malformed, not a rejection) are all transient, and mapping any of them to
+            # reauth would prompt the user to re-enter a password that was never the problem.
+            if resp.status == 200 or resp.status == 429 or resp.status >= 500:
                 raise PlejdCloudError(message)
             raise PlejdAuthError(message)
         return token
@@ -775,12 +776,19 @@ def parse_site(site: dict) -> PlejdCloudSite:
     # would look like a genuine deletion and destroy those entities on the next poll.
     malformed: set[str] = set()
 
-    def _checked_list(key: str, label: str) -> list:
+    def _checked_list(key: str, *labels: str, of_objects: bool = False) -> list:
         raw = site.get(key)
-        if isinstance(raw, list):
-            return raw
-        malformed.add(label)
-        return []
+        if not isinstance(raw, list):
+            malformed.update(labels)
+            return []
+        if of_objects and any(not isinstance(item, dict) for item in raw):
+            # A stray non-object element means this array is itself truncated/corrupt.
+            # The loops below still skip such an element so the parse survives, but that
+            # silently drops a real device/scene/room from the snapshot - which a caching,
+            # diffing caller (the cloud poll) would otherwise read as a deliberate deletion
+            # and persist, removing the entity.
+            malformed.update(labels)
+        return raw
 
     def _checked_dict(key: str, *labels: str) -> dict:
         raw = site.get(key)
@@ -789,10 +797,12 @@ def parse_site(site: dict) -> PlejdCloudSite:
         malformed.update(labels)
         return {}
 
-    raw_devices = _checked_list("devices", "devices")
+    raw_devices = _checked_list("devices", "devices", of_objects=True)
     input_address = _checked_dict("inputAddress", "inputs")
-    plejd_devices = _checked_list("plejdDevices", "motion")
-    raw_scenes = _checked_list("scenes", "scenes")
+    # plejdDevices feeds both the motion sensors and every device's hardware id/model, so a
+    # corrupt element there makes both collections untrustworthy.
+    plejd_devices = _checked_list("plejdDevices", "motion", "devices", of_objects=True)
+    raw_scenes = _checked_list("scenes", "scenes", of_objects=True)
     scene_index = _checked_dict("sceneIndex", "scenes")
     # These two carry every mesh address there is: outputAddress is what control commands
     # target, deviceAddress is the physical-device fallback (and what fault polling and the
@@ -801,10 +811,10 @@ def parse_site(site: dict) -> PlejdCloudSite:
     # device (and, for deviceAddress, motion) data rather than an empty-but-valid map.
     output_address = _checked_dict("outputAddress", "devices")
     device_address = _checked_dict("deviceAddress", "devices", "motion")
-    raw_rooms = _checked_list("rooms", "rooms")
+    raw_rooms = _checked_list("rooms", "rooms", of_objects=True)
     room_address = _checked_dict("roomAddress", "rooms")
     output_groups = _checked_dict("outputGroups", "rooms")
-    gateways_raw = _checked_list("gateways", "gateways")
+    gateways_raw = _checked_list("gateways", "gateways", of_objects=True)
 
     hardware_by_id = {d.get("deviceId"): d for d in plejd_devices if isinstance(d, dict)}
 

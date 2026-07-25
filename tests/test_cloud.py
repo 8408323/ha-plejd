@@ -107,12 +107,16 @@ async def test_login_bad_credentials_raises_auth_error():
                 await async_login(s, "u@x.se", "bad")
 
 
-async def test_login_without_token_raises():
+async def test_login_without_token_is_transient_not_an_auth_failure():
+    # A 200 carrying no sessionToken is a malformed response, not the server saying these
+    # credentials are wrong (Parse signals that with a 4xx + error code) - so it must not
+    # start reauth for a password that was never the problem.
     with aioresponses() as m:
         m.post(_LOGIN, payload={"objectId": "u1"})  # 200 but no token
         async with aiohttp.ClientSession() as s:
-            with pytest.raises(PlejdAuthError):
+            with pytest.raises(PlejdCloudError) as excinfo:
                 await async_login(s, "u@x.se", "pw")
+    assert not isinstance(excinfo.value, PlejdAuthError)
 
 
 async def test_get_sites_returns_list():
@@ -1250,6 +1254,24 @@ def test_parse_site_skips_non_object_entries_inside_the_device_collections():
     assert {d.device_id for d in site.devices} == {"d1", "d2", "d3"}  # the good ones survive
     assert [(m.address, m.name) for m in site.motion] == [(33, "Motion sensor")]
     assert site.gateways == []
+
+
+@pytest.mark.parametrize(
+    ("key", "labels"),
+    [
+        ("devices", {"devices"}),
+        ("plejdDevices", {"devices", "motion"}),
+        ("scenes", {"scenes"}),
+        ("rooms", {"rooms"}),
+        ("gateways", {"gateways"}),
+    ],
+)
+def test_parse_site_marks_a_collection_malformed_for_a_stray_non_object_entry(key, labels):
+    # Surviving the bad element (above) is not enough for a caching, diffing caller: the
+    # skipped entry is a device/scene/room missing from the snapshot, which the cloud poll
+    # would read as a deliberate deletion and persist. It must be flagged instead.
+    site = parse_site({**_SITE, key: [*(_SITE.get(key) or []), "not-an-object"]})
+    assert labels <= site.malformed
 
 
 def test_parse_site_sorts_device_outputs_regardless_of_output_address_key_order():

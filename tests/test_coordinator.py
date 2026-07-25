@@ -1842,6 +1842,177 @@ async def test_cloud_poll_resets_forced_transport_when_gateway_disappears(monkey
     assert updated_options[CONF_TRANSPORT] == TRANSPORT_AUTO
 
 
+async def test_cloud_poll_merges_options_read_after_acquiring_the_lock(monkeypatch):
+    # Another operation (e.g. a schedule save) can hold the reload lock while this poll
+    # waits, persisting its own options change. The poll must merge onto entry.options as
+    # they are AFTER acquiring the lock, or it writes back a pre-lock copy and permanently
+    # discards that change.
+    from plejd import schedule_ws
+    from plejd.cloud import PlejdCloudDevice
+    from plejd.const import TRANSPORT_AUTO
+
+    new_dev = PlejdCloudDevice(**{**_DEV, "device_id": "d2", "name": "Matbord", "address": 9})
+
+    async def _login(session, email, password):
+        return "TOKEN"
+
+    async def _get_site(session, token, site_id):
+        return _fake_site(devices=[PlejdCloudDevice(**_DEV), new_dev])
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _login)
+    monkeypatch.setattr(coordinator_mod, "async_get_site", _get_site)
+
+    entry = _cloud_poll_entry()
+    entry.options = {CONF_TRANSPORT: TRANSPORT_AUTO}
+    hass = _hass()
+    hass.session = object()
+    persisted: dict = {}
+    hass.config_entries = types.SimpleNamespace(
+        async_get_entry=lambda eid: entry,
+        async_update_entry=lambda e, data, options=None: persisted.update({"options": options}),
+        async_reload=AsyncMock(return_value=True),
+    )
+    c = PlejdCoordinator(hass, entry)
+
+    # hold the lock, land a concurrent options change, then let the poll through
+    lock = schedule_ws.async_get_reload_lock(hass, entry.entry_id)
+    await lock.acquire()
+    poll = asyncio.ensure_future(c._async_poll_cloud(None))
+    await asyncio.sleep(0)  # let the poll reach the lock and block there
+    entry.options = {**entry.options, "schedules": [{"id": 1}]}  # the other operation's save
+    lock.release()
+    await poll
+
+    assert persisted["options"]["schedules"] == [{"id": 1}]  # not discarded
+    assert persisted["options"][CONF_TRANSPORT] == TRANSPORT_AUTO
+
+
+async def test_cloud_poll_reloads_the_reverted_snapshot_after_a_failed_setup(monkeypatch):
+    # If async_reload unloaded the old entry but failed to set the new one up, this
+    # coordinator (and its poll timer) is already gone - reverting the stored snapshot alone
+    # would leave nothing loaded and nothing scheduled to ever retry. The revert must be
+    # followed by a reload that brings the entry back on the known-good data.
+    from plejd.cloud import PlejdCloudDevice
+
+    new_dev = PlejdCloudDevice(**{**_DEV, "device_id": "d2", "name": "Matbord", "address": 9})
+
+    async def _login(session, email, password):
+        return "TOKEN"
+
+    async def _get_site(session, token, site_id):
+        return _fake_site(devices=[PlejdCloudDevice(**_DEV), new_dev])
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _login)
+    monkeypatch.setattr(coordinator_mod, "async_get_site", _get_site)
+
+    entry = _cloud_poll_entry()
+    original_devices = list(entry.data[CONF_DEVICES])
+    hass = _hass()
+    hass.session = object()
+    reload_results = [False, True]  # the site-change reload fails, the revert's reload works
+    data_at_reload: list = []
+
+    async def _reload(entry_id):
+        data_at_reload.append(list(entry.data[CONF_DEVICES]))
+        return reload_results.pop(0)
+
+    hass.config_entries = types.SimpleNamespace(
+        async_get_entry=lambda eid: entry,
+        async_update_entry=lambda e, data, options=None: setattr(e, "data", data),
+        async_reload=AsyncMock(side_effect=_reload),
+    )
+    c = PlejdCoordinator(hass, entry)
+    await c._async_poll_cloud(None)
+
+    assert len(data_at_reload) == 2  # the failed one, then the revert's own
+    assert data_at_reload[1] == original_devices  # reloaded on the reverted (known-good) data
+    assert entry.data[CONF_DEVICES] == original_devices
+
+
+async def test_cloud_poll_revert_keeps_a_concurrent_change(monkeypatch):
+    # The revert restores only the keys this poll wrote, onto entry.data as it is now - a
+    # wholesale write-back of the pre-reload snapshot would also undo an unrelated change
+    # that landed while the (failed) reload was in flight.
+    from plejd.cloud import PlejdCloudDevice
+
+    new_dev = PlejdCloudDevice(**{**_DEV, "device_id": "d2", "name": "Matbord", "address": 9})
+
+    async def _login(session, email, password):
+        return "TOKEN"
+
+    async def _get_site(session, token, site_id):
+        return _fake_site(devices=[PlejdCloudDevice(**_DEV), new_dev])
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _login)
+    monkeypatch.setattr(coordinator_mod, "async_get_site", _get_site)
+
+    entry = _cloud_poll_entry()
+    original_devices = list(entry.data[CONF_DEVICES])
+    hass = _hass()
+    hass.session = object()
+    reload_results = [False, True]
+
+    async def _reload(entry_id):
+        if len(reload_results) == 2:  # during the failing site-change reload
+            entry.data = {**entry.data, "pending_room_moves": {"d9": {"room_id": "r2"}}}
+        return reload_results.pop(0)
+
+    hass.config_entries = types.SimpleNamespace(
+        async_get_entry=lambda eid: entry,
+        async_update_entry=lambda e, data, options=None: setattr(e, "data", data),
+        async_reload=AsyncMock(side_effect=_reload),
+    )
+    c = PlejdCoordinator(hass, entry)
+    await c._async_poll_cloud(None)
+
+    assert entry.data[CONF_DEVICES] == original_devices  # this poll's own write reverted
+    assert entry.data["pending_room_moves"] == {"d9": {"room_id": "r2"}}  # the other change kept
+
+
+async def test_cloud_poll_revert_drops_a_key_it_introduced_and_restores_the_old_transport(monkeypatch):
+    # A gateway newly appearing seeds CONF_INSTALLATION_ID, a key that did not exist before
+    # this poll - reverting must remove it rather than leave a None behind, and must put back
+    # the transport option's previous value (not just delete it).
+    from plejd.const import TRANSPORT_AUTO
+
+    async def _login(session, email, password):
+        return "TOKEN"
+
+    async def _get_site(session, token, site_id):
+        return _fake_site(gateways=["gw1"], resource_set_id="rs1")  # gateway appears
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _login)
+    monkeypatch.setattr(coordinator_mod, "async_get_site", _get_site)
+
+    entry = _cloud_poll_entry()
+    entry.options = {CONF_TRANSPORT: TRANSPORT_AUTO}  # present, so the revert restores it
+    assert CONF_INSTALLATION_ID not in entry.data
+    hass = _hass()
+    hass.session = object()
+    reload_results = [False, True]  # the site-change reload fails, then the revert's reload
+    persisted: dict = {}
+
+    async def _reload(entry_id):
+        return reload_results.pop(0)
+
+    def _update(e, data, options=None):
+        e.data = data
+        e.options = options if options is not None else e.options
+        persisted.update({"data": data, "options": e.options})
+
+    hass.config_entries = types.SimpleNamespace(
+        async_get_entry=lambda eid: entry,
+        async_update_entry=_update,
+        async_reload=AsyncMock(side_effect=_reload),
+    )
+    c = PlejdCoordinator(hass, entry)
+    await c._async_poll_cloud(None)
+
+    assert CONF_INSTALLATION_ID not in entry.data  # the seeded key is gone again
+    assert entry.options[CONF_TRANSPORT] == TRANSPORT_AUTO  # restored, not dropped
+    assert entry.data[CONF_GATEWAYS] == []  # back to the pre-poll value
+
+
 async def test_cloud_poll_keeps_the_cached_resource_set_id_when_the_gateway_omits_it(monkeypatch):
     # A response that still lists the gateway but drops its resourceSetId must not be read
     # as "the gateway is gone" - overwriting the cached id with None would take a
