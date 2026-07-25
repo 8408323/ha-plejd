@@ -43,6 +43,7 @@ integration.
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import asdict
 
 from homeassistant.config_entries import ConfigEntry
@@ -93,6 +94,8 @@ DATA_PENDING_ROOM_MOVES = f"{DOMAIN}_pending_room_moves"
 # concurrent moves, so a per-entry lock doesn't cost any real concurrency.
 DATA_MOVE_LOCKS = f"{DOMAIN}_move_locks"
 
+_LOGGER = logging.getLogger(__name__)
+
 
 def _pending_moves(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, dict]:
     all_pending = hass.data.setdefault(DATA_PENDING_ROOM_MOVES, {})
@@ -112,19 +115,35 @@ async def _async_persist_pending(hass: HomeAssistant, entry: ConfigEntry, pendin
     """Persist just the pending-moves cache, guarded against racing the entry's own reload.
 
     Used for a self-contained update outside the main refresh-and-reload cycle (e.g.
-    pruning a pending entry before an early return) - without the same manual-reload guard
-    that cycle uses, the entry's update listener would fire unsuppressed and reload the
-    whole integration for what's meant to be a quiet metadata correction.
+    pruning a pending entry before an early return) - without the same reload lock that
+    cycle uses, the entry's update listener would fire unsuppressed and reload the whole
+    integration for what's meant to be a quiet metadata correction.
     """
-    hass.data[schedule_ws.DATA_MANUAL_RELOAD] = entry.entry_id
+    lock = schedule_ws.async_get_reload_lock(hass, entry.entry_id)
     try:
-        hass.config_entries.async_update_entry(entry, data={**entry.data, CONF_PENDING_ROOM_MOVES: dict(pending)})
+        async with lock:
+            schedule_ws.async_mark_expecting_self_reload(hass, entry.entry_id)
+            hass.config_entries.async_update_entry(entry, data={**entry.data, CONF_PENDING_ROOM_MOVES: dict(pending)})
+            # async_update_entry schedules the entry's update listener as a new task
+            # rather than running it inline - yield one loop iteration so it (having no
+            # awaits of its own on the "lock held" path) has a chance to run while this
+            # lock is still held, instead of running unguarded after it's released below.
+            # Deliberately not hass.async_block_till_done(): that drains EVERY pending HA
+            # task, including any other management operation already waiting to acquire
+            # this same lock - which would deadlock (it can't finish without the lock
+            # we're still holding).
+            await asyncio.sleep(0)
     finally:
-        hass.data.pop(schedule_ws.DATA_MANUAL_RELOAD, None)
-        hass.data.pop(schedule_ws.DATA_MANUAL_RELOAD_SEEN, None)
-        if hass.data.get(schedule_ws.DATA_RELOAD_PENDING) == entry.entry_id:
-            hass.data.pop(schedule_ws.DATA_RELOAD_PENDING, None)
-            await hass.config_entries.async_reload(entry.entry_id)
+        # Defensive: clears it even if the listener never ran within this session (e.g. a
+        # genuinely no-op write), so it can't leak into a later, unrelated one.
+        schedule_ws.async_consume_expected_self_reload(hass, entry.entry_id)
+    if hass.data.get(schedule_ws.DATA_RELOAD_PENDING) == entry.entry_id:
+        hass.data.pop(schedule_ws.DATA_RELOAD_PENDING, None)
+        async with lock:
+            try:
+                await hass.config_entries.async_reload(entry.entry_id)
+            except Exception:  # noqa: BLE001 - best-effort follow-up for someone else's change
+                _LOGGER.warning("Plejd: follow-up reload for a concurrent change failed")
 
 
 async def _async_login_and_get_site(hass: HomeAssistant, entry: ConfigEntry):
@@ -290,92 +309,72 @@ async def _async_refresh_and_reload(
     # pre-move cloud data and never sends a leave for the room the device is actually
     # already in - the safe failure mode is an "already in room" rejection on an exact
     # retry of the same move (still true, physically), not a silently wrong leave target.
-    # Persisted via the same self-contained, independently-guarded helper used for a
-    # pruned-before-raise entry (not folded into one continuous guard window with the
-    # later persist below) - _async_reload_entry's own manual-reload/seen/pending tracking
-    # assumes exactly one async_update_entry call per guarded window; two calls under a
-    # single window would make the SECOND one look like a genuinely concurrent change and
-    # queue an extra, unnecessary reload every time this function succeeds.
+    # Persisted via the same self-contained, independently-locked helper used for a
+    # pruned-before-raise entry, as its own separate reload-lock acquisition rather than
+    # one continuous session spanning the later persist below - keeps this write
+    # independently correct (and its own pending-reload check accurate) regardless of
+    # whether _async_refresh_and_reload below ever runs.
     pending[device_id] = this_move
     await _async_persist_pending(hass, entry, pending)
     try:
         fresh_site = await async_get_site(http_session, token, entry.data[CONF_SITE_ID])
     except PlejdCloudError as err:
         raise HomeAssistantError(f"Plejd cloud error refreshing site: {err}") from err
-    # Claim the manual-reload so the entry's update listener (_async_reload_entry) doesn't
-    # also reload for this same data change, racing this one - same guard schedule_ws's
-    # own _async_persist uses for the identical async_update_entry -> listener race.
-    hass.data[schedule_ws.DATA_MANUAL_RELOAD] = entry.entry_id
-    try:
-        # Every device with a pending (not-yet-cloud-confirmed) move keeps its intended
-        # room_id regardless of what this fresh cloud fetch says - not just the device
-        # this particular call just moved - or an earlier move's own correction would get
-        # reverted the next time any device is moved before the cloud converges. A pending
-        # entry is dropped only once the fresh fetch agrees with it on BOTH room_id and
-        # room-group membership (they can converge at slightly different times).
-        device_dicts = []
-        for d in fresh_site.devices:
-            move = pending.get(d.device_id)
-            if move is not None:
-                if move["room_id"] == d.room_id and _room_membership_converged(
-                    fresh_site.rooms, fresh_site.devices, move
-                ):
-                    del pending[d.device_id]
-                else:
-                    device_dicts.append({**asdict(d), "room_id": move["room_id"]})
-                    continue
-            device_dicts.append(asdict(d))
-        # A pending move for a device removed from the site entirely (e.g. via
-        # remove_device) before its move converges never appears in the loop above, so it
-        # would never get pruned there - drop it here too, or the membership patch below
-        # would keep re-applying a correction for a device that no longer exists, forever.
-        fresh_device_ids = {d.device_id for d in fresh_site.devices}
-        for stale_device_id in [dev_id for dev_id in pending if dev_id not in fresh_device_ids]:
-            del pending[stale_device_id]
-        # Re-apply every still-pending device's own room-group membership patch too, not
-        # just the room_id above - otherwise refreshing for one device's move would wipe
-        # out an earlier, still-unconverged device's own membership correction, since this
-        # always starts fresh from the cloud's own (possibly stale) rooms snapshot.
-        rooms = fresh_site.rooms
-        for move in pending.values():
-            rooms = _patch_room_membership(
-                rooms,
-                output_address=move["output_address"],
-                is_light=move["is_light"],
-                dimmable=move["dimmable"],
-                new_room_address=move["new_room_address"],
-            )
-        hass.config_entries.async_update_entry(
-            entry,
-            data={
-                **entry.data,
-                CONF_DEVICES: device_dicts,
-                CONF_INPUTS: [asdict(i) for i in fresh_site.inputs],
-                CONF_MOTION: [asdict(m) for m in fresh_site.motion],
-                CONF_SCENES: [asdict(s) for s in fresh_site.scenes],
-                CONF_ROOMS: [asdict(r) for r in rooms],
-                CONF_GATEWAYS: fresh_site.gateways,
-                CONF_RESOURCE_SET_ID: fresh_site.resource_set_id,
-                CONF_DEVICE_ADDRESSES: fresh_site.device_addresses,
-                # Mirrors the in-memory pending cache so a restart doesn't lose an
-                # in-flight (not-yet-converged) move - see _pending_moves().
-                CONF_PENDING_ROOM_MOVES: dict(pending),
-            },
+    # Every device with a pending (not-yet-cloud-confirmed) move keeps its intended
+    # room_id regardless of what this fresh cloud fetch says - not just the device
+    # this particular call just moved - or an earlier move's own correction would get
+    # reverted the next time any device is moved before the cloud converges. A pending
+    # entry is dropped only once the fresh fetch agrees with it on BOTH room_id and
+    # room-group membership (they can converge at slightly different times).
+    device_dicts = []
+    for d in fresh_site.devices:
+        move = pending.get(d.device_id)
+        if move is not None:
+            if move["room_id"] == d.room_id and _room_membership_converged(fresh_site.rooms, fresh_site.devices, move):
+                del pending[d.device_id]
+            else:
+                device_dicts.append({**asdict(d), "room_id": move["room_id"]})
+                continue
+        device_dicts.append(asdict(d))
+    # A pending move for a device removed from the site entirely (e.g. via
+    # remove_device) before its move converges never appears in the loop above, so it
+    # would never get pruned there - drop it here too, or the membership patch below
+    # would keep re-applying a correction for a device that no longer exists, forever.
+    fresh_device_ids = {d.device_id for d in fresh_site.devices}
+    for stale_device_id in [dev_id for dev_id in pending if dev_id not in fresh_device_ids]:
+        del pending[stale_device_id]
+    # Re-apply every still-pending device's own room-group membership patch too, not
+    # just the room_id above - otherwise refreshing for one device's move would wipe
+    # out an earlier, still-unconverged device's own membership correction, since this
+    # always starts fresh from the cloud's own (possibly stale) rooms snapshot.
+    rooms = fresh_site.rooms
+    for move in pending.values():
+        rooms = _patch_room_membership(
+            rooms,
+            output_address=move["output_address"],
+            is_light=move["is_light"],
+            dimmable=move["dimmable"],
+            new_room_address=move["new_room_address"],
         )
-        if not await hass.config_entries.async_reload(entry.entry_id):
-            # e.g. a platform refused to unload - the entry may still be running the old
-            # data/entities for the just-moved device, so this can't be reported as a
-            # clean success.
-            raise HomeAssistantError("Plejd device moved, but reloading the integration failed - reload it manually")
-    finally:
-        hass.data.pop(schedule_ws.DATA_MANUAL_RELOAD, None)
-        hass.data.pop(schedule_ws.DATA_MANUAL_RELOAD_SEEN, None)
-        if hass.data.get(schedule_ws.DATA_RELOAD_PENDING) == entry.entry_id:
-            # A concurrent options/data change's own reload was suppressed by the guard
-            # above while ours was in flight; give it a reload of its own instead of
-            # dropping it silently (see _async_reload_entry).
-            hass.data.pop(schedule_ws.DATA_RELOAD_PENDING, None)
-            await hass.config_entries.async_reload(entry.entry_id)
+    await schedule_ws.async_reload_entry_with_lock(
+        hass,
+        entry,
+        {
+            **entry.data,
+            CONF_DEVICES: device_dicts,
+            CONF_INPUTS: [asdict(i) for i in fresh_site.inputs],
+            CONF_MOTION: [asdict(m) for m in fresh_site.motion],
+            CONF_SCENES: [asdict(s) for s in fresh_site.scenes],
+            CONF_ROOMS: [asdict(r) for r in rooms],
+            CONF_GATEWAYS: fresh_site.gateways,
+            CONF_RESOURCE_SET_ID: fresh_site.resource_set_id,
+            CONF_DEVICE_ADDRESSES: fresh_site.device_addresses,
+            # Mirrors the in-memory pending cache so a restart doesn't lose an
+            # in-flight (not-yet-converged) move - see _pending_moves().
+            CONF_PENDING_ROOM_MOVES: dict(pending),
+        },
+        error_context="moving a device to a room",
+    )
 
 
 async def async_move_device_to_room(hass: HomeAssistant, entry: ConfigEntry, *, device_id: str, room_id: str) -> None:

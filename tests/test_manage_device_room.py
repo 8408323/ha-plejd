@@ -17,7 +17,7 @@ from plejd.cloud import (
     PlejdCloudSite,
 )
 from plejd.const import CONF_PENDING_ROOM_MOVES
-from plejd.manage_device_room import DATA_PENDING_ROOM_MOVES, async_move_device_to_room
+from plejd.manage_device_room import DATA_PENDING_ROOM_MOVES, _async_persist_pending, async_move_device_to_room
 
 _KEY = bytes(range(16))
 
@@ -72,6 +72,7 @@ def _coordinator():
 def _hass():
     return types.SimpleNamespace(
         data={},
+        async_block_till_done=AsyncMock(),
         config_entries=types.SimpleNamespace(
             async_update_entry=lambda entry, data: setattr(entry, "data", data),
             async_reload=AsyncMock(),
@@ -208,14 +209,12 @@ async def test_move_device_leaves_old_room_and_joins_new(monkeypatch):
     assert moved["room_id"] == "r2"
 
 
-async def test_move_device_releases_the_manual_reload_guard_between_its_two_persists(monkeypatch):
+async def test_move_device_does_not_double_reload_across_its_two_persists(monkeypatch):
     # A successful move does two separate async_update_entry calls (the early pending-only
-    # persist, then the full one) - _async_reload_entry's own manual-reload/seen tracking
-    # assumes exactly one call per guarded window, so each of these two must see the guard
-    # freshly claimed (DATA_MANUAL_RELOAD_SEEN not yet set), not held open across both. If
-    # it were held open, the real update listener would treat the SECOND call as a
-    # genuinely concurrent change and queue an unnecessary extra reload every time.
-    from plejd import schedule_ws
+    # persist, then the full one), each its own separate reload-lock acquisition. The real
+    # update listener (not an injected flag) must recognize both as self-triggered and
+    # never fire its own competing reload for either.
+    from plejd import _async_reload_entry
 
     hass = _hass()
     entry = _entry()
@@ -227,23 +226,31 @@ async def test_move_device_releases_the_manual_reload_guard_between_its_two_pers
     monkeypatch.setattr("plejd.manage_device_room.async_login", AsyncMock(return_value="tok"))
     monkeypatch.setattr("plejd.manage_device_room.async_get_site", AsyncMock(side_effect=[site, site]))
 
-    guard_states = []
-    original_update_entry = hass.config_entries.async_update_entry
+    listener_tasks: list[asyncio.Task] = []
 
-    def _record_guard_state(entry, data):
-        guard_states.append(
-            (hass.data.get(schedule_ws.DATA_MANUAL_RELOAD), hass.data.get(schedule_ws.DATA_MANUAL_RELOAD_SEEN))
-        )
-        original_update_entry(entry, data)
+    def _update_entry(e, data):
+        e.data = data
+        # Real HA schedules the update listener as a new task rather than running it
+        # inline - mirror that so it actually races each reload below, not just a flag.
+        listener_tasks.append(asyncio.ensure_future(_async_reload_entry(hass, e)))
 
-    hass.config_entries.async_update_entry = _record_guard_state
+    hass.config_entries.async_update_entry = _update_entry
+
+    real_reload = AsyncMock(return_value=True)
+
+    async def _reload(entry_id):
+        await asyncio.sleep(0)  # let any just-scheduled listener task run while still locked
+        return await real_reload(entry_id)
+
+    hass.config_entries.async_reload = AsyncMock(side_effect=_reload)
 
     await async_move_device_to_room(hass, entry, device_id="d1", room_id="r2")
+    await asyncio.gather(*listener_tasks)
 
-    assert len(guard_states) == 2  # the early pending-only persist, then the full one
-    for manual_reload, seen in guard_states:
-        assert manual_reload == "e1"
-        assert seen is None  # each call sees a freshly-claimed guard, not one held from before
+    # _async_persist_pending's own write needs no reload of its own (no pending change was
+    # detected during its lock session) - only _async_refresh_and_reload's real reload runs.
+    # The listener deferred to both writes' lock sessions instead of racing a reload of its own.
+    real_reload.assert_awaited_once_with("e1")
 
 
 async def test_move_device_joins_via_the_coordinator_current_at_join_time(monkeypatch):
@@ -1409,7 +1416,7 @@ async def test_move_device_raises_when_reload_fails(monkeypatch):
     monkeypatch.setattr("plejd.manage_device_room.async_login", AsyncMock(return_value="tok"))
     monkeypatch.setattr("plejd.manage_device_room.async_get_site", AsyncMock(side_effect=[site, site]))
 
-    with pytest.raises(HomeAssistantError, match="reloading the integration failed"):
+    with pytest.raises(HomeAssistantError, match="failed to reload after moving a device to a room"):
         await async_move_device_to_room(hass, _entry(), device_id="d1", room_id="r2")
 
 
@@ -1530,3 +1537,16 @@ async def test_move_device_serializes_concurrent_calls_for_different_devices(mon
     assert call_order == ["login_start", "login_done", "login_start", "login_done"]
     coordinator.async_join_mesh_group.assert_any_await(39, 34)
     coordinator.async_join_mesh_group.assert_any_await(51, 34)
+
+
+async def test_persist_pending_logs_when_the_follow_up_reload_raises(caplog):
+    from plejd import schedule_ws
+
+    hass = _hass()
+    entry = _entry()
+    hass.data[schedule_ws.DATA_RELOAD_PENDING] = "e1"
+    hass.config_entries.async_reload = AsyncMock(side_effect=RuntimeError("boom"))
+
+    await _async_persist_pending(hass, entry, {})
+
+    assert "follow-up reload for a concurrent change failed" in caplog.text
