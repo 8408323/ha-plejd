@@ -211,11 +211,12 @@ async def async_login(session: ClientSession, email: str, password: str) -> str:
         token = data.get("sessionToken") if isinstance(data, dict) else None
         if resp.status != 200 or not token:
             message = str(data.get("error", "login failed")) if isinstance(data, dict) else "login failed"
-            # Only a 4xx is the server actually rejecting these credentials. A 5xx is the
-            # cloud being broken, and must stay a plain (transient) PlejdCloudError - callers
-            # start HA's reauth flow on PlejdAuthError, so mapping an outage to it would
-            # prompt the user to re-enter a password that was never the problem.
-            if resp.status >= 500:
+            # Callers start HA's reauth flow on PlejdAuthError, so only a response that
+            # actually denotes rejected credentials may map to it - a 5xx (cloud broken) or a
+            # 429 (rate limited, notably from the daily poll's own retries) is transient and
+            # must stay a plain PlejdCloudError, or an outage prompts the user to re-enter a
+            # password that was never the problem.
+            if resp.status >= 500 or resp.status == 429:
                 raise PlejdCloudError(message)
             raise PlejdAuthError(message)
         return token
@@ -781,11 +782,11 @@ def parse_site(site: dict) -> PlejdCloudSite:
         malformed.add(label)
         return []
 
-    def _checked_dict(key: str, label: str) -> dict:
+    def _checked_dict(key: str, *labels: str) -> dict:
         raw = site.get(key)
         if isinstance(raw, dict):
             return raw
-        malformed.add(label)
+        malformed.update(labels)
         return {}
 
     raw_devices = _checked_list("devices", "devices")
@@ -793,14 +794,18 @@ def parse_site(site: dict) -> PlejdCloudSite:
     plejd_devices = _checked_list("plejdDevices", "motion")
     raw_scenes = _checked_list("scenes", "scenes")
     scene_index = _checked_dict("sceneIndex", "scenes")
+    # These two carry every mesh address there is: outputAddress is what control commands
+    # target, deviceAddress is the physical-device fallback (and what fault polling and the
+    # motion sensors use). Losing either silently yields devices with address=None - parsed
+    # "successfully" into entities that can never be commanded - so they count as malformed
+    # device (and, for deviceAddress, motion) data rather than an empty-but-valid map.
+    output_address = _checked_dict("outputAddress", "devices")
+    device_address = _checked_dict("deviceAddress", "devices", "motion")
     raw_rooms = _checked_list("rooms", "rooms")
     room_address = _checked_dict("roomAddress", "rooms")
     output_groups = _checked_dict("outputGroups", "rooms")
     gateways_raw = _checked_list("gateways", "gateways")
 
-    device_address = site.get("deviceAddress") or {}
-    output_address = site.get("outputAddress")
-    output_address = output_address if isinstance(output_address, dict) else {}
     hardware_by_id = {d.get("deviceId"): d for d in plejd_devices if isinstance(d, dict)}
 
     devices: list[PlejdCloudDevice] = []

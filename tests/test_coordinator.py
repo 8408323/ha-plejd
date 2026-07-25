@@ -1842,6 +1842,77 @@ async def test_cloud_poll_resets_forced_transport_when_gateway_disappears(monkey
     assert updated_options[CONF_TRANSPORT] == TRANSPORT_AUTO
 
 
+async def test_cloud_poll_keeps_the_cached_resource_set_id_when_the_gateway_omits_it(monkeypatch):
+    # A response that still lists the gateway but drops its resourceSetId must not be read
+    # as "the gateway is gone" - overwriting the cached id with None would take a
+    # gateway-only install offline for a whole poll interval (24h).
+    from plejd.const import TRANSPORT_GATEWAY
+
+    async def _login(session, email, password):
+        return "TOKEN"
+
+    async def _get_site(session, token, site_id):
+        return _fake_site(gateways=["gw1"], resource_set_id=None)  # gateway present, no id
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _login)
+    monkeypatch.setattr(coordinator_mod, "async_get_site", _get_site)
+
+    entry = _cloud_poll_entry()
+    entry.data[CONF_GATEWAYS] = ["gw1"]
+    entry.data[CONF_RESOURCE_SET_ID] = "rs1"
+    entry.data[CONF_INSTALLATION_ID] = "inst1"
+    entry.options = {CONF_TRANSPORT: TRANSPORT_GATEWAY}
+    persisted: dict = {}
+    config_entries = types.SimpleNamespace(
+        async_get_entry=lambda eid: entry,
+        async_update_entry=lambda e, data, options=None: persisted.update({"data": data, "options": options}),
+        async_reload=AsyncMock(return_value=True),
+    )
+    hass = _hass()
+    hass.session = object()
+    hass.config_entries = config_entries
+    c = PlejdCoordinator(hass, entry)
+    await c._async_poll_cloud(None)
+
+    # nothing changed once the cached id is kept, so there is nothing to persist or reload
+    assert persisted == {}
+    assert entry.data[CONF_RESOURCE_SET_ID] == "rs1"
+    assert entry.options[CONF_TRANSPORT] == TRANSPORT_GATEWAY
+    config_entries.async_reload.assert_not_awaited()
+
+
+async def test_cloud_poll_preserves_an_explicit_ble_preference_without_a_gateway(monkeypatch):
+    # Only a now-impossible gateway-only preference may be reset when there's no usable
+    # gateway - an explicit BLE choice is still valid, and silently downgrading it to AUTO
+    # would let a gateway added later start being used on its own.
+    from plejd.const import TRANSPORT_BLE
+
+    async def _login(session, email, password):
+        return "TOKEN"
+
+    async def _get_site(session, token, site_id):
+        return _fake_site(devices=[], gateways=[])  # a real change, so the poll proceeds
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _login)
+    monkeypatch.setattr(coordinator_mod, "async_get_site", _get_site)
+
+    entry = _cloud_poll_entry()
+    entry.options = {CONF_TRANSPORT: TRANSPORT_BLE}
+    persisted: dict = {}
+    config_entries = types.SimpleNamespace(
+        async_get_entry=lambda eid: entry,
+        async_update_entry=lambda e, data, options=None: persisted.update({"options": options}),
+        async_reload=AsyncMock(return_value=True),
+    )
+    hass = _hass()
+    hass.session = object()
+    hass.config_entries = config_entries
+    c = PlejdCoordinator(hass, entry)
+    await c._async_poll_cloud(None)
+
+    assert persisted["options"][CONF_TRANSPORT] == TRANSPORT_BLE  # not downgraded to AUTO
+
+
 async def test_cloud_poll_preserves_forced_transport_on_a_malformed_gateway_snapshot(monkeypatch):
     # Unlike a genuine gateway removal (see above), a malformed response (gateways/
     # resourceSetId missing/wrong type) must not reset a forced TRANSPORT_GATEWAY

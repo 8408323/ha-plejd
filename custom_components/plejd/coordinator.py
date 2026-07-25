@@ -508,12 +508,31 @@ class PlejdCoordinator:
                 ", ".join(sorted(site.malformed)),
             )
             return
+        # A response that still lists the gateway but transiently drops its resourceSetId
+        # (and the resourceSets fallback) must not be read as "the gateway is gone": keeping
+        # the cached id lets the gateway transport carry on, whereas overwriting it with None
+        # takes a gateway-only install offline until the next poll a whole day later. If
+        # access really was revoked the transport just fails and falls back to BLE, which is
+        # the far cheaper wrong guess. A genuinely removed gateway (empty gateways) still
+        # clears it. Deliberately not treated as a malformed response: a gateway with no
+        # resourceSetId is a representable state the rest of the integration already handles
+        # as "no usable gateway" (see config_flow's own has_gateway check), so flagging it
+        # would block every future poll for such a site - the exact trap the malformed
+        # checks above were added to avoid.
+        resource_set_id = site.resource_set_id
+        if gateways and resource_set_id is None:
+            resource_set_id = entry.data.get(CONF_RESOURCE_SET_ID)
         # Mirrors manage_device.py's own device-removal refresh: drop a forced gateway-only
         # preference once there's no usable gateway left, or a gateway disappearing here
         # (removed in the app) would leave the coordinator stuck raising ConfigEntryNotReady
         # forever on reload instead of falling back to BLE.
-        has_gateway = bool(gateways and site.resource_set_id)
-        new_transport = entry.options.get(CONF_TRANSPORT, TRANSPORT_AUTO) if has_gateway else TRANSPORT_AUTO
+        has_gateway = bool(gateways and resource_set_id)
+        current_transport = entry.options.get(CONF_TRANSPORT, TRANSPORT_AUTO)
+        # Only a gateway-only preference actually becomes impossible without a gateway. An
+        # explicit BLE choice stays valid and must survive, or an unrelated site change would
+        # silently downgrade it to AUTO and start using a gateway added later on its own.
+        should_reset_transport = not has_gateway and current_transport == TRANSPORT_GATEWAY
+        new_transport = TRANSPORT_AUTO if should_reset_transport else current_transport
         new_data = {
             CONF_CRYPTO_KEY: site.crypto_key.hex(),
             CONF_DEVICES: devices,
@@ -522,7 +541,7 @@ class PlejdCoordinator:
             CONF_SCENES: scenes,
             CONF_ROOMS: rooms,
             CONF_GATEWAYS: gateways,
-            CONF_RESOURCE_SET_ID: site.resource_set_id,
+            CONF_RESOURCE_SET_ID: resource_set_id,
             CONF_DEVICE_ADDRESSES: site.device_addresses,
         }
         # A gateway newly appearing on an entry that predates CONF_INSTALLATION_ID (or

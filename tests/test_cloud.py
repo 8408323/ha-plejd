@@ -1142,6 +1142,8 @@ def test_parse_site_marks_nothing_malformed_for_a_well_formed_empty_site():
         "title": "Empty",
         "plejdMesh": {"cryptoKey": "00" * 16},
         "devices": [],
+        "deviceAddress": {},
+        "outputAddress": {},
         "inputAddress": {},
         "plejdDevices": [],
         "scenes": [],
@@ -1193,6 +1195,32 @@ def test_parse_site_survives_a_wrong_typed_but_non_empty_collection(key, bad_val
     # skip a malformed snapshot if `malformed` actually reaches it.
     site = parse_site({**_SITE, key: bad_value})
     assert label in site.malformed
+
+
+@pytest.mark.parametrize(
+    ("missing", "labels"),
+    [("outputAddress", {"devices"}), ("deviceAddress", {"devices", "motion"})],
+)
+def test_parse_site_marks_devices_malformed_when_an_address_map_is_absent(missing, labels):
+    # outputAddress is what control commands target and deviceAddress is the physical
+    # fallback (also the motion sensors' own address source) - losing either parses into
+    # entities with address=None that can never be commanded, so it must not look like a
+    # valid snapshot worth caching over the working one.
+    site = {**_SITE}
+    del site[missing]
+    assert labels <= parse_site(site).malformed
+
+
+async def test_login_rate_limit_is_transient_not_an_auth_failure():
+    # A 429 (the daily poll's own retries can provoke one) is not the server rejecting
+    # these credentials - mapping it to PlejdAuthError would start reauth for a password
+    # that is still perfectly valid.
+    with aioresponses() as m:
+        m.post(_LOGIN, status=429, payload={"error": "too many requests"})
+        async with aiohttp.ClientSession() as s:
+            with pytest.raises(PlejdCloudError, match="too many requests") as excinfo:
+                await async_login(s, "u@x.se", "pw")
+    assert not isinstance(excinfo.value, PlejdAuthError)
 
 
 @pytest.mark.parametrize("missing", ["sceneIndex", "roomAddress", "outputGroups"])
