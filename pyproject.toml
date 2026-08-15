@@ -13,11 +13,11 @@ dev = [
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
     "pytest-cov>=7.1.0",
-    "ruff>=0.16.0",
+    "ruff>=0.16.2",
     "voluptuous>=0.16.0",
     "bleak>=3.0.2",
     "bleak-retry-connector>=4.6.3",
-    "cryptography>=49.0.0",
+    "cryptography>=50.0.0",
     # Capped below 3.14 because aioresponses (test-only) has not shipped support for it:
     # 3.14 made ClientResponse's `stream_writer` a required kwarg, which aioresponses 0.7.9
     # does not pass, so every mocked-HTTP test dies with a TypeError. A one-file fix is open
