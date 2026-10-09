@@ -33,11 +33,13 @@ export const fmt = (s: string, vars: Record<string, string | number>) => s.repla
 export function triggerLabel(tr: Trigger, t: T): string {
   const raw = (v: string) => v.replace(/_/g, " ");
   const type = String(tr.type || "trigger").replace(/^remote_button_/, "");
-  const typeLabel = t.trigger_types[type] ?? raw(type);
-  if (!tr.subtype) return typeLabel;
-  const sub = String(tr.subtype);
+  const sub = tr.subtype ? String(tr.subtype) : "";
   const button = /^button_?(\d+)$/.exec(sub);
   const subLabel = button ? fmt(t.trigger_button, { n: button[1] }) : (t.trigger_subtypes[sub] ?? raw(sub));
+  // Zigbee2MQTT publishes every remote action as type "action" with the action as subtype: the subtype is the label.
+  if (type === "action" && sub) return subLabel;
+  const typeLabel = t.trigger_types[type] ?? raw(type);
+  if (!sub) return typeLabel;
   return `${typeLabel} · ${subLabel}`;
 }
 

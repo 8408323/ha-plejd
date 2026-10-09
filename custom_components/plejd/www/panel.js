@@ -9069,6 +9069,34 @@ var e = (e, t) => () => (t || (e((t = { exports: {} }).exports, t), e = null), t
 			down: "Down"
 		},
 		trigger_button: "Button {n}",
+		sum_up: "dim up",
+		sum_down: "dim down",
+		sum_stop: "release",
+		cover_unknown: "unknown",
+		faults: {
+			hard_fault: "hardware fault",
+			soft_overcurrent: "overcurrent (soft)",
+			heavy_overcurrent: "overcurrent (heavy)",
+			overtemperature: "overtemperature",
+			faceplate_detect_fail: "faceplate not detected",
+			reset_watchdog: "watchdog reset",
+			reset_cpu_lock: "CPU lock reset",
+			reset_pin: "reset pin",
+			reset_soft: "software reset",
+			settings_driver: "driver settings fault",
+			low_power_wdt: "low-power watchdog",
+			temperature_throttling: "temperature throttling",
+			factory_reset_mesh_kept: "factory reset (mesh kept)",
+			boot_single_faulty_bank: "faulty firmware bank",
+			overloaded: "overloaded",
+			wrong_zcd: "zero-crossing detection fault",
+			uart_error: "UART error",
+			dont_dim: "dimming disabled",
+			adv_timeout: "advertising timeout",
+			product_hw_fault_a: "hardware fault A",
+			product_hw_fault_b: "hardware fault B",
+			group_setting_fault: "group setting fault"
+		},
 		tab_devices: "Devices",
 		tab_automations: "Automations",
 		tab_settings: "Settings",
@@ -9280,6 +9308,34 @@ var e = (e, t) => () => (t || (e((t = { exports: {} }).exports, t), e = null), t
 			down: "Ner"
 		},
 		trigger_button: "Knapp {n}",
+		sum_up: "dimra upp",
+		sum_down: "dimra ner",
+		sum_stop: "släpp",
+		cover_unknown: "okänd",
+		faults: {
+			hard_fault: "hårdvarufel",
+			soft_overcurrent: "överström (lätt)",
+			heavy_overcurrent: "överström (kraftig)",
+			overtemperature: "övertemperatur",
+			faceplate_detect_fail: "frontplatta hittades inte",
+			reset_watchdog: "watchdog-omstart",
+			reset_cpu_lock: "omstart (CPU-låsning)",
+			reset_pin: "omstart (reset-stift)",
+			reset_soft: "mjukvaruomstart",
+			settings_driver: "fel i drivrutinsinställningar",
+			low_power_wdt: "lågeffekts-watchdog",
+			temperature_throttling: "temperaturbegränsning",
+			factory_reset_mesh_kept: "fabriksåterställning (nätverk behållet)",
+			boot_single_faulty_bank: "felaktig firmwarebank",
+			overloaded: "överbelastad",
+			wrong_zcd: "fel i nollgenomgångsdetektering",
+			uart_error: "UART-fel",
+			dont_dim: "dimring avstängd",
+			adv_timeout: "timeout för annonsering",
+			product_hw_fault_a: "hårdvarufel A",
+			product_hw_fault_b: "hårdvarufel B",
+			group_setting_fault: "fel i gruppinställning"
+		},
 		tab_devices: "Enheter",
 		tab_automations: "Automationer",
 		tab_settings: "Inställningar",
@@ -9491,6 +9547,34 @@ var e = (e, t) => () => (t || (e((t = { exports: {} }).exports, t), e = null), t
 			down: "Ned"
 		},
 		trigger_button: "Knapp {n}",
+		sum_up: "dim opp",
+		sum_down: "dim ned",
+		sum_stop: "slipp",
+		cover_unknown: "ukjent",
+		faults: {
+			hard_fault: "maskinvarefeil",
+			soft_overcurrent: "overstrøm (lett)",
+			heavy_overcurrent: "overstrøm (kraftig)",
+			overtemperature: "overtemperatur",
+			faceplate_detect_fail: "frontplate ikke funnet",
+			reset_watchdog: "watchdog-omstart",
+			reset_cpu_lock: "omstart (CPU-lås)",
+			reset_pin: "omstart (reset-pinne)",
+			reset_soft: "programvareomstart",
+			settings_driver: "feil i driverinnstillinger",
+			low_power_wdt: "lavstrøms-watchdog",
+			temperature_throttling: "temperaturbegrensning",
+			factory_reset_mesh_kept: "fabrikkinnstilling (nettverk beholdt)",
+			boot_single_faulty_bank: "feil fastvarebank",
+			overloaded: "overbelastet",
+			wrong_zcd: "feil i nullgjennomgangsdeteksjon",
+			uart_error: "UART-feil",
+			dont_dim: "dimming deaktivert",
+			adv_timeout: "tidsavbrudd for annonsering",
+			product_hw_fault_a: "maskinvarefeil A",
+			product_hw_fault_b: "maskinvarefeil B",
+			group_setting_fault: "feil i gruppeinnstilling"
+		},
 		tab_devices: "Enheter",
 		tab_automations: "Automasjoner",
 		tab_settings: "Innstillinger",
@@ -9702,6 +9786,34 @@ var e = (e, t) => () => (t || (e((t = { exports: {} }).exports, t), e = null), t
 			down: "Ned"
 		},
 		trigger_button: "Knap {n}",
+		sum_up: "dæmp op",
+		sum_down: "dæmp ned",
+		sum_stop: "slip",
+		cover_unknown: "ukendt",
+		faults: {
+			hard_fault: "hardwarefejl",
+			soft_overcurrent: "overstrøm (let)",
+			heavy_overcurrent: "overstrøm (kraftig)",
+			overtemperature: "overtemperatur",
+			faceplate_detect_fail: "frontplade ikke fundet",
+			reset_watchdog: "watchdog-genstart",
+			reset_cpu_lock: "genstart (CPU-lås)",
+			reset_pin: "genstart (reset-ben)",
+			reset_soft: "softwaregenstart",
+			settings_driver: "fejl i driverindstillinger",
+			low_power_wdt: "lavstrøms-watchdog",
+			temperature_throttling: "temperaturbegrænsning",
+			factory_reset_mesh_kept: "fabriksnulstilling (netværk bevaret)",
+			boot_single_faulty_bank: "fejlbehæftet firmwarebank",
+			overloaded: "overbelastet",
+			wrong_zcd: "fejl i nulgennemgangsdetektering",
+			uart_error: "UART-fejl",
+			dont_dim: "dæmpning deaktiveret",
+			adv_timeout: "timeout for annoncering",
+			product_hw_fault_a: "hardwarefejl A",
+			product_hw_fault_b: "hardwarefejl B",
+			group_setting_fault: "fejl i gruppeindstilling"
+		},
 		tab_devices: "Enheder",
 		tab_automations: "Automatiseringer",
 		tab_settings: "Indstillinger",
@@ -9913,6 +10025,34 @@ var e = (e, t) => () => (t || (e((t = { exports: {} }).exports, t), e = null), t
 			down: "Alas"
 		},
 		trigger_button: "Painike {n}",
+		sum_up: "kirkasta",
+		sum_down: "himmennä",
+		sum_stop: "vapautus",
+		cover_unknown: "tuntematon",
+		faults: {
+			hard_fault: "laitteistovika",
+			soft_overcurrent: "ylivirta (lievä)",
+			heavy_overcurrent: "ylivirta (voimakas)",
+			overtemperature: "ylilämpö",
+			faceplate_detect_fail: "etulevyä ei tunnistettu",
+			reset_watchdog: "vahtiajastimen nollaus",
+			reset_cpu_lock: "nollaus (suoritin jumissa)",
+			reset_pin: "nollaus (reset-nasta)",
+			reset_soft: "ohjelmistonollaus",
+			settings_driver: "ohjaimen asetusvirhe",
+			low_power_wdt: "virransäästön vahtiajastin",
+			temperature_throttling: "lämpötilarajoitus",
+			factory_reset_mesh_kept: "tehdasasetukset (verkko säilytetty)",
+			boot_single_faulty_bank: "viallinen laiteohjelmistopankki",
+			overloaded: "ylikuormitettu",
+			wrong_zcd: "nollakohdan tunnistusvirhe",
+			uart_error: "UART-virhe",
+			dont_dim: "himmennys pois käytöstä",
+			adv_timeout: "mainostuksen aikakatkaisu",
+			product_hw_fault_a: "laitteistovika A",
+			product_hw_fault_b: "laitteistovika B",
+			group_setting_fault: "ryhmäasetusvirhe"
+		},
 		tab_devices: "Laitteet",
 		tab_automations: "Automaatiot",
 		tab_settings: "Asetukset",
@@ -10124,6 +10264,34 @@ var e = (e, t) => () => (t || (e((t = { exports: {} }).exports, t), e = null), t
 			down: "Niður"
 		},
 		trigger_button: "Hnappur {n}",
+		sum_up: "auka birtu",
+		sum_down: "deyfa",
+		sum_stop: "sleppa",
+		cover_unknown: "óþekkt",
+		faults: {
+			hard_fault: "vélbúnaðarvilla",
+			soft_overcurrent: "yfirstraumur (vægur)",
+			heavy_overcurrent: "yfirstraumur (mikill)",
+			overtemperature: "yfirhiti",
+			faceplate_detect_fail: "framhlið fannst ekki",
+			reset_watchdog: "endurræsing (varðhundur)",
+			reset_cpu_lock: "endurræsing (örgjörvi læstur)",
+			reset_pin: "endurræsing (endurstillingarpinni)",
+			reset_soft: "hugbúnaðarendurræsing",
+			settings_driver: "villa í reklastillingum",
+			low_power_wdt: "varðhundur í orkusparnaði",
+			temperature_throttling: "hitatakmörkun",
+			factory_reset_mesh_kept: "verksmiðjustilling (net haldið)",
+			boot_single_faulty_bank: "gallaður fastbúnaðarbanki",
+			overloaded: "yfirhlaðið",
+			wrong_zcd: "villa í núllpunktsgreiningu",
+			uart_error: "UART-villa",
+			dont_dim: "deyfing óvirk",
+			adv_timeout: "tímamörk auglýsingar",
+			product_hw_fault_a: "vélbúnaðarvilla A",
+			product_hw_fault_b: "vélbúnaðarvilla B",
+			group_setting_fault: "villa í hópstillingu"
+		},
 		tab_devices: "Tæki",
 		tab_automations: "Sjálfvirkni",
 		tab_settings: "Stillingar",
@@ -10199,7 +10367,7 @@ var e = (e, t) => () => (t || (e((t = { exports: {} }).exports, t), e = null), t
 			"Sun"
 		],
 		bindings: "Fjarstýringar og deyfing",
-		bindings_lead: "Tengdu hald/slepp á deyfifjarstýringu við mjúka deyfingu á ljósi eða heilu herbergi, og/eller tengdu aðra hnappa hennar við tafarlausa aðgerð.",
+		bindings_lead: "Tengdu hald/slepp á deyfifjarstýringu við mjúka deyfingu á ljósi eða heilu herbergi, og/eða tengdu aðra hnappa hennar við tafarlausa aðgerð.",
 		bindings_load_failed: "Ekki tókst að hlaða tengingum: {error}",
 		triggers_load_failed: "Ekki tókst að hlaða kveikjum: {error}",
 		no_bindings: "Engar tengingar enn.",
@@ -10289,7 +10457,7 @@ var e = (e, t) => () => (t || (e((t = { exports: {} }).exports, t), e = null), t
 		err_press_trigger: "Hnappaaðgerð {n}: veldu kveikju.",
 		err_press_action: "Hnappaaðgerð {n}: veldu aðgerð.",
 		err_press_scene: "Hnappaaðgerð {n}: veldu senu.",
-		err_press_service: "Hnappaaðgerð {n}: þjónustuaðgerð þarf svæði og þjónustu.",
+		err_press_service: "Hnappaaðgerð {n}: þjónustuaðgerð þarf lén og þjónustu.",
 		err_press_json: "Hnappaaðgerð {n}: gögnin verða að vera gilt JSON.",
 		err_press_object: "Hnappaaðgerð {n}: gögnin verða að vera JSON-hlutur.",
 		err_need_dim_or_press: "Veldu kveikju til að auka/deyfa birtu eða bættu við a.m.k. einni hnappaaðgerð.",
@@ -21832,10 +22000,10 @@ function Cl(e, t, n) {
 }
 var wl = (e, t) => e.replace(/\{(\w+)\}/g, (e, n) => String(t[n] ?? `{${n}}`));
 function Tl(e, t) {
-	let n = (e) => e.replace(/_/g, " "), r = String(e.type || "trigger").replace(/^remote_button_/, ""), i = t.trigger_types[r] ?? n(r);
-	if (!e.subtype) return i;
-	let a = String(e.subtype), o = /^button_?(\d+)$/.exec(a);
-	return `${i} · ${o ? wl(t.trigger_button, { n: o[1] }) : t.trigger_subtypes[a] ?? n(a)}`;
+	let n = (e) => e.replace(/_/g, " "), r = String(e.type || "trigger").replace(/^remote_button_/, ""), i = e.subtype ? String(e.subtype) : "", a = /^button_?(\d+)$/.exec(i), o = a ? wl(t.trigger_button, { n: a[1] }) : t.trigger_subtypes[i] ?? n(i);
+	if (r === "action" && i) return o;
+	let s = t.trigger_types[r] ?? n(r);
+	return i ? `${s} · ${o}` : s;
 }
 var El = (e, t) => t === "" ? null : e[Number(t)] || null;
 function Dl(e, t, n) {
@@ -22367,7 +22535,8 @@ function tu({ hass: e, s: t }) {
 					open: n.cover_open,
 					closed: n.cover_closed,
 					opening: n.cover_opening,
-					closing: n.cover_closing
+					closing: n.cover_closing,
+					unknown: n.cover_unknown
 				}[t.state] ?? t.state : `${a}%`
 			})]
 		}), /* @__PURE__ */ (0, $.jsxs)("div", {
@@ -22459,10 +22628,10 @@ function ru({ hass: e, reg: t }) {
 	});
 }
 function iu({ hass: e, reg: t }) {
-	let n = Fl(), r = Bl(e, "binary_sensor", (e) => e.attributes.device_class === "problem" && e.state === "on").map((n) => ({
-		id: n.entity_id,
-		name: Hl(e, t, n),
-		flags: (n.attributes.active_faults || []).map((e) => e.replace(/_/g, " ")).join(", ")
+	let n = Fl(), r = Bl(e, "binary_sensor", (e) => e.attributes.device_class === "problem" && e.state === "on").map((r) => ({
+		id: r.entity_id,
+		name: Hl(e, t, r),
+		flags: (r.attributes.active_faults || []).map((e) => n.faults[e] ?? e.replace(/_/g, " ")).join(", ")
 	})).sort(Rl);
 	return /* @__PURE__ */ (0, $.jsxs)(Wl, {
 		title: n.health,
@@ -22721,14 +22890,18 @@ function lu({ hass: e, reg: t }) {
 		];
 		return r.length ? r.join(", ") : "—";
 	}, T = (e) => {
-		let r = [[
+		let r = {
+			up: n.sum_up,
+			down: n.sum_down,
+			stop: n.sum_stop
+		}, i = [[
 			"up",
 			"down",
 			"stop"
-		].filter((t) => e[t]).join(" / ")].filter(Boolean), i = (e.presses || []).length;
-		i && r.push(i === 1 ? n.press_count_one : wl(n.press_count, { n: i }));
-		let a = (e.up || e.down || e.stop || e.presses?.[0]?.trigger)?.device_id;
-		return `${a ? Vl(t, a) : "—"} · ${r.join(", ") || "—"}`;
+		].filter((t) => e[t]).map((e) => r[e]).join(" / ")].filter(Boolean), a = (e.presses || []).length;
+		a && i.push(a === 1 ? n.press_count_one : wl(n.press_count, { n: a }));
+		let o = (e.up || e.down || e.stop || e.presses?.[0]?.trigger)?.device_id;
+		return `${o ? Vl(t, o) : "—"} · ${i.join(", ") || "—"}`;
 	}, E = Object.values(e.states).filter((e) => e.entity_id.startsWith("light.")).map((e) => ({
 		id: e.entity_id,
 		name: Ll(e)

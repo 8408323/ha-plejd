@@ -107,4 +107,15 @@ test("trigger labels are translated where known and fall back to the raw id", ()
   assert.equal(triggerLabel({ type: "press", subtype: "turn_on" }, sv), "Tryck · På");
   assert.equal(triggerLabel({ type: "release" }, en), "Release");
   assert.equal(triggerLabel({ type: "vendor_thing", subtype: "knob_cw" }, sv), "vendor thing · knob cw");
+  // Zigbee2MQTT: type "action", the action value is the subtype
+  assert.equal(triggerLabel({ type: "action", subtype: "on" }, sv), "På");
+  assert.equal(triggerLabel({ type: "action", subtype: "brightness_move_up" }, sv), "brightness move up");
+});
+
+test("every language names every device fault flag the backend can report", () => {
+  const flags = ["hard_fault", "soft_overcurrent", "heavy_overcurrent", "overtemperature", "faceplate_detect_fail", "reset_watchdog",
+    "reset_cpu_lock", "reset_pin", "reset_soft", "settings_driver", "low_power_wdt", "temperature_throttling", "factory_reset_mesh_kept",
+    "boot_single_faulty_bank", "overloaded", "wrong_zcd", "uart_error", "dont_dim", "adv_timeout", "product_hw_fault_a",
+    "product_hw_fault_b", "group_setting_fault"]; // const.py NOTIFY_EVENT_FLAGS
+  for (const [code, [t]] of Object.entries(LANGS)) for (const f of flags) assert.ok(t.faults[f], `${code} is missing fault ${f}`);
 });

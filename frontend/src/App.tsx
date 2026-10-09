@@ -413,7 +413,7 @@ function CoverRow({ hass, s }: Ctx & { s: St }) {
     <div className="row">
       <div className="line">
         <span className="grow">{nameOf(s)}</span>
-        <span className="count">{unavailable ? t.state_unavailable : position != null ? `${position}%` : ({ open: t.cover_open, closed: t.cover_closed, opening: t.cover_opening, closing: t.cover_closing } as Record<string, string>)[s.state] ?? s.state}</span>
+        <span className="count">{unavailable ? t.state_unavailable : position != null ? `${position}%` : ({ open: t.cover_open, closed: t.cover_closed, opening: t.cover_opening, closing: t.cover_closing, unknown: t.cover_unknown } as Record<string, string>)[s.state] ?? s.state}</span>
       </div>
       <div className="line" style={{ marginTop: 8 }}>
         <button className="btn" disabled={unavailable} onClick={() => command("open_cover", {}, 100)}>{t.open}</button>
@@ -474,7 +474,7 @@ function Motion({ hass, reg }: RegCtx) {
 function Health({ hass, reg }: RegCtx) {
   const t = useT();
   const faulted = plejdStates(hass, "binary_sensor", (s) => s.attributes.device_class === "problem" && s.state === "on")
-    .map((s) => ({ id: s.entity_id, name: ownerName(hass, reg, s), flags: (s.attributes.active_faults || []).map((f: string) => f.replace(/_/g, " ")).join(", ") }))
+    .map((s) => ({ id: s.entity_id, name: ownerName(hass, reg, s), flags: (s.attributes.active_faults || []).map((f: string) => t.faults[f] ?? f.replace(/_/g, " ")).join(", ") }))
     .sort(byName);
   return (
     <Card title={t.health} count={faulted.length}>
@@ -646,7 +646,8 @@ function Bindings({ hass, reg }: RegCtx) {
     return names.length ? names.join(", ") : "—";
   };
   const summary = (b: any) => {
-    const parts = [["up", "down", "stop"].filter((k) => b[k]).join(" / ")].filter(Boolean);
+    const dirs: Record<string, string> = { up: t.sum_up, down: t.sum_down, stop: t.sum_stop };
+    const parts = [["up", "down", "stop"].filter((k) => b[k]).map((k) => dirs[k]).join(" / ")].filter(Boolean);
     const n = (b.presses || []).length;
     if (n) parts.push(n === 1 ? t.press_count_one : fmt(t.press_count, { n }));
     const remote = (b.up || b.down || b.stop || b.presses?.[0]?.trigger)?.device_id;
