@@ -179,12 +179,6 @@ _UPDATE_SCHEDULE_SCHEMA = vol.Schema(
 _REMOVE_SCHEDULE_SCHEMA = vol.Schema({vol.Required("schedule_id"): str})
 
 
-def _drop(hass: HomeAssistant, key: str) -> None:
-    # Returns None on purpose: HA schedules a non-None on_unload return value as a task,
-    # and a bare `lambda: hass.data.pop(...)` returns the popped object, failing the unload.
-    hass.data.pop(key, None)
-
-
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     coordinator = PlejdCoordinator(hass, entry)
     # Assign before connecting so diagnostics work even while setup is still failing.
@@ -486,3 +480,9 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     # with an orphaned warning about an integration they no longer have, surviving restarts.
     async_clear_malformed_site_issue(hass, entry.entry_id)
     async_reset_self_heal_cooldown(hass, entry.entry_id)
+
+
+def _drop(hass: HomeAssistant, key: str) -> None:
+    # Returns None on purpose: HA schedules a non-None on_unload return value as a task,
+    # and a bare `lambda: hass.data.pop(...)` returns the popped object, failing the unload.
+    hass.data.pop(key, None)
