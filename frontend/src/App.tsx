@@ -224,12 +224,21 @@ function CoverRow({ hass, s }: Ctx & { s: St }) {
       .then(() => { if (newPosition != null && token.current === t) setCommanded(newPosition); })
       .catch((e: any) => console.warn(`Plejd panel: ${service} failed for ${id}`, e));
   };
-  // A position slider sends once on release, not one command per drag tick.
-  const release = () => {
-    if (drag == null) return;
-    command("set_cover_position", { position: drag }, drag);
+  // Send once per committed value: the native "change" event (pointer release, key step, assistive tech),
+  // not React's onChange, which fires on every drag tick.
+  const slider = useRef<HTMLInputElement>(null);
+  const commit = useRef(() => {});
+  commit.current = () => {
+    const p = Number(slider.current!.value);
+    command("set_cover_position", { position: p }, p);
     setDrag(null);
   };
+  useEffect(() => {
+    const el = slider.current;
+    const onCommit = () => commit.current();
+    el?.addEventListener("change", onCommit);
+    return () => el?.removeEventListener("change", onCommit);
+  }, [canSetPosition]);
 
   return (
     <div className="row">
@@ -241,9 +250,8 @@ function CoverRow({ hass, s }: Ctx & { s: St }) {
         <button className="btn" disabled={unavailable} onClick={() => command("open_cover", {}, 100)}>Open</button>
         <button className="btn ghost" disabled={unavailable} onClick={() => command("stop_cover", {}, null)}>Stop</button>
         <button className="btn" disabled={unavailable} onClick={() => command("close_cover", {}, 0)}>Close</button>
-        {canSetPosition && <input type="range" min={0} max={100} value={drag ?? known ?? 50} disabled={unavailable}
-          aria-label={`Position ${nameOf(s)}`} onChange={(e) => setDrag(Number(e.target.value))}
-          onPointerUp={release} onKeyUp={release} onPointerCancel={() => setDrag(null)} />}
+        {canSetPosition && <input ref={slider} type="range" min={0} max={100} value={drag ?? known ?? 50} disabled={unavailable}
+          aria-label={`Position ${nameOf(s)}`} onChange={(e) => setDrag(Number(e.target.value))} onPointerCancel={() => setDrag(null)} />}
       </div>
     </div>
   );
@@ -422,6 +430,15 @@ function Bindings({ hass }: Ctx) {
       .catch((e: any) => setLoadError(`Could not load bindings: ${errMsg(e)}`));
   };
   useEffect(load, []);
+  // The full area/device registries (the panel's hass only carries them on newer HA versions).
+  const [fetched, setFetched] = useState<{ areas: Record<string, any>; devices: Record<string, any> } | null>(null);
+  useEffect(() => {
+    Promise.all([hass.callWS({ type: "config/area_registry/list" }), hass.callWS({ type: "config/device_registry/list" })])
+      .then(([a, d]: any[]) => setFetched({ areas: Object.fromEntries(a.map((x: any) => [x.area_id, x])), devices: Object.fromEntries(d.map((x: any) => [x.id, x])) }))
+      .catch((e: any) => console.warn("Plejd panel: failed to load area/device registries", e));
+  }, []);
+  const registries = fetched ?? { areas: hass.areas || {}, devices: hass.devices || {} };
+  const devName = (id: string) => registries.devices[id]?.name_by_user || registries.devices[id]?.name || id;
 
   const pickDevice = async (device: string) => {
     // A trigger index only means something for the previously selected device's list.
@@ -456,14 +473,14 @@ function Bindings({ hass }: Ctx) {
     }
   };
 
-  const areaName = (id: string) => hass.areas?.[id]?.name || id;
+  const areaName = (id: string) => registries.areas[id]?.name || id;
   const entityName = (id: string) => hass.states[id]?.attributes.friendly_name || id;
   const targetName = (b: any) => {
     const t = b.targets || {};
     const names = [
       ...[].concat(t.entity_id || []).map(entityName),
       ...[].concat(t.area_id || []).map(areaName),
-      ...[].concat(t.device_id || []).map((id: string) => deviceName(hass, id)),
+      ...[].concat(t.device_id || []).map((id: string) => devName(id)),
     ];
     return names.length ? names.join(", ") : "—";
   };
@@ -472,13 +489,13 @@ function Bindings({ hass }: Ctx) {
     const n = (b.presses || []).length;
     if (n) parts.push(`${n} press action${n === 1 ? "" : "s"}`);
     const remote = (b.up || b.down || b.stop || b.presses?.[0]?.trigger)?.device_id;
-    return `${remote ? deviceName(hass, remote) : "—"} · ${parts.join(", ") || "—"}`;
+    return `${remote ? devName(remote) : "—"} · ${parts.join(", ") || "—"}`;
   };
 
   const lights = (Object.values(hass.states) as St[]).filter((s) => s.entity_id.startsWith("light."))
     .map((s) => ({ id: s.entity_id, name: nameOf(s) })).sort(byName);
-  const areas = Object.values(hass.areas || {}).map((a: any) => ({ id: a.area_id, name: a.name || a.area_id })).sort(byName);
-  const devices = Object.values(hass.devices || {}).map((d: any) => ({ id: d.id, name: d.name_by_user || d.name })).filter((d) => d.name).sort(byName);
+  const areas = Object.values(registries.areas).map((a: any) => ({ id: a.area_id, name: a.name || a.area_id })).sort(byName);
+  const devices = Object.values(registries.devices).map((d: any) => ({ id: d.id, name: d.name_by_user || d.name })).filter((d) => d.name).sort(byName);
   const allScenes = (Object.values(hass.states) as St[]).filter((s) => s.entity_id.startsWith("scene."))
     .map((s) => ({ id: s.entity_id, name: nameOf(s) })).sort(byName);
   const dev = triggers[form.device];

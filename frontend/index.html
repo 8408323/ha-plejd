@@ -29,6 +29,8 @@ const ws = {
   "plejd/dim_bindings/list": () => ({ bindings }),
   "plejd/dim_bindings/save": (m) => (bindings = m.bindings.map((b, i) => ({ id: i, ...b })), { bindings }),
   "plejd/device_triggers": (m) => ({ device_kind: "remote", triggers: ["dim_up", "dim_down", "release", "press"].map((type) => ({ device_id: m.device_id, type })) }),
+  "config/area_registry/list": () => Object.values(hass.areas),
+  "config/device_registry/list": () => Object.values(hass.devices),
   "plejd/settings/get": () => settings,
   "plejd/settings/set": ({ type, id, ...m }) => (settings = { ...settings, ...m }, {}),
   "plejd/devices/scan": () => ({ bluetooth: true, devices: [{ address: "AA:BB:CC:DD:EE:01", name: "", rssi: -61, hardware_id: "36", model: "DIM-01", firmware_build_time: 0 }], room_categories: ["LivingRoom", "Kitchen", "Other"] }),

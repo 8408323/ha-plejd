@@ -9375,10 +9375,14 @@ function me({ hass: e, s: t }) {
 		}).then(() => {
 			i != null && u.current === a && o(i);
 		}).catch((e) => console.warn(`Plejd panel: ${t} failed for ${n}`, e));
-	}, h = () => {
-		s != null && (m("set_cover_position", { position: s }, s), c(null));
-	};
-	return /* @__PURE__ */ (0, v.jsxs)("div", {
+	}, h = (0, l.useRef)(null), g = (0, l.useRef)(() => {});
+	return g.current = () => {
+		let e = Number(h.current.value);
+		m("set_cover_position", { position: e }, e), c(null);
+	}, (0, l.useEffect)(() => {
+		let e = h.current, t = () => g.current();
+		return e?.addEventListener("change", t), () => e?.removeEventListener("change", t);
+	}, [p]), /* @__PURE__ */ (0, v.jsxs)("div", {
 		className: "row",
 		children: [/* @__PURE__ */ (0, v.jsxs)("div", {
 			className: "line",
@@ -9412,6 +9416,7 @@ function me({ hass: e, s: t }) {
 					children: "Close"
 				}),
 				p && /* @__PURE__ */ (0, v.jsx)("input", {
+					ref: h,
 					type: "range",
 					min: 0,
 					max: 100,
@@ -9419,8 +9424,6 @@ function me({ hass: e, s: t }) {
 					disabled: r,
 					"aria-label": `Position ${w(t)}`,
 					onChange: (e) => c(Number(e.target.value)),
-					onPointerUp: h,
-					onKeyUp: h,
 					onPointerCancel: () => c(null)
 				})
 			]
@@ -9691,7 +9694,17 @@ function Ce({ hass: e }) {
 		i(""), e.callWS({ type: "plejd/dim_bindings/list" }).then((e) => n(e.bindings || [])).catch((e) => i(`Could not load bindings: ${C(e)}`));
 	};
 	(0, l.useEffect)(y, []);
-	let b = async (t) => {
+	let [b, ee] = (0, l.useState)(null);
+	(0, l.useEffect)(() => {
+		Promise.all([e.callWS({ type: "config/area_registry/list" }), e.callWS({ type: "config/device_registry/list" })]).then(([e, t]) => ee({
+			areas: Object.fromEntries(e.map((e) => [e.area_id, e])),
+			devices: Object.fromEntries(t.map((e) => [e.id, e]))
+		})).catch((e) => console.warn("Plejd panel: failed to load area/device registries", e));
+	}, []);
+	let x = b ?? {
+		areas: e.areas || {},
+		devices: e.devices || {}
+	}, te = (e) => x.devices[e]?.name_by_user || x.devices[e]?.name || e, S = async (t) => {
 		if (c({
 			...s,
 			device: t,
@@ -9717,7 +9730,7 @@ function Ce({ hass: e }) {
 		} catch (e) {
 			m(`Could not load triggers: ${C(e)}`);
 		}
-	}, ee = async (t, r) => {
+	}, ie = async (t, r) => {
 		f(!0), m(""), _("");
 		try {
 			let i = await e.callWS({
@@ -9730,47 +9743,47 @@ function Ce({ hass: e }) {
 		} finally {
 			f(!1);
 		}
-	}, x = () => {
+	}, ae = () => {
 		try {
-			ee([...t, h(s, a[s.device]?.triggers || [])], !0);
+			ie([...t, h(s, a[s.device]?.triggers || [])], !0);
 		} catch (e) {
 			m(C(e)), _("");
 		}
-	}, te = (t) => e.areas?.[t]?.name || t, S = (t) => e.states[t]?.attributes.friendly_name || t, ie = (t) => {
-		let n = t.targets || {}, r = [
-			...[].concat(n.entity_id || []).map(S),
-			...[].concat(n.area_id || []).map(te),
-			...[].concat(n.device_id || []).map((t) => oe(e, t))
+	}, oe = (e) => x.areas[e]?.name || e, se = (t) => e.states[t]?.attributes.friendly_name || t, ce = (e) => {
+		let t = e.targets || {}, n = [
+			...[].concat(t.entity_id || []).map(se),
+			...[].concat(t.area_id || []).map(oe),
+			...[].concat(t.device_id || []).map((e) => te(e))
 		];
-		return r.length ? r.join(", ") : "—";
-	}, ae = (t) => {
-		let n = [[
+		return n.length ? n.join(", ") : "—";
+	}, le = (e) => {
+		let t = [[
 			"up",
 			"down",
 			"stop"
-		].filter((e) => t[e]).join(" / ")].filter(Boolean), r = (t.presses || []).length;
-		r && n.push(`${r} press action${r === 1 ? "" : "s"}`);
-		let i = (t.up || t.down || t.stop || t.presses?.[0]?.trigger)?.device_id;
-		return `${i ? oe(e, i) : "—"} · ${n.join(", ") || "—"}`;
-	}, se = Object.values(e.states).filter((e) => e.entity_id.startsWith("light.")).map((e) => ({
+		].filter((t) => e[t]).join(" / ")].filter(Boolean), n = (e.presses || []).length;
+		n && t.push(`${n} press action${n === 1 ? "" : "s"}`);
+		let r = (e.up || e.down || e.stop || e.presses?.[0]?.trigger)?.device_id;
+		return `${r ? te(r) : "—"} · ${t.join(", ") || "—"}`;
+	}, ue = Object.values(e.states).filter((e) => e.entity_id.startsWith("light.")).map((e) => ({
 		id: e.entity_id,
 		name: w(e)
-	})).sort(re), ce = Object.values(e.areas || {}).map((e) => ({
+	})).sort(re), de = Object.values(x.areas).map((e) => ({
 		id: e.area_id,
 		name: e.name || e.area_id
-	})).sort(re), le = Object.values(e.devices || {}).map((e) => ({
+	})).sort(re), fe = Object.values(x.devices).map((e) => ({
 		id: e.id,
 		name: e.name_by_user || e.name
-	})).filter((e) => e.name).sort(re), ue = Object.values(e.states).filter((e) => e.entity_id.startsWith("scene.")).map((e) => ({
+	})).filter((e) => e.name).sort(re), pe = Object.values(e.states).filter((e) => e.entity_id.startsWith("scene.")).map((e) => ({
 		id: e.entity_id,
 		name: w(e)
-	})).sort(re), de = a[s.device], fe = de?.kind || "remote", pe = /* @__PURE__ */ (0, v.jsxs)(v.Fragment, { children: [/* @__PURE__ */ (0, v.jsx)("option", {
+	})).sort(re), me = a[s.device], he = me?.kind || "remote", ge = /* @__PURE__ */ (0, v.jsxs)(v.Fragment, { children: [/* @__PURE__ */ (0, v.jsx)("option", {
 		value: "",
 		children: "(none)"
-	}), (de?.triggers || []).map((e, t) => /* @__PURE__ */ (0, v.jsx)("option", {
+	}), (me?.triggers || []).map((e, t) => /* @__PURE__ */ (0, v.jsx)("option", {
 		value: t,
 		children: Se(e)
-	}, t))] }), me = (e, t) => c({
+	}, t))] }), _e = (e, t) => c({
 		...s,
 		presses: s.presses.map((n, r) => r === e ? {
 			...n,
@@ -9798,14 +9811,14 @@ function Ce({ hass: e }) {
 				className: "row line",
 				children: [/* @__PURE__ */ (0, v.jsxs)("div", {
 					className: "grow",
-					children: [/* @__PURE__ */ (0, v.jsx)("div", { children: ie(e) }), /* @__PURE__ */ (0, v.jsx)("div", {
+					children: [/* @__PURE__ */ (0, v.jsx)("div", { children: ce(e) }), /* @__PURE__ */ (0, v.jsx)("div", {
 						className: "muted",
-						children: ae(e)
+						children: le(e)
 					})]
 				}), /* @__PURE__ */ (0, v.jsx)("button", {
 					className: "btn danger",
 					disabled: u,
-					onClick: () => ee(t.filter((t) => String(t.id) !== String(e.id)), !1),
+					onClick: () => ie(t.filter((t) => String(t.id) !== String(e.id)), !1),
 					children: "Delete"
 				})]
 			}, e.id)),
@@ -9831,14 +9844,14 @@ function Ce({ hass: e }) {
 									}),
 									/* @__PURE__ */ (0, v.jsx)("optgroup", {
 										label: "Lights",
-										children: se.map((e) => /* @__PURE__ */ (0, v.jsx)("option", {
+										children: ue.map((e) => /* @__PURE__ */ (0, v.jsx)("option", {
 											value: `light:${e.id}`,
 											children: e.name
 										}, e.id))
 									}),
 									/* @__PURE__ */ (0, v.jsx)("optgroup", {
 										label: "Rooms",
-										children: ce.map((e) => /* @__PURE__ */ (0, v.jsx)("option", {
+										children: de.map((e) => /* @__PURE__ */ (0, v.jsx)("option", {
 											value: `area:${e.id}`,
 											children: e.name
 										}, e.id))
@@ -9849,11 +9862,11 @@ function Ce({ hass: e }) {
 							className: "f",
 							children: [/* @__PURE__ */ (0, v.jsx)("span", { children: "Remote" }), /* @__PURE__ */ (0, v.jsxs)("select", {
 								value: s.device,
-								onChange: (e) => b(e.target.value),
+								onChange: (e) => S(e.target.value),
 								children: [/* @__PURE__ */ (0, v.jsx)("option", {
 									value: "",
 									children: "Select a remote…"
-								}), le.map((e) => /* @__PURE__ */ (0, v.jsx)("option", {
+								}), fe.map((e) => /* @__PURE__ */ (0, v.jsx)("option", {
 									value: e.id,
 									children: e.name
 								}, e.id))]
@@ -9861,7 +9874,7 @@ function Ce({ hass: e }) {
 						})]
 					}),
 					s.device && /* @__PURE__ */ (0, v.jsxs)(v.Fragment, { children: [
-						fe === "remote" ? /* @__PURE__ */ (0, v.jsxs)("div", {
+						he === "remote" ? /* @__PURE__ */ (0, v.jsxs)("div", {
 							className: "fields",
 							children: [
 								/* @__PURE__ */ (0, v.jsxs)("label", {
@@ -9872,7 +9885,7 @@ function Ce({ hass: e }) {
 											...s,
 											up: e.target.value
 										}),
-										children: pe
+										children: ge
 									})]
 								}),
 								/* @__PURE__ */ (0, v.jsxs)("label", {
@@ -9883,7 +9896,7 @@ function Ce({ hass: e }) {
 											...s,
 											down: e.target.value
 										}),
-										children: pe
+										children: ge
 									})]
 								}),
 								/* @__PURE__ */ (0, v.jsxs)("label", {
@@ -9894,7 +9907,7 @@ function Ce({ hass: e }) {
 											...s,
 											stop: e.target.value
 										}),
-										children: pe
+										children: ge
 									})]
 								})
 							]
@@ -9902,11 +9915,11 @@ function Ce({ hass: e }) {
 							className: "muted",
 							children: [
 								"This is a ",
-								fe === "door_window" ? "door/window" : "motion",
+								he === "door_window" ? "door/window" : "motion",
 								" sensor, not a dimmer remote — use a press action below to react to it."
 							]
 						}),
-						de && !de.triggers.length && /* @__PURE__ */ (0, v.jsx)("p", {
+						me && !me.triggers.length && /* @__PURE__ */ (0, v.jsx)("p", {
 							className: "muted",
 							children: "This device exposes no triggers."
 						}),
@@ -9937,15 +9950,15 @@ function Ce({ hass: e }) {
 											className: "f",
 											children: [/* @__PURE__ */ (0, v.jsx)("span", { children: "Trigger" }), /* @__PURE__ */ (0, v.jsx)("select", {
 												value: e.trigger,
-												onChange: (e) => me(t, { trigger: e.target.value }),
-												children: pe
+												onChange: (e) => _e(t, { trigger: e.target.value }),
+												children: ge
 											})]
 										}),
 										/* @__PURE__ */ (0, v.jsxs)("label", {
 											className: "f",
 											children: [/* @__PURE__ */ (0, v.jsx)("span", { children: "Action" }), /* @__PURE__ */ (0, v.jsxs)("select", {
 												value: e.type,
-												onChange: (e) => me(t, { type: e.target.value }),
+												onChange: (e) => _e(t, { type: e.target.value }),
 												children: [/* @__PURE__ */ (0, v.jsx)("option", {
 													value: "",
 													children: "Select an action…"
@@ -9971,11 +9984,11 @@ function Ce({ hass: e }) {
 									style: { marginTop: 8 },
 									children: [/* @__PURE__ */ (0, v.jsx)("span", { children: "Scene" }), /* @__PURE__ */ (0, v.jsxs)("select", {
 										value: e.entity_id,
-										onChange: (e) => me(t, { entity_id: e.target.value }),
+										onChange: (e) => _e(t, { entity_id: e.target.value }),
 										children: [/* @__PURE__ */ (0, v.jsx)("option", {
 											value: "",
 											children: "Select a scene…"
-										}), ue.map((e) => /* @__PURE__ */ (0, v.jsx)("option", {
+										}), pe.map((e) => /* @__PURE__ */ (0, v.jsx)("option", {
 											value: e.id,
 											children: e.name
 										}, e.id))]
@@ -9988,14 +10001,14 @@ function Ce({ hass: e }) {
 										children: [/* @__PURE__ */ (0, v.jsx)("span", { children: "Domain" }), /* @__PURE__ */ (0, v.jsx)("input", {
 											value: e.domain,
 											placeholder: "light",
-											onChange: (e) => me(t, { domain: e.target.value })
+											onChange: (e) => _e(t, { domain: e.target.value })
 										})]
 									}), /* @__PURE__ */ (0, v.jsxs)("label", {
 										className: "f",
 										children: [/* @__PURE__ */ (0, v.jsx)("span", { children: "Service" }), /* @__PURE__ */ (0, v.jsx)("input", {
 											value: e.service,
 											placeholder: "turn_on",
-											onChange: (e) => me(t, { service: e.target.value })
+											onChange: (e) => _e(t, { service: e.target.value })
 										})]
 									})]
 								}), /* @__PURE__ */ (0, v.jsxs)("label", {
@@ -10003,7 +10016,7 @@ function Ce({ hass: e }) {
 									style: { marginTop: 8 },
 									children: [/* @__PURE__ */ (0, v.jsx)("span", { children: "Data (JSON, optional)" }), /* @__PURE__ */ (0, v.jsx)("textarea", {
 										value: e.data,
-										onChange: (e) => me(t, { data: e.target.value })
+										onChange: (e) => _e(t, { data: e.target.value })
 									})]
 								})] })
 							]
@@ -10025,7 +10038,7 @@ function Ce({ hass: e }) {
 						children: /* @__PURE__ */ (0, v.jsx)("button", {
 							className: "btn",
 							disabled: u,
-							onClick: x,
+							onClick: ae,
 							children: u ? "Saving…" : "Add binding"
 						})
 					})
