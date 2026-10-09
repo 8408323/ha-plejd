@@ -359,3 +359,22 @@ async def test_area_cleared_by_hand_stays_cleared():
     hass.device_registry.devices["d1"].area_id = None
     await async_sync_areas(hass, _entry())
     assert hass.device_registry.devices["d1"].area_id is None
+
+
+async def test_area_cleared_by_hand_is_not_restored_after_that_area_is_deleted_and_recreated():
+    areas_before = list(AREAS)
+    try:
+        hass = _hass([_device("d1", "TEKNIK", "vardagsrum")])
+        entry = _entry()
+        async_listen_area_changes(hass, entry)
+        [(_, handler)] = hass.bus.listeners
+        await async_sync_areas(hass, entry)  # auto-placed in garage
+        hass.device_registry.devices["d1"].area_id = None  # cleared by hand
+        await async_sync_areas(hass, entry)  # any later sync notices the manual choice
+        AREAS[:] = [a for a in AREAS if a.id != "garage"]
+        await handler(types.SimpleNamespace(data={"action": "remove", "area_id": "garage"}))
+        AREAS[:] = areas_before
+        await handler(types.SimpleNamespace(data={"action": "create", "area_id": "garage"}))
+        assert hass.device_registry.devices["d1"].area_id is None
+    finally:
+        AREAS[:] = areas_before

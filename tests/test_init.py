@@ -1561,6 +1561,7 @@ async def test_setup_syncs_areas_only_when_enabled(monkeypatch):
     calls = []
 
     async def _sync(hass, entry):
+        assert "area_registry_updated" in [e for e, _ in hass.bus.listeners]  # subscribed before syncing
         calls.append(entry.entry_id)
 
     monkeypatch.setattr(plejd.area_sync, "async_sync_areas", _sync)

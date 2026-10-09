@@ -382,11 +382,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
     # Follow Plejd room moves into HA areas (opt-in; the daily cloud poll reloads on change).
     if entry.options.get(CONF_SYNC_AREAS, False):
+        # Subscribe first, so an area change while the initial sync runs is queued behind it, not lost.
+        entry.async_on_unload(area_sync.async_listen_area_changes(hass, entry))
         try:
             await area_sync.async_sync_areas(hass, entry)
         except Exception:  # noqa: BLE001 - optional; a registry/storage error must not fail setup
             _LOGGER.warning("Plejd: could not sync device areas with Plejd rooms", exc_info=True)
-        entry.async_on_unload(area_sync.async_listen_area_changes(hass, entry))
     else:
         # Cleared on the reload that turns syncing off, so turning it on again aligns every device.
         try:

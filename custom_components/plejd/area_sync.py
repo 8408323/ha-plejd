@@ -104,7 +104,8 @@ async def async_sync_areas(
             if device is None or area is None:
                 if device is not None and previous.get("room", "").split(":", 1)[0] == room_id:
                     resolved[plejd_id] = previous  # same room, no area right now: keep its history
-                    if removed_area and previous.get("area") == removed_area and device.area_id is None:
+                    deleted = removed_area and previous.get("area") == removed_area and not previous.get("manual")
+                    if deleted and device.area_id is None:
                         # HA cleared the area because it was deleted, not the user: restore it once it's back.
                         resolved[plejd_id] = {**previous, "area": None}
                 continue
@@ -117,7 +118,7 @@ async def async_sync_areas(
                     devices.async_update_device(device.id, area_id=area.id)
                 resolved[plejd_id] = {"room": room_key, "area": area.id}
             else:
-                resolved[plejd_id] = previous  # hand-picked area: keep the marker of what we assigned
+                resolved[plejd_id] = {**previous, "manual": True}  # hand-picked (or cleared): keep our marker
         if resolved != synced:
             await store.async_save(resolved)
 
