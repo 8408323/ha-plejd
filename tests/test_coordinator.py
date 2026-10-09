@@ -20,6 +20,7 @@ from plejd.const import (
     CONF_INSTALLATION_ID,
     CONF_MOTION,
     CONF_RESOURCE_SET_ID,
+    CONF_ROOM_NAMES,
     CONF_ROOMS,
     CONF_SCENES,
     CONF_SITE_ID,
@@ -1556,6 +1557,7 @@ def _cloud_poll_entry():
             CONF_MOTION: [],
             CONF_SCENES: [],
             CONF_ROOMS: [],
+            CONF_ROOM_NAMES: {},
             CONF_GATEWAYS: [],
             CONF_RESOURCE_SET_ID: None,
             CONF_DEVICE_ADDRESSES: {},
@@ -3354,7 +3356,12 @@ async def test_poll_faults_resolves_rooms_from_cloud_when_entry_predates_room_gr
     room = PlejdCloudRoom(
         room_id="r1", name="Kök", address=14, member_addresses=[11], dimmable=True, dimmable_addresses=[11]
     )
-    site = types.SimpleNamespace(device_addresses={"d1": 1}, rooms=[room])
+    site = types.SimpleNamespace(
+        device_addresses={"d1": 1},
+        rooms=[room],
+        all_rooms=[types.SimpleNamespace(room_id="r1", name="Kök")],
+        malformed=frozenset(),
+    )
     fetches = []
 
     async def _login(*a):
@@ -3374,9 +3381,90 @@ async def test_poll_faults_resolves_rooms_from_cloud_when_entry_predates_room_gr
     # Persisted to entry.data, not just the in-memory coordinator, so the room light
     # entity survives a restart/reload even if the cloud is unreachable at that point.
     assert entry.data[CONF_ROOMS] == [asdict(room)]
+    assert entry.data[CONF_ROOM_NAMES] == {"r1": "Kök"}
 
     await c._async_poll_faults(None)
     assert fetches == [1]  # cached — no repeat fetch once rooms are resolved
+
+
+async def test_poll_faults_backfills_room_names_for_an_entry_that_predates_them(monkeypatch):
+    # Rooms whose group holds a non-light output are only in all_rooms; without their names the
+    # dashboard can't give their lights a card, so fetch them now instead of at the daily sync.
+    entry = _cloud_entry()
+    entry.data[CONF_ROOMS] = []
+    entry.data.pop(CONF_ROOM_NAMES, None)
+    c = PlejdCoordinator(_hass(), entry)
+    c._device_addresses = {"d1": 1}
+    site = types.SimpleNamespace(
+        device_addresses={"d1": 1},
+        rooms=[],
+        all_rooms=[types.SimpleNamespace(room_id="r9", name="Garage")],
+        malformed=frozenset(),
+    )
+
+    async def _login(*a):
+        return "tok"
+
+    async def _get_site(*a):
+        return site
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _login)
+    monkeypatch.setattr(coordinator_mod, "async_get_site", _get_site)
+    monkeypatch.setattr(c, "_write_vector", lambda vector: asyncio.sleep(0))
+    await c._async_poll_faults(None)
+    assert entry.data[CONF_ROOM_NAMES] == {"r9": "Garage"}
+    assert entry.data[CONF_ROOMS] == []  # untouched: only the missing key is filled in
+
+
+async def test_poll_faults_does_not_backfill_rooms_from_a_malformed_site(monkeypatch):
+    entry = _cloud_entry()
+    entry.data[CONF_ROOMS] = []
+    entry.data.pop(CONF_ROOM_NAMES, None)
+    c = PlejdCoordinator(_hass(), entry)
+    c._device_addresses = {"d1": 1}
+    site = types.SimpleNamespace(device_addresses={"d1": 1}, rooms=[], all_rooms=[], malformed=frozenset({"rooms"}))
+    fetches = []
+
+    async def _login(*a):
+        return "tok"
+
+    async def _get_site(*a):
+        fetches.append(1)
+        return site
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _login)
+    monkeypatch.setattr(coordinator_mod, "async_get_site", _get_site)
+    monkeypatch.setattr(c, "_write_vector", lambda vector: asyncio.sleep(0))
+    await c._async_poll_faults(None)
+    assert CONF_ROOM_NAMES not in entry.data  # nothing persisted from the bad snapshot
+    await c._async_poll_faults(None)
+    assert fetches == [1, 1]  # so the next poll tries again
+
+
+@pytest.mark.parametrize("closed", [False, True])
+async def test_poll_faults_stops_backfilling_and_starts_reauth_on_rejected_credentials(monkeypatch, closed):
+    from plejd.cloud import PlejdAuthError
+
+    entry = _cloud_entry()
+    entry.data[CONF_ROOMS] = []
+    entry.data.pop(CONF_ROOM_NAMES, None)
+    c = PlejdCoordinator(_hass(), entry)
+    c._device_addresses = {"d1": 1}
+    c._closed = closed
+    started, logins = [], []
+    entry.async_start_reauth = lambda h: started.append(h)
+
+    async def _login(*a):
+        logins.append(1)
+        raise PlejdAuthError("bad password")
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _login)
+    monkeypatch.setattr(c, "_write_vector", lambda vector: asyncio.sleep(0))
+    await c._async_poll_faults(None)
+    await c._async_poll_faults(None)
+    assert logins == [1]  # no login retried every poll with credentials known to be bad
+    assert len(started) == (0 if closed else 1)  # a shut-down coordinator doesn't prompt
+    assert CONF_ROOM_NAMES not in entry.data
 
 
 async def test_poll_faults_does_not_refetch_for_a_genuinely_room_less_site(monkeypatch):
@@ -3399,7 +3487,7 @@ async def test_poll_faults_swallows_cloud_fetch_failure(monkeypatch):
     c = PlejdCoordinator(_hass(), _cloud_entry())  # has credentials, no cached device_addresses
 
     async def _boom(*a):
-        raise coordinator_mod.PlejdAuthError("bad creds")
+        raise coordinator_mod.PlejdCloudError("cloud unreachable")  # transient; auth has its own test
 
     attempted: list[int] = []
 

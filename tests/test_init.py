@@ -581,9 +581,9 @@ async def test_scan_finds_unprovisioned_on_default_mesh(monkeypatch):
     await async_setup_entry(hass, entry)
     handler = hass.services._handlers[f"plejd.{SERVICE_SCAN_DEVICES}"]
     await handler(types.SimpleNamespace(data={}))
-    assert len(hass.bus.fired) == 1
-    event_type, data = hass.bus.fired[0]
-    assert event_type == "plejd_new_devices_found"
+    scans = [f for f in hass.bus.fired if f[0] == "plejd_new_devices_found"]
+    assert len(scans) == 1
+    event_type, data = scans[0]
     devs = data["devices"]
     assert len(devs) == 1
     assert devs[0]["address"] == "AA:BB:CC:DD:EE:FF"
@@ -600,7 +600,7 @@ async def test_scan_finds_unclaimed_device(monkeypatch):
     await async_setup_entry(hass, entry)
     handler = hass.services._handlers[f"plejd.{SERVICE_SCAN_DEVICES}"]
     await handler(types.SimpleNamespace(data={}))
-    devs = hass.bus.fired[0][1]["devices"]
+    devs = [f for f in hass.bus.fired if f[0] == "plejd_new_devices_found"][0][1]["devices"]
     assert devs[0]["model"] == "CTR-01"
 
 
@@ -613,7 +613,7 @@ async def test_scan_excludes_provisioned_device(monkeypatch):
     await async_setup_entry(hass, entry)
     handler = hass.services._handlers[f"plejd.{SERVICE_SCAN_DEVICES}"]
     await handler(types.SimpleNamespace(data={}))
-    devs = hass.bus.fired[0][1]["devices"]
+    devs = [f for f in hass.bus.fired if f[0] == "plejd_new_devices_found"][0][1]["devices"]
     assert devs == []
 
 
@@ -628,7 +628,7 @@ async def test_scan_excludes_non_plejd_devices(monkeypatch):
     await async_setup_entry(hass, entry)
     handler = hass.services._handlers[f"plejd.{SERVICE_SCAN_DEVICES}"]
     await handler(types.SimpleNamespace(data={}))
-    devs = hass.bus.fired[0][1]["devices"]
+    devs = [f for f in hass.bus.fired if f[0] == "plejd_new_devices_found"][0][1]["devices"]
     assert devs == []
 
 
@@ -640,7 +640,9 @@ async def test_scan_fires_event_with_empty_list_when_no_devices(monkeypatch):
     await async_setup_entry(hass, entry)
     handler = hass.services._handlers[f"plejd.{SERVICE_SCAN_DEVICES}"]
     await handler(types.SimpleNamespace(data={}))
-    assert hass.bus.fired[0] == ("plejd_new_devices_found", {"devices": []})
+    assert [f for f in hass.bus.fired if f[0] == "plejd_new_devices_found"] == [
+        ("plejd_new_devices_found", {"devices": []})
+    ]
 
 
 # ── Service: all_off ──────────────────────────────────────────────────────────
@@ -678,6 +680,14 @@ async def test_unload_callbacks_return_nothing_ha_would_try_to_schedule(monkeypa
     await async_setup_entry(hass, entry)
     results = [unload() for unload in unloads]
     assert [r for r in results if r is not None and not inspect.iscoroutine(r)] == []
+
+
+async def test_setup_tells_an_open_dashboard_to_reload_rooms(monkeypatch):
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    _FakeCoordinator.instances.clear()
+    hass, entry = _hass(), _entry()
+    await async_setup_entry(hass, entry)
+    assert [f[0] for f in hass.bus.fired] == ["plejd_rooms_changed"]
 
 
 async def test_all_off_service_calls_coordinator(monkeypatch):

@@ -36,9 +36,29 @@ h3 { font-size: 13.5px; font-weight: 600; margin: 0 0 10px; }
 .card { background: var(--pl-card); border-radius: var(--pl-radius); padding: 18px; border: 1px solid var(--pl-line);
   box-shadow: 0 1px 2px rgba(0,0,0,.04), 0 8px 24px -12px rgba(0,0,0,.12); min-width: 0; }
 .card.wide { grid-column: 1 / -1; }
-/* A big site has dozens of lights: flow them into columns instead of one very tall card. */
-.cols { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); column-gap: 24px; }
-.cols .row:last-child { border-bottom: 1px solid var(--pl-line); }
+/* Room cards: a compact masonry-ish grid of rooms, each with a strip of lamp tiles. */
+.rooms { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 16px; align-items: start; }
+.rooms > .card.wide { grid-column: 1 / -1; }
+.room { padding: 14px 14px 10px; }
+.room.big { grid-column: span 2; }
+.narrow .room.big { grid-column: auto; }
+input[type="range"].idle { opacity: .35; }
+.room-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.room-head h2 { line-height: 1.2; }
+.room-control { display: flex; align-items: center; gap: 10px; }
+.room-control input[type="range"] { width: 90px; margin: 0; }
+button.icon { border: 0; background: transparent; color: var(--pl-muted); font-size: 15px; cursor: pointer; border-radius: 8px; padding: 4px 7px; }
+button.icon.on, button.icon:hover { color: var(--pl-accent); background: color-mix(in srgb, var(--pl-accent) 12%, transparent); }
+.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px; }
+.tile { text-align: center; padding: 6px 6px 8px; border-radius: 12px; background: color-mix(in srgb, var(--pl-muted) 6%, transparent); min-width: 0; }
+.tile.lit { background: radial-gradient(circle at 50% 35%, color-mix(in srgb, var(--pl-on) 22%, transparent), transparent 70%),
+  color-mix(in srgb, var(--pl-muted) 6%, transparent); }
+.tile .lamp { border: 0; padding: 0; background: none; cursor: pointer; width: 100%; aspect-ratio: 1; display: block; }
+.tile .lamp:disabled { cursor: not-allowed; }
+.tile .lamp img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.tile-name { font-size: 12.5px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tile input[type="range"] { margin-top: 4px; }
+.tile select { margin-top: 4px; padding: 4px 6px; font-size: 12px; }
 .card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
 .count, .muted { color: var(--pl-muted); }
 .muted { font-size: 12.5px; }

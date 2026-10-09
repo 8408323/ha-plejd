@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { DEFAULT_STYLE, LAMP_LABELS, LAMP_STYLES, LampStyle, lampImage } from "./lamps";
 import { BindingForm, PRESS_ACTIONS, PressRow, Trigger, buildBinding, buildSchedule, clampPosition, stepTemperature } from "./logic";
 
 // Home Assistant's panel host sets `hass` (states, entity/device/area registries, callWS/callService).
@@ -57,7 +58,8 @@ export default function App({ hass, narrow }: { hass: any; narrow: boolean }) {
       </header>
       {tab === "devices" && (
         <div className="grid">
-          <Lights {...ctx} /><Scenes {...ctx} /><Climate {...ctx} /><Covers {...ctx} /><Motion {...ctx} /><Health {...ctx} />
+          <div className="rooms"><Lights {...ctx} /></div>
+          <Scenes {...ctx} /><Climate {...ctx} /><Covers {...ctx} /><Motion {...ctx} /><Health {...ctx} />
         </div>
       )}
       {tab === "automations" && <div className="grid"><Schedules {...ctx} /><Bindings {...ctx} /></div>}
@@ -79,19 +81,175 @@ const Empty = ({ text }: { text: string }) => <p className="muted">{text}</p>;
 
 // ── devices ─────────────────────────────────────────────────────────────────
 
+type Room = { room_id: string; name: string; entity_id: string | null; lights: string[] };
+
+// Lights grouped by their Plejd room, as in the app. The room header drives the room's own group light
+// (one mesh command for the whole room); inside, each light is a tile drawn as its configured lamp.
 function Lights({ hass }: Ctx) {
+  const [rooms, setRooms] = useState<Room[] | null>(null);
+  const [styles, setStyles] = useState<Record<string, LampStyle>>({});
+  const [error, setError] = useState("");
+  const [saveError, setSaveError] = useState("");
+  // Bumped by plejd_rooms_changed (fired on every Plejd entry setup: room renames/moves, site syncs).
+  const [roomsVersion, setRoomsVersion] = useState(0);
+  useEffect(() => {
+    const sub = hass.connection.subscribeEvents(() => setRoomsVersion((v) => v + 1), "plejd_rooms_changed");
+    return () => { sub.then((unsub: () => void) => unsub()).catch(() => {}); };
+  }, []);
+  // The server's last confirmed styles, and a per-light counter so only the newest save's failure rolls back.
+  const confirmed = useRef<Record<string, LampStyle>>({});
+  const saveSeq = useRef<Record<string, number>>({});
+  // Bumped on every lamp-type edit: a style read that started before an edit is stale once it lands.
+  const edits = useRef(0);
+  // Saves still in flight: a read started or answered meanwhile may not include them yet.
+  const pendingSaves = useRef(0);
+  // Plejd may still be starting or reloading (the panel registers before its commands do): keep
+  // retrying instead of treating a failure as "no rooms", which would lump every light together.
+  // Reloaded whenever HA's entity registry changes (hass.entities is replaced only then), so a
+  // renamed entity_id stays in its room and keeps its lamp type.
+  useEffect(() => {
+    let cancelled = false;
+    let timer = 0;
+    let styleTimer = 0;
+    const load = () => hass.callWS({ type: "plejd/rooms" })
+      .then((r: any) => { if (!cancelled) { setRooms(r.rooms); setError(""); } })
+      .catch((e: any) => { if (!cancelled) { setError(errMsg(e)); timer = window.setTimeout(load, 5000); } });
+    // Lamp styles are cosmetic and load on their own: until they do, every lamp keeps the default look.
+    const loadStyles = () => {
+      const startedAt = edits.current;
+      const startedDuringSave = pendingSaves.current > 0;
+      return hass.callWS({ type: "plejd/light_styles/get" })
+        .then((r: any) => {
+          if (cancelled) return;
+          // An edit or save overlapped this read, so it may predate that write: read again once things
+          // settle instead (the rollback of a failed edit needs a confirmed baseline to fall back to).
+          if (edits.current !== startedAt || startedDuringSave || pendingSaves.current > 0) {
+            styleTimer = window.setTimeout(loadStyles, 1000);
+            return;
+          }
+          confirmed.current = r.styles || {};
+          setStyles(confirmed.current);
+        })
+        .catch((e: any) => {
+          if (cancelled) return;
+          console.warn("Plejd panel: could not load lamp types, retrying", e);
+          styleTimer = window.setTimeout(loadStyles, 5000);
+        });
+    };
+    load();
+    loadStyles();
+    return () => { cancelled = true; clearTimeout(timer); clearTimeout(styleTimer); };
+  }, [hass.entities, roomsVersion]);
+  const setStyle = (entity_id: string, style: LampStyle) => {
+    edits.current++;
+    pendingSaves.current++;
+    const seq = (saveSeq.current[entity_id] = (saveSeq.current[entity_id] || 0) + 1);
+    const latest = () => saveSeq.current[entity_id] === seq;
+    setStyles((cur) => ({ ...cur, [entity_id]: style }));
+    hass.callWS({ type: "plejd/light_styles/set", entity_id, style })
+      .then((r: any) => {
+        confirmed.current = r.styles;
+        // An older save finishing after a newer pick must not overwrite that pick on screen.
+        setStyles((cur) => (latest() ? r.styles : { ...r.styles, [entity_id]: cur[entity_id] }));
+        setSaveError("");
+      })
+      .catch((e: any) => {
+        if (!latest()) return; // a newer pick is in flight; it decides what this lamp shows
+        // Not saved: put the lamp back to what the server last confirmed.
+        setStyles((cur) => {
+          const next = { ...cur };
+          if (confirmed.current[entity_id]) next[entity_id] = confirmed.current[entity_id];
+          else delete next[entity_id];
+          return next;
+        });
+        setSaveError(`Could not save the lamp type: ${errMsg(e)}`);
+      })
+      .finally(() => { pendingSaves.current--; });
+  };
+
   const lights = plejdStates(hass, "light");
+  if (rooms === null) return <Card title="Lights" wide><Empty text={error ? `Waiting for Plejd… (${error})` : "Loading…"} /></Card>;
+  const roomLights = new Set(rooms.map((r) => r.entity_id));
+  const grouped = new Set(rooms.flatMap((r) => r.lights));
+  const others = lights.filter((s) => !roomLights.has(s.entity_id) && !grouped.has(s.entity_id)).map((s) => s.entity_id);
+  const cards = [...rooms.filter((r) => r.lights.length), ...(others.length ? [{ room_id: "", name: rooms.length ? "Other lights" : "Lights", entity_id: null, lights: others }] : [])];
   return (
-    <Card title="Lights" count={lights.length} wide={lights.length > 8}>
-      <div className="cols">{lights.map((s) => <LightRow key={s.entity_id} hass={hass} s={s} />)}</div>
-      {!lights.length && <Empty text="No Plejd lights found." />}
-    </Card>
+    <>
+      {saveError && <Card title="Lights" wide><p className="error">{saveError}</p></Card>}
+      {cards.map((r) => <RoomCard key={r.room_id || "other"} hass={hass} room={r} styles={styles} setStyle={setStyle} />)}
+      {!cards.length && <Card title="Lights" wide><Empty text="No Plejd lights found." /></Card>}
+    </>
+  );
+}
+
+function RoomCard({ hass, room, styles, setStyle }: Ctx & { room: Room; styles: Record<string, LampStyle>; setStyle: (id: string, s: LampStyle) => void }) {
+  const [editing, setEditing] = useState(false);
+  const members = room.lights.map((id) => hass.states[id] as St | undefined).filter(Boolean) as St[];
+  const onCount = members.filter((s) => s.state === "on").length;
+  const roomState = room.entity_id ? (hass.states[room.entity_id] as St | undefined) : undefined;
+  return (
+    <section className={`card room ${members.length > 3 ? "big" : ""}`}>
+      <div className="room-head">
+        <div className="grow">
+          <h2>{room.name}</h2>
+          <span className="muted">{onCount ? `${onCount} of ${members.length} on` : "All off"}</span>
+        </div>
+        <button className={`icon ${editing ? "on" : ""}`} aria-label={`Choose lamp types in ${room.name}`} title="Lamp types" onClick={() => setEditing(!editing)}>✎</button>
+        {roomState ? <RoomControl hass={hass} s={roomState} /> : <GroupSwitch hass={hass} members={members} name={room.name} />}
+      </div>
+      <div className="tiles">
+        {members.map((s) => <LightTile key={s.entity_id} hass={hass} s={s} style={styles[s.entity_id] ?? DEFAULT_STYLE}
+          editing={editing} setStyle={(st) => setStyle(s.entity_id, st)} />)}
+      </div>
+    </section>
+  );
+}
+
+// The Plejd room light: a switch, plus a slider when any member dims.
+function RoomControl({ hass, s }: Ctx & { s: St }) {
+  const l = useLight(hass, s);
+  return (
+    <div className="room-control">
+      {l.dimmable && <input type="range" min={1} max={100} value={l.pct} disabled={l.unavailable} className={l.on ? "" : "idle"}
+        aria-label={`Brightness ${nameOf(s)}`} onChange={(e) => l.slide(Number(e.target.value))} />}
+      <button type="button" role="switch" aria-checked={l.on} aria-label={`${l.on ? "Turn off" : "Turn on"} ${nameOf(s)}`}
+        className={`switch ${l.on ? "on" : ""}`} disabled={l.unavailable} onClick={l.toggle} />
+    </div>
+  );
+}
+
+// Lights outside any Plejd room have no group light; switch them together with one service call.
+function GroupSwitch({ hass, members, name }: Ctx & { members: St[]; name: string }) {
+  const on = members.some((s) => s.state === "on");
+  const toggle = () => hass.callService("light", on ? "turn_off" : "turn_on", { entity_id: members.map((s) => s.entity_id) })
+    .catch((e: any) => console.warn("Plejd panel: failed to switch", name, e));
+  return <button type="button" role="switch" aria-checked={on} aria-label={`${on ? "Turn off" : "Turn on"} ${name}`} className={`switch ${on ? "on" : ""}`} onClick={toggle} />;
+}
+
+function LightTile({ hass, s, style, editing, setStyle }: Ctx & { s: St; style: LampStyle; editing: boolean; setStyle: (s: LampStyle) => void }) {
+  const l = useLight(hass, s);
+  return (
+    <div className={`tile ${l.on ? "lit" : ""} ${l.unavailable ? "off" : ""}`}>
+      <button className="lamp" onClick={l.toggle} disabled={l.unavailable} aria-label={`${l.on ? "Turn off" : "Turn on"} ${nameOf(s)}`}>
+        <img src={lampImage(style, l.on ? (l.dimmable ? l.pct / 100 : 1) : 0)} alt="" draggable={false} />
+      </button>
+      <div className="tile-name" title={nameOf(s)}>{nameOf(s)}</div>
+      <div className="muted">{l.level}</div>
+      {editing ? (
+        <select value={style} aria-label={`Lamp type for ${nameOf(s)}`} onChange={(e) => setStyle(e.target.value as LampStyle)}>
+          {LAMP_STYLES.map((st) => <option key={st} value={st}>{LAMP_LABELS[st]}</option>)}
+        </select>
+      ) : l.dimmable && (
+        <input type="range" min={1} max={100} value={l.pct} disabled={l.unavailable} className={l.on ? "" : "idle"}
+          aria-label={`Brightness ${nameOf(s)}`} onChange={(e) => l.slide(Number(e.target.value))} />
+      )}
+    </div>
   );
 }
 
 // Optimistic on/brightness until hass's own push catches up: a repeated click lands well within the
 // round-trip, so reading hass.states would resend the pre-click state instead of alternating.
-function LightRow({ hass, s }: Ctx & { s: St }) {
+function useLight(hass: any, s: St) {
   const id = s.entity_id;
   const unavailable = s.state === "unavailable";
   const bri = s.attributes.brightness;
@@ -155,19 +313,7 @@ function LightRow({ hass, s }: Ctx & { s: St }) {
     clearTimeout(send.current.timer);
     if (send.current.pending !== null) sendPct(send.current.pending);
   };
-
-  return (
-    <div className="row">
-      <div className="line">
-        <button type="button" role="switch" aria-checked={on} aria-label={`${on ? "Turn off" : "Turn on"} ${nameOf(s)}`}
-          className={`switch ${on ? "on" : ""}`} disabled={unavailable} onClick={toggle} />
-        <span className={`grow ${unavailable ? "off" : "click"}`} onClick={toggle}>{nameOf(s)}</span>
-        <span className="count">{level}</span>
-      </div>
-      {dimmable && <input type="range" min={1} max={100} value={pct} disabled={unavailable} aria-label={`Brightness ${nameOf(s)}`}
-        onChange={(e) => slide(Number(e.target.value))} />}
-    </div>
-  );
+  return { on, pct, dimmable, level, unavailable, toggle, slide };
 }
 
 function Climate({ hass }: Ctx) {

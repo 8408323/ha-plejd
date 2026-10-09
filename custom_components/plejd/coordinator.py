@@ -71,6 +71,7 @@ from .const import (
     CONF_INSTALLATION_ID,
     CONF_MOTION,
     CONF_RESOURCE_SET_ID,
+    CONF_ROOM_NAMES,
     CONF_ROOMS,
     CONF_SCENES,
     CONF_SITE_ID,
@@ -208,6 +209,9 @@ class PlejdCoordinator:
         # only those need a backfill fetch (see _async_poll_faults) - a site with genuinely
         # no rooms stores an explicit [] and must not be re-fetched every poll interval.
         self._rooms_from_legacy_entry = CONF_ROOMS not in entry.data
+        # Set when the fault poll's cloud backfill was refused for bad credentials: stop logging in
+        # every poll; the reauth it starts reloads the entry with a fresh coordinator.
+        self._backfill_auth_failed = False
         self.inputs = [PlejdCloudInput(**i) for i in entry.data.get(CONF_INPUTS, [])]
         self.motion = [PlejdCloudMotion(**m) for m in entry.data.get(CONF_MOTION, [])]
         self._motion_addresses = {m.address for m in self.motion}
@@ -636,6 +640,7 @@ class PlejdCoordinator:
             CONF_MOTION: motion,
             CONF_SCENES: scenes,
             CONF_ROOMS: rooms,
+            CONF_ROOM_NAMES: {r.room_id: r.name for r in site.all_rooms},
             CONF_GATEWAYS: gateways,
             CONF_RESOURCE_SET_ID: resource_set_id,
             CONF_DEVICE_ADDRESSES: site.device_addresses,
@@ -958,13 +963,25 @@ class PlejdCoordinator:
         # device's own mesh address (may differ from an output's outputAddress).
         need_device_addresses = not self._device_addresses
         need_rooms = self._rooms_from_legacy_entry
-        if (need_device_addresses or need_rooms) and self._email and self._password:
+        # Entries from before CONF_ROOM_NAMES: fill it in now rather than wait for the daily sync,
+        # or lights in rooms without a group light sit under "Other lights" until then.
+        need_room_names = CONF_ROOM_NAMES not in self._entry.data
+        needs_cloud = need_device_addresses or need_rooms or need_room_names
+        if needs_cloud and self._email and self._password and not self._backfill_auth_failed:
             try:
                 session = async_get_clientsession(self.hass)
                 token = await async_login(session, self._email, self._password)
                 site = await async_get_site(session, token, self.site_id)
                 if need_device_addresses:
                     self._device_addresses = dict(site.device_addresses)
+                data_updates: dict = {}
+                # Like the daily poll: never persist a snapshot the cloud sent malformed. Leaving
+                # the keys unset keeps this backfill retrying on the next poll.
+                if site.malformed:
+                    _LOGGER.debug(
+                        "Plejd fault poll: malformed site (%s), not backfilling rooms", sorted(site.malformed)
+                    )
+                    need_rooms = need_room_names = False
                 if need_rooms:
                     self.rooms = site.rooms
                     self._rooms_from_legacy_entry = False
@@ -972,10 +989,17 @@ class PlejdCoordinator:
                     # platform only builds PlejdRoomLight entities from CONF_ROOMS at setup,
                     # so an unpersisted backfill would lose room entities on the next
                     # restart/reload if the cloud is unreachable then (#86 review).
-                    self.hass.config_entries.async_update_entry(
-                        self._entry,
-                        data={**self._entry.data, CONF_ROOMS: [asdict(r) for r in site.rooms]},
-                    )
+                    data_updates[CONF_ROOMS] = [asdict(r) for r in site.rooms]
+                if need_room_names:
+                    data_updates[CONF_ROOM_NAMES] = {r.room_id: r.name for r in site.all_rooms}
+                if data_updates:
+                    self.hass.config_entries.async_update_entry(self._entry, data={**self._entry.data, **data_updates})
+            except PlejdAuthError:
+                # Retrying can't succeed with these credentials; ask for new ones instead.
+                self._backfill_auth_failed = True
+                if not self._closed:
+                    _LOGGER.warning("Plejd fault poll: credentials rejected — starting reauth")
+                    self._entry.async_start_reauth(self.hass)
             except Exception:  # noqa: BLE001 - fault polling is best-effort; retry next interval
                 _LOGGER.debug("Plejd fault poll: could not resolve device addresses", exc_info=True)
         for address in set(self._device_addresses.values()):

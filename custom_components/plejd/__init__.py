@@ -12,7 +12,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry
 
-from . import dim_binding_ws, panel, remote_profile_ws, schedule_ws
+from . import dim_binding_ws, panel, remote_profile_ws, room_ws, schedule_ws
 from .add_device import async_add_device
 from .bindings import PlejdDimBindings
 from .const import (
@@ -415,7 +415,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         dim_binding_ws.async_register(hass)  # hass-global commands; register once
         schedule_ws.async_register(hass)
         remote_profile_ws.async_register(hass)
+        room_ws.async_register(hass)
         hass.data[_WS_REGISTERED] = True
+    # Room renames/moves and site syncs all reload the entry without touching entity ids; tell an
+    # open dashboard to fetch the rooms again.
+    hass.bus.async_fire(room_ws.EVENT_ROOMS_CHANGED, {})
     return True
 
 
