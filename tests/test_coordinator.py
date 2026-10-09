@@ -3134,6 +3134,26 @@ async def test_rename_device_skips_without_credentials(monkeypatch):
     await c.async_rename_device("d1", "X")
 
 
+async def test_device_rename_already_done_by_the_dashboard_is_not_mirrored_again(monkeypatch):
+    from plejd.const import DOMAIN
+
+    c = PlejdCoordinator(_hass(), _cloud_entry())
+    device = types.SimpleNamespace(identifiers={(DOMAIN, "d1")}, name_by_user="Kitchen")
+    c.hass.device_registry = types.SimpleNamespace(async_get=lambda device_id: device)
+    calls = []
+
+    async def _rename(device_id, title, output_index=None):
+        calls.append(title)
+
+    monkeypatch.setattr(c, "async_rename_device", _rename)
+    event = types.SimpleNamespace(data={"action": "update", "device_id": "dev", "changes": {"name_by_user": "old"}})
+    c.skip_next_mirror("d1", "Kitchen")
+    await c.async_handle_device_registry_update(event)
+    assert calls == []  # skipped once...
+    await c.async_handle_device_registry_update(event)
+    assert calls == ["Kitchen"]  # ...and only once: a later user rename in HA still mirrors
+
+
 async def test_rename_named_output_targets_that_output(monkeypatch):
     # the dashboard renames one light of a multi-output device: its own Parse object, not the primary's
     import dataclasses

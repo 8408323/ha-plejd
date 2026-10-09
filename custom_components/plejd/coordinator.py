@@ -212,6 +212,9 @@ class PlejdCoordinator:
         # Set when the fault poll's cloud backfill was refused for bad credentials: stop logging in
         # every poll; the reauth it starts reloads the entry with a fresh coordinator.
         self._backfill_auth_failed = False
+        # device_id -> name just written to the Plejd cloud by an awaited rename; the device-registry
+        # update that follows must not mirror it again (a late duplicate could undo a newer rename).
+        self._already_mirrored: dict[str, str] = {}
         self.inputs = [PlejdCloudInput(**i) for i in entry.data.get(CONF_INPUTS, [])]
         self.motion = [PlejdCloudMotion(**m) for m in entry.data.get(CONF_MOTION, [])]
         self._motion_addresses = {m.address for m in self.motion}
@@ -844,6 +847,10 @@ class PlejdCoordinator:
         )
         return matching[0].object_id if matching else None
 
+    def skip_next_mirror(self, device_id: str, name: str) -> None:
+        """The next device-registry rename of `device_id` to `name` is already in the Plejd cloud."""
+        self._already_mirrored[device_id] = name
+
     async def async_rename_device(self, device_id: str, title: str, output_index: int | None = None) -> None:
         """Rename a device's output in the Plejd cloud (so the Plejd app shows it too).
 
@@ -890,6 +897,8 @@ class PlejdCoordinator:
             return
         if plejd_id.startswith(ROOM_DEVICE_ID_PREFIX):
             return  # a room pseudo-device has no Parse cloud object to rename
+        if self._already_mirrored.pop(plejd_id, None) == name:
+            return  # the dashboard already renamed it in Plejd and waited for the result
         try:
             await self.async_rename_device(plejd_id, name)
         except PlejdAuthError:

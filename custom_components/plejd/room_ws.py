@@ -150,13 +150,11 @@ async def ws_rename_light(hass: HomeAssistant, connection, msg) -> None:
         _LOGGER.exception("Plejd: renaming %s failed", msg["entity_id"])
         connection.send_error(msg["id"], "rename_failed", "Could not rename the light in Plejd")
         return
-    # Plejd now has the name. A device with one light output is that light, so name the device (what HA
-    # shows everywhere); otherwise only this output's entity, since its siblings share the device.
-    # The device-registry mirror then repeats the same cloud rename, which is harmless.
-    lights_on_device = [
-        d for d in coordinator.devices if d.device_id == output.device_id and d.category == CATEGORY_LIGHT
-    ]
-    if len(lights_on_device) == 1 and reg_entry.device_id:
+    # Plejd now has the name. A device with this one output is that light, so name the device (what HA
+    # shows everywhere); any other output (light, relay, cover…) shares the device, so name only this entity.
+    outputs = [d for d in coordinator.devices if d.device_id == output.device_id]
+    if len(outputs) == 1 and reg_entry.device_id:
+        coordinator.skip_next_mirror(output.device_id, name)  # already renamed in Plejd above
         dr.async_get(hass).async_update_device(reg_entry.device_id, name_by_user=name)
     else:
         er.async_get(hass).async_update_entity(msg["entity_id"], name=name)

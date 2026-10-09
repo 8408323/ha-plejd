@@ -197,6 +197,7 @@ def _rename_hass(rename_error=None):
         return types.SimpleNamespace(unique_id=uid, entity_id=entity_id, device_id=device_id, config_entry_id="e1")
 
     renamed = []
+    skipped = []
 
     async def _rename(device_id, name, output_index=None):
         if rename_error:
@@ -209,8 +210,11 @@ def _rename_hass(rename_error=None):
             _device("d2", "r1"),
             _device("d2", "r1", output_index=1),
             _device("d2", "r1", output_index=2, category="relay"),
+            _device("d3", "r1"),
+            _device("d3", "r1", output_index=1, category="relay"),
         ],
         async_rename_device=_rename,
+        skip_next_mirror=lambda device_id, name: skipped.append((device_id, name)),
     )
     reauth = []
     entry = types.SimpleNamespace(
@@ -223,11 +227,13 @@ def _rename_hass(rename_error=None):
                 light("d1", "light.single", "dev1"),
                 light("d2", "light.dual_a", "dev2"),
                 light("d2_1", "light.dual_b", "dev2"),
-                light("x", "switch.other", "dev3"),
+                light("x", "switch.other", "devx"),
+                light("d3", "light.mixed", "dev3"),
             ]
         }
     )
     hass = types.SimpleNamespace(data={DATA_ENTRY: entry}, entity_registry=registry, device_registry=_Devices())
+    hass.skipped = skipped
     return hass, renamed, reauth
 
 
@@ -238,6 +244,16 @@ async def test_rename_single_output_light_renames_the_device_after_plejd_accepts
     assert renamed == [("d1", "Taklampa", 0)]
     assert hass.device_registry.names == {"dev1": "Taklampa"}
     assert conn.result == (1, {"name": "Taklampa"})
+    assert hass.skipped == [("d1", "Taklampa")]  # the registry update mustn't mirror it to Plejd again
+
+
+async def test_rename_light_sharing_a_device_with_a_relay_names_only_the_entity():
+    hass, renamed, _ = _rename_hass()
+    conn = _Conn()
+    await room_ws.ws_rename_light(hass, conn, {"id": 1, "entity_id": "light.mixed", "name": "Spot"})
+    assert renamed == [("d3", "Spot", 0)]
+    assert hass.device_registry.names == {} and hass.skipped == []
+    assert hass.entity_registry.entity_names == {"light.mixed": "Spot"}
 
 
 async def test_rename_one_output_of_a_shared_device_names_only_that_entity():
