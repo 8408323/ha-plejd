@@ -35,6 +35,7 @@ from .const import (
     CONF_ROOMS,
     CONF_SCENES,
     CONF_SCHEDULES,
+    CONF_SYNC_AREAS,
     CONF_TRANSPORT,
     DOMAIN,
     HOLIDAY_WINDOW_END_DEFAULT,
@@ -378,6 +379,7 @@ def _settings(entry: ConfigEntry) -> dict:
         "holiday_lights": options.get(CONF_HOLIDAY_LIGHTS, []),
         "holiday_window_start": options.get(CONF_HOLIDAY_WINDOW_START, HOLIDAY_WINDOW_START_DEFAULT),
         "holiday_window_end": options.get(CONF_HOLIDAY_WINDOW_END, HOLIDAY_WINDOW_END_DEFAULT),
+        "sync_areas": options.get(CONF_SYNC_AREAS, False),
     }
 
 
@@ -400,6 +402,7 @@ async def ws_settings_get(hass: HomeAssistant, connection, msg) -> None:
         vol.Optional("holiday_lights"): [str],
         vol.Optional("holiday_window_start"): str,
         vol.Optional("holiday_window_end"): str,
+        vol.Optional("sync_areas"): bool,
     }
 )
 @websocket_api.async_response
@@ -423,6 +426,8 @@ async def ws_settings_set(hass: HomeAssistant, connection, msg) -> None:
         updates[CONF_HOLIDAY_LIGHTS] = msg["holiday_lights"]
     if "transport" in msg:
         updates[CONF_TRANSPORT] = msg["transport"]
+    if "sync_areas" in msg:
+        updates[CONF_SYNC_AREAS] = msg["sync_areas"]
 
     def _build(current_entry: ConfigEntry) -> tuple[dict, dict]:
         options = {**current_entry.options, **updates}

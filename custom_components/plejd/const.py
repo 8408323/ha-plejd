@@ -134,6 +134,7 @@ TIME_EVENT_REP_FOREVER = 0xFFFFFFFF
 WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 CONF_SCHEDULES = "schedules"  # entry.options: list of time-event schedule dicts
 CONF_SHOW_PANEL = "show_panel"  # entry.options: show the Plejd dashboard in the sidebar (default True)
+CONF_SYNC_AREAS = "sync_areas"  # entry.options: move devices to the HA area of their Plejd room (default False)
 
 # Plejd-cloud schedules (the app's "Schemaläggning": astro-relative sunset/sunrise triggers
 # plus an optional night-reduction quiet-hours window) — a separate, cloud-only feature from

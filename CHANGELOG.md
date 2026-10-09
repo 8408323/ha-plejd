@@ -18,6 +18,13 @@ All notable changes to this project are documented here. The format follows
   browser shows the same layout.
 - Five more lamp types: downlight, chandelier, outdoor lantern, ground light and
   post light.
+- **Sync areas with Plejd rooms** (Settings tab, off by default). When on, each device
+  is moved to the Home Assistant area matching its room in the Plejd app, and follows
+  it when it is moved to another room later (picked up by the daily cloud sync). A room
+  matches an area by name, alias or part of the name ("Vardagsrum / Allrum" matches
+  "Vardagsrum"); rooms without a matching area are left alone until one is created
+  or renamed to match. Turning it on aligns every matching device; an area picked by
+  hand afterwards sticks until the device's Plejd room changes again.
 
 ### Changed
 

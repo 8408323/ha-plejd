@@ -12,11 +12,12 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry
 
-from . import dim_binding_ws, panel, remote_profile_ws, room_ws, schedule_ws
+from . import area_sync, dim_binding_ws, panel, remote_profile_ws, room_ws, schedule_ws
 from .add_device import async_add_device
 from .bindings import PlejdDimBindings
 from .const import (
     CONF_SHOW_PANEL,
+    CONF_SYNC_AREAS,
     DOMAIN,
     ROOM_CATEGORIES,
     SCHEDULE_ASTRO_EVENTS,
@@ -379,6 +380,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await coordinator.async_shutdown()
         raise
     entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
+    # Follow Plejd room moves into HA areas (opt-in; the daily cloud poll reloads on change).
+    if entry.options.get(CONF_SYNC_AREAS, False):
+        # Subscribe first, so an area change while the initial sync runs is queued behind it, not lost.
+        entry.async_on_unload(area_sync.async_listen_area_changes(hass, entry))
+        try:
+            await area_sync.async_sync_areas(hass, entry)
+        except Exception:  # noqa: BLE001 - optional; a registry/storage error must not fail setup
+            _LOGGER.warning("Plejd: could not sync device areas with Plejd rooms", exc_info=True)
+    else:
+        # Cleared on the reload that turns syncing off, so turning it on again aligns every device.
+        try:
+            await area_sync.async_reset_areas(hass, entry)
+        except Exception:  # noqa: BLE001 - optional; a storage error must not fail setup
+            _LOGGER.warning("Plejd: could not clear the area sync state", exc_info=True)
     # Mirror HA device renames back to the Plejd app (cloud title update).
     entry.async_on_unload(
         hass.bus.async_listen(
@@ -484,6 +499,7 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     # with an orphaned warning about an integration they no longer have, surviving restarts.
     async_clear_malformed_site_issue(hass, entry.entry_id)
     async_reset_self_heal_cooldown(hass, entry.entry_id)
+    await area_sync.async_reset_areas(hass, entry)
 
 
 def _drop(hass: HomeAssistant, key: str) -> None:

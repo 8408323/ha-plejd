@@ -9229,6 +9229,9 @@ var e = (e, t) => () => (t || (e((t = { exports: {} }).exports, t), e = null), t
 		transport_auto: "Automatic (gateway first, Bluetooth fallback)",
 		transport_gateway: "Gateway only (remote/cloud)",
 		transport_ble: "Bluetooth only (local)",
+		areas: "Areas",
+		areas_lead: "Move each device to the Home Assistant area matching its room in the Plejd app, also when it is moved to another room later. Rooms match an area by name or by part of the name (\"Vardagsrum / Allrum\" matches \"Vardagsrum\"). Rooms without a matching area are left alone.",
+		sync_areas: "Sync areas with Plejd rooms",
 		holiday: "Holiday mode",
 		holiday_lead: "While the Holiday mode switch is on and the time is inside this window, a random subset of these lights turns on and off to make the home look lived-in. Pick none to use every Plejd light.",
 		window_start: "Window start",
@@ -9488,6 +9491,9 @@ var e = (e, t) => () => (t || (e((t = { exports: {} }).exports, t), e = null), t
 		transport_auto: "Automatiskt (gateway först, Bluetooth som reserv)",
 		transport_gateway: "Endast gateway (fjärr/moln)",
 		transport_ble: "Endast Bluetooth (lokalt)",
+		areas: "Områden",
+		areas_lead: "Flytta varje enhet till det Home Assistant-område som matchar dess rum i Plejd-appen, även när den senare flyttas till ett annat rum. Rum matchar ett område på namn eller del av namnet (\"Vardagsrum / Allrum\" matchar \"Vardagsrum\"). Rum utan matchande område lämnas orörda.",
+		sync_areas: "Synka områden med Plejd-rum",
 		holiday: "Semesterläge",
 		holiday_lead: "När semesterläget är på och klockan är inom det här tidsfönstret tänds och släcks ett slumpmässigt urval av lamporna så att hemmet ser bebott ut. Välj inga för att använda alla Plejd-lampor.",
 		window_start: "Fönstret börjar",
@@ -9747,6 +9753,9 @@ var e = (e, t) => () => (t || (e((t = { exports: {} }).exports, t), e = null), t
 		transport_auto: "Automatisk (gateway først, Bluetooth som reserve)",
 		transport_gateway: "Kun gateway (fjern/sky)",
 		transport_ble: "Kun Bluetooth (lokalt)",
+		areas: "Områder",
+		areas_lead: "Flytt hver enhet til Home Assistant-området som samsvarer med rommet i Plejd-appen, også når den senere flyttes til et annet rom. Rom samsvarer med et område etter navn eller del av navnet (\"Stue / Allrom\" samsvarer med \"Stue\"). Rom uten et samsvarende område blir ikke endret.",
+		sync_areas: "Synkroniser områder med Plejd-rom",
 		holiday: "Feriemodus",
 		holiday_lead: "Når feriemodus er på og klokken er innenfor dette tidsvinduet, slås et tilfeldig utvalg av lysene av og på slik at hjemmet ser bebodd ut. Velg ingen for å bruke alle Plejd-lys.",
 		window_start: "Vinduet starter",
@@ -10006,6 +10015,9 @@ var e = (e, t) => () => (t || (e((t = { exports: {} }).exports, t), e = null), t
 		transport_auto: "Automatisk (gateway først, Bluetooth som reserve)",
 		transport_gateway: "Kun gateway (fjern/sky)",
 		transport_ble: "Kun Bluetooth (lokalt)",
+		areas: "Områder",
+		areas_lead: "Flyt hver enhed til det Home Assistant-område, der matcher dens rum i Plejd-appen, også når den senere flyttes til et andet rum. Rum matcher et område på navn eller en del af navnet (\"Stue / Alrum\" matcher \"Stue\"). Rum uden et matchende område forbliver uændrede.",
+		sync_areas: "Synkroniser områder med Plejd-rum",
 		holiday: "Ferietilstand",
 		holiday_lead: "Når ferietilstand er slået til, og klokken er inden for dette tidsvindue, tændes og slukkes et tilfældigt udvalg af lysene, så hjemmet ser beboet ud. Vælg ingen for at bruge alle Plejd-lys.",
 		window_start: "Vinduet starter",
@@ -10265,6 +10277,9 @@ var e = (e, t) => () => (t || (e((t = { exports: {} }).exports, t), e = null), t
 		transport_auto: "Automaattisesti (ensin yhdyskäytävä, varalla Bluetooth)",
 		transport_gateway: "Vain yhdyskäytävä (etä/pilvi)",
 		transport_ble: "Vain Bluetooth (paikallinen)",
+		areas: "Alueet",
+		areas_lead: "Siirrä jokainen laite Home Assistant -alueelle, joka vastaa sen huonetta Plejd-sovelluksessa, myös kun se myöhemmin siirretään toiseen huoneeseen. Huone vastaa aluetta nimen tai sen osan perusteella (\"Olohuone / Oleskelu\" vastaa \"Olohuone\"). Huoneisiin ilman vastaavaa aluetta ei kosketa.",
+		sync_areas: "Synkronoi alueet Plejd-huoneiden kanssa",
 		holiday: "Lomatila",
 		holiday_lead: "Kun lomatila on päällä ja kello on tämän aikaikkunan sisällä, satunnainen joukko näistä valoista syttyy ja sammuu, jotta koti näyttää asutulta. Jos et valitse yhtään, käytetään kaikkia Plejd-valoja.",
 		window_start: "Ikkuna alkaa",
@@ -10524,6 +10539,9 @@ var e = (e, t) => () => (t || (e((t = { exports: {} }).exports, t), e = null), t
 		transport_auto: "Sjálfvirkt (gátt fyrst, Bluetooth til vara)",
 		transport_gateway: "Aðeins gátt (fjar/ský)",
 		transport_ble: "Aðeins Bluetooth (staðbundið)",
+		areas: "Svæði",
+		areas_lead: "Færðu hvert tæki á Home Assistant-svæðið sem samsvarar herbergi þess í Plejd-appinu, líka þegar það er síðar fært í annað herbergi. Herbergi samsvarar svæði eftir nafni eða hluta nafns (\"Stofa / Alrými\" samsvarar \"Stofa\"). Herbergjum án samsvarandi svæðis er ekki breytt.",
+		sync_areas: "Samstilla svæði við Plejd-herbergi",
 		holiday: "Fríhamur",
 		holiday_lead: "Þegar kveikt er á fríham og klukkan er innan þessa tímaglugga kviknar og slokknar á handahófskenndu úrvali þessara ljósa svo heimilið virðist vera í notkun. Veldu ekkert til að nota öll Plejd-ljós.",
 		window_start: "Gluggi hefst",
@@ -23658,14 +23676,15 @@ function pu({ hass: e }) {
 	}, _ = JSON.stringify(i) !== JSON.stringify(n), v = async () => {
 		u(!0), f(""), m("");
 		try {
-			let { transport: n, holiday_lights: r, holiday_window_start: a, holiday_window_end: o } = i, s = await e.callWS({
+			let { transport: n, holiday_lights: r, holiday_window_start: a, holiday_window_end: o, sync_areas: s } = i, c = await e.callWS({
 				type: "plejd/settings/set",
 				transport: n,
 				holiday_lights: r,
 				holiday_window_start: a,
-				holiday_window_end: o
+				holiday_window_end: o,
+				sync_areas: s
 			});
-			m(s.reload_failed || t.saved), h();
+			m(c.reload_failed || t.saved), h();
 		} catch (e) {
 			f(zl(e));
 		} finally {
@@ -23690,6 +23709,19 @@ function pu({ hass: e }) {
 				}),
 				/* @__PURE__ */ (0, $.jsx)("div", { className: "form" })
 			] }),
+			/* @__PURE__ */ (0, $.jsx)("h3", { children: t.areas }),
+			/* @__PURE__ */ (0, $.jsx)("p", {
+				className: "lead",
+				children: t.areas_lead
+			}),
+			/* @__PURE__ */ (0, $.jsx)("div", {
+				className: "checks col",
+				children: /* @__PURE__ */ (0, $.jsxs)("label", { children: [/* @__PURE__ */ (0, $.jsx)("input", {
+					type: "checkbox",
+					checked: i.sync_areas,
+					onChange: (e) => g({ sync_areas: e.target.checked })
+				}), t.sync_areas] })
+			}),
 			/* @__PURE__ */ (0, $.jsx)("h3", { children: t.holiday }),
 			/* @__PURE__ */ (0, $.jsx)("p", {
 				className: "lead",
