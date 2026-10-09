@@ -5,7 +5,7 @@ from __future__ import annotations
 import types
 
 from plejd import area_sync
-from plejd.area_sync import async_sync_areas, device_rooms, match_area
+from plejd.area_sync import async_sync_areas, get_device_rooms, match_area
 
 
 def _area(area_id, name, aliases=()):
@@ -65,8 +65,8 @@ def test_match_area_matches_whole_name_part_or_alias_case_insensitively():
     assert match_area("Övrigt", AREAS) is None
 
 
-def test_device_rooms_uses_first_output_and_includes_room_devices():
-    assert device_rooms(ENTRY_DATA) == {
+def test_get_device_rooms_uses_first_output_and_includes_room_devices():
+    assert get_device_rooms(ENTRY_DATA) == {
         "TEKNIK": "r-garage",
         "FONSTER": "r-vardag",
         "ODD": "r-ovrigt",
@@ -98,7 +98,7 @@ async def test_area_picked_in_ha_sticks_until_plejd_room_changes():
 
 
 async def test_unchanged_rooms_do_not_rewrite_the_store():
-    hass = _hass([])
+    hass = _hass([_device("d1", "TEKNIK", "garage")])
     await async_sync_areas(hass, _entry())
     key = ("store", f"{area_sync.STORE_KEY}.e1")
     saved = hass.data[key]
@@ -106,3 +106,21 @@ async def test_unchanged_rooms_do_not_rewrite_the_store():
     marker = hass.data[key]
     await async_sync_areas(hass, _entry())
     assert hass.data[key] is marker
+
+
+async def test_device_in_unresolved_room_is_moved_once_the_room_resolves():
+    hass = _hass([_device("d1", "TEKNIK", "vardagsrum")])
+    lights_free = {"devices": [{"device_id": "TEKNIK", "output_index": 0, "room_id": "r-garage"}], "rooms": []}
+    await async_sync_areas(hass, _entry(lights_free))
+    assert hass.device_registry.devices["d1"].area_id == "vardagsrum"  # room name unknown yet
+
+    await async_sync_areas(hass, _entry())  # a light was added, so the room now has a name
+    assert hass.device_registry.devices["d1"].area_id == "garage"
+
+
+async def test_renamed_plejd_room_is_evaluated_again():
+    hass = _hass([_device("d1", "ODD", "kok")])
+    await async_sync_areas(hass, _entry())
+    renamed = {**ENTRY_DATA, "rooms": [{"room_id": "r-ovrigt", "name": "Hall"}]}
+    await async_sync_areas(hass, _entry(renamed))
+    assert hass.device_registry.devices["d1"].area_id == "hall"

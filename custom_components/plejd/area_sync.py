@@ -1,17 +1,4 @@
-"""Keep each Plejd device's HA area in step with its room in the Plejd app.
-
-HA only applies a device's suggested area when the device is first registered, so a
-device later moved to another room in the Plejd app kept its old HA area forever -
-remotes and automations targeting an area then switched the wrong lamps. The daily
-cloud poll already reloads the entry whenever the site changes; this runs at the end
-of every setup and moves a device whose Plejd room changed since the last sync to the
-HA area matching that room.
-
-A room matches an area by name or alias, or by any " / "-separated part of the room
-name ("Vardagsrum / Allrum" -> "Vardagsrum"), case-insensitively. A room with no
-matching area is left alone rather than creating areas the user never asked for. An
-area picked by hand in HA sticks until the device's Plejd room changes again.
-"""
+"""Keep each Plejd device's HA area in step with its room in the Plejd app."""
 
 from __future__ import annotations
 
@@ -39,7 +26,7 @@ def _fold(name: str) -> str:
 
 
 def match_area(room_name: str, areas: list[Any]) -> Any | None:
-    """The HA area for a Plejd room: whole-name match first, then any " / " part."""
+    """Return the area named like the room, its alias, or one " / " part of it."""
     by_name: dict[str, Any] = {}
     for area in areas:
         for name in (area.name, *(getattr(area, "aliases", None) or ())):
@@ -51,12 +38,8 @@ def match_area(room_name: str, areas: list[Any]) -> Any | None:
     return None
 
 
-def device_rooms(entry_data: dict[str, Any]) -> dict[str, str]:
-    """Plejd HA-device identifier -> room_id, as of the cached site snapshot.
-
-    A multi-output device is one HA device; its first output's room decides (outputs
-    are stored in canonical order). A room's own group-light device is in that room.
-    """
+def get_device_rooms(entry_data: dict[str, Any]) -> dict[str, str]:
+    """Map each Plejd HA-device identifier to its room_id; a multi-output device follows its first output."""
     rooms: dict[str, str] = {}
     for device in entry_data.get(CONF_DEVICES, []):
         if device.get("room_id"):
@@ -67,23 +50,24 @@ def device_rooms(entry_data: dict[str, Any]) -> dict[str, str]:
 
 
 async def async_sync_areas(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Move devices whose Plejd room changed since the last sync to the matching area."""
-    # ponytail: room names come from CONF_ROOMS, which only lists rooms with a light in
-    # them; a device in a lights-free room is skipped until that list covers every room.
+    """Move devices whose Plejd room changed since the last sync to the matching HA area."""
+    # NOTE: record a device only once its room resolved to an area, so later room/area changes re-evaluate it.
     room_names = {room["room_id"]: room["name"] for room in entry.data.get(CONF_ROOMS, [])}
     store: Store = Store(hass, STORE_VERSION, f"{STORE_KEY}.{entry.entry_id}")
     synced: dict[str, str] = await store.async_load() or {}
     devices = dr.async_get(hass)
     areas = list(ar.async_get(hass).async_list_areas())
 
-    current = device_rooms(entry.data)
-    for plejd_id, room_id in current.items():
-        if synced.get(plejd_id) == room_id:
-            continue
+    resolved: dict[str, str] = {}
+    for plejd_id, room_id in get_device_rooms(entry.data).items():
+        room_key = f"{room_id}:{room_names[room_id]}" if room_id in room_names else None
         device = devices.async_get_device(identifiers={(DOMAIN, plejd_id)})
-        area = match_area(room_names.get(room_id, ""), areas) if room_id in room_names else None
-        if device is not None and area is not None and device.area_id != area.id:
+        area = match_area(room_names[room_id], areas) if room_key else None
+        if device is None or area is None:
+            continue
+        resolved[plejd_id] = room_key
+        if synced.get(plejd_id) != room_key and device.area_id != area.id:
             _LOGGER.info("Plejd: moving %s to area %s (Plejd room changed)", device.name, area.name)
             devices.async_update_device(device.id, area_id=area.id)
-    if current != synced:
-        await store.async_save(current)
+    if resolved != synced:
+        await store.async_save(resolved)
