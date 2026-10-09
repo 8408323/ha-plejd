@@ -20742,22 +20742,23 @@ var Ul = ({ text: e }) => /* @__PURE__ */ (0, $.jsx)("p", {
 	children: e
 });
 function Wl({ hass: e }) {
-	let [t, n] = (0, l.useState)(null), [r, i] = (0, l.useState)({}), [a, o] = (0, l.useState)("");
+	let [t, n] = (0, l.useState)(null), [r, i] = (0, l.useState)({}), [a, o] = (0, l.useState)(""), [s, c] = (0, l.useState)("");
 	(0, l.useEffect)(() => {
-		let t = 0, r = () => e.callWS({ type: "plejd/rooms" }).then((e) => {
-			n(e.rooms), o("");
+		let t = !1, r = 0, a = 0, s = () => e.callWS({ type: "plejd/rooms" }).then((e) => {
+			t || (n(e.rooms), o(""));
 		}).catch((e) => {
-			o(Pl(e)), t = window.setTimeout(r, 5e3);
+			t || (o(Pl(e)), r = window.setTimeout(s, 5e3));
+		}), c = () => e.callWS({ type: "plejd/light_styles/get" }).then((e) => {
+			t || i(e.styles || {});
+		}).catch((e) => {
+			t || (console.warn("Plejd panel: could not load lamp types, retrying", e), a = window.setTimeout(c, 5e3));
 		});
-		r();
-		let a = 0, s = () => e.callWS({ type: "plejd/light_styles/get" }).then((e) => i(e.styles || {})).catch((e) => {
-			console.warn("Plejd panel: could not load lamp types, retrying", e), a = window.setTimeout(s, 5e3);
-		});
-		return s(), () => {
-			clearTimeout(t), clearTimeout(a);
+		return s(), c(), () => {
+			t = !0, clearTimeout(r), clearTimeout(a);
 		};
-	}, []);
-	let s = (t, n) => {
+	}, [e.entities]);
+	let u = (t, n) => {
+		let a = r[t];
 		i((e) => ({
 			...e,
 			[t]: n
@@ -20765,35 +20766,42 @@ function Wl({ hass: e }) {
 			type: "plejd/light_styles/set",
 			entity_id: t,
 			style: n
-		}).then((e) => i(e.styles)).catch((e) => o(`Could not save the lamp type: ${Pl(e)}`));
-	}, c = Rl(e, "light");
+		}).then((e) => {
+			i(e.styles), c("");
+		}).catch((e) => {
+			i((e) => {
+				let n = { ...e };
+				return a ? n[t] = a : delete n[t], n;
+			}), c(`Could not save the lamp type: ${Pl(e)}`);
+		});
+	}, d = Rl(e, "light");
 	if (t === null) return /* @__PURE__ */ (0, $.jsx)(Hl, {
 		title: "Lights",
 		wide: !0,
 		children: /* @__PURE__ */ (0, $.jsx)(Ul, { text: a ? `Waiting for Plejd… (${a})` : "Loading…" })
 	});
-	let u = new Set(t.map((e) => e.entity_id)), d = new Set(t.flatMap((e) => e.lights)), f = c.filter((e) => !u.has(e.entity_id) && !d.has(e.entity_id)).map((e) => e.entity_id), p = [...t.filter((e) => e.lights.length), ...f.length ? [{
+	let f = new Set(t.map((e) => e.entity_id)), p = new Set(t.flatMap((e) => e.lights)), m = d.filter((e) => !f.has(e.entity_id) && !p.has(e.entity_id)).map((e) => e.entity_id), h = [...t.filter((e) => e.lights.length), ...m.length ? [{
 		room_id: "",
 		name: t.length ? "Other lights" : "Lights",
 		entity_id: null,
-		lights: f
+		lights: m
 	}] : []];
 	return /* @__PURE__ */ (0, $.jsxs)($.Fragment, { children: [
-		a && /* @__PURE__ */ (0, $.jsx)(Hl, {
+		s && /* @__PURE__ */ (0, $.jsx)(Hl, {
 			title: "Lights",
 			wide: !0,
 			children: /* @__PURE__ */ (0, $.jsx)("p", {
 				className: "error",
-				children: a
+				children: s
 			})
 		}),
-		p.map((t) => /* @__PURE__ */ (0, $.jsx)(Gl, {
+		h.map((t) => /* @__PURE__ */ (0, $.jsx)(Gl, {
 			hass: e,
 			room: t,
 			styles: r,
-			setStyle: s
+			setStyle: u
 		}, t.room_id || "other")),
-		!p.length && /* @__PURE__ */ (0, $.jsx)(Hl, {
+		!h.length && /* @__PURE__ */ (0, $.jsx)(Hl, {
 			title: "Lights",
 			wide: !0,
 			children: /* @__PURE__ */ (0, $.jsx)(Ul, { text: "No Plejd lights found." })

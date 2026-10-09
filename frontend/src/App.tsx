@@ -89,25 +89,45 @@ function Lights({ hass }: Ctx) {
   const [rooms, setRooms] = useState<Room[] | null>(null);
   const [styles, setStyles] = useState<Record<string, LampStyle>>({});
   const [error, setError] = useState("");
+  const [saveError, setSaveError] = useState("");
   // Plejd may still be starting or reloading (the panel registers before its commands do): keep
   // retrying instead of treating a failure as "no rooms", which would lump every light together.
+  // Reloaded whenever HA's entity registry changes (hass.entities is replaced only then), so a
+  // renamed entity_id stays in its room and keeps its lamp type.
   useEffect(() => {
+    let cancelled = false;
     let timer = 0;
-    const load = () => hass.callWS({ type: "plejd/rooms" })
-      .then((r: any) => { setRooms(r.rooms); setError(""); })
-      .catch((e: any) => { setError(errMsg(e)); timer = window.setTimeout(load, 5000); });
-    load();
-    // Lamp styles are cosmetic and load on their own: until they do, every lamp keeps the default look.
     let styleTimer = 0;
-    const loadStyles = () => hass.callWS({ type: "plejd/light_styles/get" }).then((r: any) => setStyles(r.styles || {}))
-      .catch((e: any) => { console.warn("Plejd panel: could not load lamp types, retrying", e); styleTimer = window.setTimeout(loadStyles, 5000); });
+    const load = () => hass.callWS({ type: "plejd/rooms" })
+      .then((r: any) => { if (!cancelled) { setRooms(r.rooms); setError(""); } })
+      .catch((e: any) => { if (!cancelled) { setError(errMsg(e)); timer = window.setTimeout(load, 5000); } });
+    // Lamp styles are cosmetic and load on their own: until they do, every lamp keeps the default look.
+    const loadStyles = () => hass.callWS({ type: "plejd/light_styles/get" })
+      .then((r: any) => { if (!cancelled) setStyles(r.styles || {}); })
+      .catch((e: any) => {
+        if (cancelled) return;
+        console.warn("Plejd panel: could not load lamp types, retrying", e);
+        styleTimer = window.setTimeout(loadStyles, 5000);
+      });
+    load();
     loadStyles();
-    return () => { clearTimeout(timer); clearTimeout(styleTimer); };
-  }, []);
+    return () => { cancelled = true; clearTimeout(timer); clearTimeout(styleTimer); };
+  }, [hass.entities]);
   const setStyle = (entity_id: string, style: LampStyle) => {
+    const previous = styles[entity_id];
     setStyles((cur) => ({ ...cur, [entity_id]: style }));
-    hass.callWS({ type: "plejd/light_styles/set", entity_id, style }).then((r: any) => setStyles(r.styles))
-      .catch((e: any) => setError(`Could not save the lamp type: ${errMsg(e)}`));
+    hass.callWS({ type: "plejd/light_styles/set", entity_id, style })
+      .then((r: any) => { setStyles(r.styles); setSaveError(""); })
+      .catch((e: any) => {
+        // Not saved: put the lamp back to what is actually stored.
+        setStyles((cur) => {
+          const next = { ...cur };
+          if (previous) next[entity_id] = previous;
+          else delete next[entity_id];
+          return next;
+        });
+        setSaveError(`Could not save the lamp type: ${errMsg(e)}`);
+      });
   };
 
   const lights = plejdStates(hass, "light");
@@ -118,7 +138,7 @@ function Lights({ hass }: Ctx) {
   const cards = [...rooms.filter((r) => r.lights.length), ...(others.length ? [{ room_id: "", name: rooms.length ? "Other lights" : "Lights", entity_id: null, lights: others }] : [])];
   return (
     <>
-      {error && <Card title="Lights" wide><p className="error">{error}</p></Card>}
+      {saveError && <Card title="Lights" wide><p className="error">{saveError}</p></Card>}
       {cards.map((r) => <RoomCard key={r.room_id || "other"} hass={hass} room={r} styles={styles} setStyle={setStyle} />)}
       {!cards.length && <Card title="Lights" wide><Empty text="No Plejd lights found." /></Card>}
     </>

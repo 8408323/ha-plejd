@@ -49,7 +49,8 @@ const ws = {
   ] }; },
   // ?stylesfail=N: the first N lamp-style reads fail (the lights must still show, and the styles arrive on retry)
   "plejd/light_styles/get": () => { if (stylesFail-- > 0) throw new Error("storage error"); return { styles }; },
-  "plejd/light_styles/set": (m) => (m.style ? styles[m.entity_id] = m.style : delete styles[m.entity_id], { styles }),
+  // ?setfail: saving a lamp type fails (the tile must go back to the stored type)
+  "plejd/light_styles/set": (m) => location.search.includes("setfail") ? Promise.reject(new Error("storage write failed")) : (m.style ? styles[m.entity_id] = m.style : delete styles[m.entity_id], { styles }),
   "plejd/schedules/list": () => ({ schedules, scenes: [{ index: 1, name: "Evening" }] }),
   "plejd/schedules/add": (m) => (schedules = [...schedules, { ...m, id: schedules.length, time: m.time + ":00" }], { schedules }),
   "plejd/schedules/delete": (m) => (schedules = schedules.filter((s) => s.id !== m.schedule_id), { schedules }),
@@ -67,7 +68,8 @@ const hass = {
   entities: Object.fromEntries(all.map((e) => [e.id, e.reg])),
   devices: { d1: { id: "d1", name: "Kitchen dimmer" }, d4: { id: "d4", name: "Hallway" }, r1: { id: "r1", name: "Hall remote" } },
   areas: { living: { area_id: "living", name: "Living room" } },
-  callWS: async (m) => { console.log("ws", m); return ws[m.type](m); },
+  // window.calls counts calls per type, for console checks
+  callWS: async (m) => { console.log("ws", m); (window.calls ??= {})[m.type] = (window.calls[m.type] || 0) + 1; return ws[m.type](m); },
   callService: async (...a) => console.log("service", ...a),
 };
 p.narrow = innerWidth < 600;
