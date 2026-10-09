@@ -100,6 +100,8 @@ function Lights({ hass }: Ctx) {
   const [busy, setBusy] = useState(false);
   const [drag, setDrag] = useState<string | null>(null);
   const [layout, setLayout] = useState<{ order: string[]; sizes: Record<string, number> }>({ order: [], sizes: {} });
+  // Editing needs the saved layout: a draft started from the defaults would overwrite it on Save.
+  const [layoutLoaded, setLayoutLoaded] = useState(false);
   // Bumped by plejd_rooms_changed (fired on every Plejd entry setup: room renames/moves, site syncs).
   const [roomsVersion, setRoomsVersion] = useState(0);
   useEffect(() => {
@@ -151,7 +153,7 @@ function Lights({ hass }: Ctx) {
     // Card order/sizes are cosmetic: until they load, the cards use their natural order and size.
     let layoutTimer = 0;
     const loadLayout = () => hass.callWS({ type: "plejd/room_layout/get" })
-      .then((r: any) => { if (!cancelled) setLayout(r); })
+      .then((r: any) => { if (!cancelled) { setLayout(r); setLayoutLoaded(true); } })
       .catch((e: any) => {
         if (cancelled) return;
         console.warn("Plejd panel: could not load the card layout, retrying", e);
@@ -201,39 +203,44 @@ function Lights({ hass }: Ctx) {
 
   const startEdit = () => {
     const nameOf_ = (id: string) => nameOf(hass.states[id] ?? { entity_id: id, state: "", attributes: {} });
-    setDraft({
+    const start = {
       order: cards.map((r) => r.room_id),
       sizes: Object.fromEntries(cards.map((r) => [r.room_id, sizeOf(r)])),
       roomNames: Object.fromEntries(rooms.map((r) => [r.room_id, r.name])),
       lightNames: Object.fromEntries(all.flatMap((r) => r.lights).map((id) => [id, nameOf_(id)])),
       styles: { ...styles },
-    });
+    };
+    // Only fields that differ from this snapshot are saved: a name changed elsewhere meanwhile isn't undone.
+    setDraft({ ...start, base: start });
     setSaveError("");
   };
   const saveEdit = async () => {
     if (!draft) return;
+    const { base } = draft;
+    const changed = <K extends string>(now: Record<K, string>, was: Record<K, string>) =>
+      (Object.keys(now) as K[]).filter((k) => now[k] !== was[k]);
+    const lightRenames = changed(draft.lightNames, base.lightNames);
+    const roomRenames = changed(draft.roomNames, base.roomNames);
+    if ([...lightRenames.map((k) => draft.lightNames[k]), ...roomRenames.map((k) => draft.roomNames[k])].some((n) => !n.trim())) {
+      setSaveError(t.err_blank_name);
+      return;
+    }
     setBusy(true);
     setSaveError("");
     const errors: string[] = [];
     const attempt = async (job: () => Promise<unknown>) => { try { await job(); } catch (e) { errors.push(errMsg(e)); } };
+    const layoutChanged = JSON.stringify([draft.order, draft.sizes]) !== JSON.stringify([base.order, base.sizes]);
     // Cosmetic and local: in parallel.
     await Promise.all([
-      attempt(() => hass.callWS({ type: "plejd/room_layout/set", order: draft.order, sizes: draft.sizes }).then((r: any) => setLayout(r))),
+      ...(layoutChanged ? [attempt(() => hass.callWS({ type: "plejd/room_layout/set", order: draft.order, sizes: draft.sizes }).then((r: any) => setLayout(r)))] : []),
       ...Object.entries(draft.styles)
-        .filter(([id, style]) => style !== (styles[id] ?? DEFAULT_STYLE))
+        .filter(([id, style]) => style !== (base.styles[id] ?? DEFAULT_STYLE))
         .map(([id, style]) => attempt(() => setStyle(id, style))),
     ]);
     // Renames write to the Plejd cloud: one at a time, lights before rooms (a room rename reloads the
     // integration, and a light rename can't run while it does).
-    const currentName = (id: string) => nameOf(hass.states[id] ?? { entity_id: id, state: "", attributes: {} });
-    for (const [id, raw] of Object.entries(draft.lightNames)) {
-      const name = raw.trim();
-      if (name && name !== currentName(id)) await attempt(() => hass.callWS({ type: "plejd/lights/rename", entity_id: id, name }));
-    }
-    for (const r of rooms) {
-      const title = draft.roomNames[r.room_id]?.trim();
-      if (title && title !== r.name) await attempt(() => hass.callService("plejd", "update_room", { room_id: r.room_id, title }));
-    }
+    for (const id of lightRenames) await attempt(() => hass.callWS({ type: "plejd/lights/rename", entity_id: id, name: draft.lightNames[id].trim() }));
+    for (const id of roomRenames) await attempt(() => hass.callService("plejd", "update_room", { room_id: id, title: draft.roomNames[id].trim() }));
     setBusy(false);
     if (errors.length) setSaveError(fmt(t.edit_save_failed, { error: errors.join("; ") }));
     else setDraft(null);
@@ -258,7 +265,7 @@ function Lights({ hass }: Ctx) {
             <button className="btn" disabled={busy} onClick={saveEdit}>{busy ? t.saving : t.save}</button>
           </>
         ) : (
-          <button className="btn ghost" onClick={startEdit} aria-label={t.edit_lights}>✎ {t.edit}</button>
+          <button className="btn ghost" onClick={startEdit} disabled={!layoutLoaded} aria-label={t.edit_lights}>✎ {t.edit}</button>
         )}
       </div>
       {saveError && <Card title={t.lights} wide><p className="error">{saveError}</p></Card>}
@@ -269,7 +276,8 @@ function Lights({ hass }: Ctx) {
   );
 }
 
-type Draft = { order: string[]; sizes: Record<string, number>; roomNames: Record<string, string>; lightNames: Record<string, string>; styles: Record<string, LampStyle> };
+type DraftFields = { order: string[]; sizes: Record<string, number>; roomNames: Record<string, string>; lightNames: Record<string, string>; styles: Record<string, LampStyle> };
+type Draft = DraftFields & { base: DraftFields }; // base: the values when editing started
 type Edit = { draft: Draft; patch: (p: Partial<Draft>) => void; move: (id: string, to: number) => void; drag: string | null; setDrag: (id: string | null) => void };
 
 function RoomCard({ hass, room, index, count, size, styles, edit }: Ctx & {

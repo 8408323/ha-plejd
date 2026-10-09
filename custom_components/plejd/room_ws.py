@@ -156,6 +156,9 @@ async def ws_rename_light(hass: HomeAssistant, connection, msg) -> None:
     if len(outputs) == 1 and reg_entry.device_id:
         coordinator.skip_next_mirror(output.device_id, name)  # already renamed in Plejd above
         dr.async_get(hass).async_update_device(reg_entry.device_id, name_by_user=name)
+        if reg_entry.name:
+            # An entity-name override would keep showing instead of the new device name.
+            er.async_get(hass).async_update_entity(msg["entity_id"], name=None)
     else:
         er.async_get(hass).async_update_entity(msg["entity_id"], name=name)
     connection.send_result(msg["id"], {"name": name})

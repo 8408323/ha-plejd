@@ -194,7 +194,9 @@ class _Devices:
 
 def _rename_hass(rename_error=None):
     def light(uid, entity_id, device_id):
-        return types.SimpleNamespace(unique_id=uid, entity_id=entity_id, device_id=device_id, config_entry_id="e1")
+        return types.SimpleNamespace(
+            unique_id=uid, entity_id=entity_id, device_id=device_id, config_entry_id="e1", name=None
+        )
 
     renamed = []
     skipped = []
@@ -245,6 +247,15 @@ async def test_rename_single_output_light_renames_the_device_after_plejd_accepts
     assert hass.device_registry.names == {"dev1": "Taklampa"}
     assert conn.result == (1, {"name": "Taklampa"})
     assert hass.skipped == [("d1", "Taklampa")]  # the registry update mustn't mirror it to Plejd again
+
+
+async def test_rename_clears_an_entity_name_override_that_would_hide_the_new_device_name():
+    hass, _, _ = _rename_hass()
+    hass.entity_registry.async_get("light.single").name = "Old override"
+    conn = _Conn()
+    await room_ws.ws_rename_light(hass, conn, {"id": 1, "entity_id": "light.single", "name": "Taklampa"})
+    assert hass.device_registry.names == {"dev1": "Taklampa"}
+    assert hass.entity_registry.entity_names == {"light.single": None}
 
 
 async def test_rename_light_sharing_a_device_with_a_relay_names_only_the_entity():

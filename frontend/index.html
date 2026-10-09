@@ -49,12 +49,14 @@ const rename = (match, name) => {
   p.hass = window.mockHass = { ...window.mockHass, states: Object.fromEntries(all.map((e) => [e.id, e.state])) };
   return {};
 };
+let layoutFail = Number(new URLSearchParams(location.search).get("layoutfail") || 0);
 let roomsFail = Number(new URLSearchParams(location.search).get("roomsfail") || 0);
 let styles = { "light.kok_spot": "spot", "light.kok_o": "pendant", "light.kok_strip": "strip", "light.golv": "floor", "light.bord": "table", "light.vagg": "wall", "light.kitchen": "ceiling" };
 const ws = {
   // ?roomsfail=N: the first N calls fail, like Plejd still starting up
   "plejd/rooms": () => { if (roomsFail-- > 0) throw new Error("Unknown command."); return { rooms: rooms.map((r) => ({ ...r })) }; },
-  "plejd/room_layout/get": () => layout,
+  // ?layoutfail=N: the first N layout reads fail (Edit must stay disabled until one succeeds)
+  "plejd/room_layout/get": () => { if (layoutFail-- > 0) throw new Error("storage error"); return layout; },
   "plejd/room_layout/set": (m) => (layout = { order: m.order, sizes: m.sizes }),
   // renames: update the mock's states the way HA would, and hand the panel a fresh hass
   // ?renamefail: Plejd rejects light renames (the draft must stay open with an error)

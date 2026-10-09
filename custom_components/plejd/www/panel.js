@@ -9069,6 +9069,7 @@ var e = (e, t) => () => (t || (e((t = { exports: {} }).exports, t), e = null), t
 			down: "Down"
 		},
 		trigger_button: "Button {n}",
+		err_blank_name: "Names can't be empty.",
 		sum_up: "dim up",
 		sum_down: "dim down",
 		sum_stop: "release",
@@ -9327,6 +9328,7 @@ var e = (e, t) => () => (t || (e((t = { exports: {} }).exports, t), e = null), t
 			down: "Ner"
 		},
 		trigger_button: "Knapp {n}",
+		err_blank_name: "Namn får inte vara tomma.",
 		sum_up: "dimra upp",
 		sum_down: "dimra ner",
 		sum_stop: "släpp",
@@ -9585,6 +9587,7 @@ var e = (e, t) => () => (t || (e((t = { exports: {} }).exports, t), e = null), t
 			down: "Ned"
 		},
 		trigger_button: "Knapp {n}",
+		err_blank_name: "Navn kan ikke være tomme.",
 		sum_up: "dim opp",
 		sum_down: "dim ned",
 		sum_stop: "slipp",
@@ -9843,6 +9846,7 @@ var e = (e, t) => () => (t || (e((t = { exports: {} }).exports, t), e = null), t
 			down: "Ned"
 		},
 		trigger_button: "Knap {n}",
+		err_blank_name: "Navne må ikke være tomme.",
 		sum_up: "dæmp op",
 		sum_down: "dæmp ned",
 		sum_stop: "slip",
@@ -10101,6 +10105,7 @@ var e = (e, t) => () => (t || (e((t = { exports: {} }).exports, t), e = null), t
 			down: "Alas"
 		},
 		trigger_button: "Painike {n}",
+		err_blank_name: "Nimet eivät voi olla tyhjiä.",
 		sum_up: "kirkasta",
 		sum_down: "himmennä",
 		sum_stop: "vapautus",
@@ -10359,6 +10364,7 @@ var e = (e, t) => () => (t || (e((t = { exports: {} }).exports, t), e = null), t
 			down: "Niður"
 		},
 		trigger_button: "Hnappur {n}",
+		err_blank_name: "Heiti mega ekki vera tóm.",
 		sum_up: "auka birtu",
 		sum_down: "deyfa",
 		sum_stop: "sleppa",
@@ -22452,40 +22458,40 @@ function Yl({ hass: e }) {
 	let t = Rl(), [n, r] = (0, l.useState)(null), [i, a] = (0, l.useState)({}), [o, s] = (0, l.useState)(""), [c, u] = (0, l.useState)(""), [d, f] = (0, l.useState)(null), [p, m] = (0, l.useState)(!1), [h, g] = (0, l.useState)(null), [_, v] = (0, l.useState)({
 		order: [],
 		sizes: {}
-	}), [y, b] = (0, l.useState)(0);
+	}), [y, b] = (0, l.useState)(!1), [x, S] = (0, l.useState)(0);
 	(0, l.useEffect)(() => {
-		let t = e.connection.subscribeEvents(() => b((e) => e + 1), "plejd_rooms_changed");
+		let t = e.connection.subscribeEvents(() => S((e) => e + 1), "plejd_rooms_changed");
 		return () => {
 			t.then((e) => e()).catch(() => {});
 		};
 	}, []);
-	let x = (0, l.useRef)({}), S = (0, l.useRef)({}), C = (0, l.useRef)(0), w = (0, l.useRef)(0);
+	let C = (0, l.useRef)({}), w = (0, l.useRef)({}), T = (0, l.useRef)(0), E = (0, l.useRef)(0);
 	(0, l.useEffect)(() => {
 		let t = !1, n = 0, i = 0, o = () => e.callWS({ type: "plejd/rooms" }).then((e) => {
 			t || (r(e.rooms), s(""));
 		}).catch((e) => {
 			t || (s(zl(e)), n = window.setTimeout(o, 5e3));
 		}), c = () => {
-			let n = C.current, r = w.current > 0;
+			let n = T.current, r = E.current > 0;
 			return e.callWS({ type: "plejd/light_styles/get" }).then((e) => {
-				t || (C.current !== n || r || w.current > 0 ? i = window.setTimeout(c, 1e3) : (x.current = e.styles || {}, a(x.current)));
+				t || (T.current !== n || r || E.current > 0 ? i = window.setTimeout(c, 1e3) : (C.current = e.styles || {}, a(C.current)));
 			}).catch((e) => {
 				t || (console.warn("Plejd panel: could not load lamp types, retrying", e), i = window.setTimeout(c, 5e3));
 			});
 		};
 		o(), c();
 		let l = 0, u = () => e.callWS({ type: "plejd/room_layout/get" }).then((e) => {
-			t || v(e);
+			t || (v(e), b(!0));
 		}).catch((e) => {
 			t || (console.warn("Plejd panel: could not load the card layout, retrying", e), l = window.setTimeout(u, 5e3));
 		});
 		return u(), () => {
 			t = !0, clearTimeout(n), clearTimeout(i), clearTimeout(l);
 		};
-	}, [e.entities, y]);
-	let T = (n, r) => {
-		C.current++, w.current++;
-		let i = S.current[n] = (S.current[n] || 0) + 1, o = () => S.current[n] === i;
+	}, [e.entities, x]);
+	let D = (n, r) => {
+		T.current++, E.current++;
+		let i = w.current[n] = (w.current[n] || 0) + 1, o = () => w.current[n] === i;
 		return a((e) => ({
 			...e,
 			[n]: r
@@ -22494,88 +22500,85 @@ function Yl({ hass: e }) {
 			entity_id: n,
 			style: r
 		}).then((e) => {
-			x.current = e.styles, a((t) => o() ? e.styles : {
+			C.current = e.styles, a((t) => o() ? e.styles : {
 				...e.styles,
 				[n]: t[n]
 			}), u("");
 		}).catch((e) => {
 			if (o()) throw a((e) => {
 				let t = { ...e };
-				return x.current[n] ? t[n] = x.current[n] : delete t[n], t;
+				return C.current[n] ? t[n] = C.current[n] : delete t[n], t;
 			}), u(Tl(t.lamp_save_failed, { error: zl(e) })), e;
 		}).finally(() => {
-			w.current--;
+			E.current--;
 		});
-	}, E = Ul(e, "light");
+	}, O = Ul(e, "light");
 	if (n === null) return /* @__PURE__ */ (0, $.jsx)(ql, {
 		title: t.lights,
 		wide: !0,
 		children: /* @__PURE__ */ (0, $.jsx)(Jl, { text: o ? Tl(t.waiting, { error: o }) : t.loading })
 	});
-	let D = new Set(n.map((e) => e.entity_id)), O = new Set(n.flatMap((e) => e.lights)), k = E.filter((e) => !D.has(e.entity_id) && !O.has(e.entity_id)).map((e) => e.entity_id), A = [...n.filter((e) => e.lights.length), ...k.length ? [{
+	let k = new Set(n.map((e) => e.entity_id)), A = new Set(n.flatMap((e) => e.lights)), j = O.filter((e) => !k.has(e.entity_id) && !A.has(e.entity_id)).map((e) => e.entity_id), ee = [...n.filter((e) => e.lights.length), ...j.length ? [{
 		room_id: "",
 		name: n.length ? t.other_lights : t.lights,
 		entity_id: null,
-		lights: k
-	}] : []], j = d ?? {
+		lights: j
+	}] : []], M = d ?? {
 		order: _.order,
 		sizes: _.sizes
-	}, ee = Object.fromEntries(A.map((e) => [e.room_id, e])), M = Dl(A.map((e) => e.room_id), j.order).map((e) => ee[e]), N = (e) => j.sizes[e.room_id] ?? (e.lights.length > 3 ? 2 : 1), P = () => {
+	}, N = Object.fromEntries(ee.map((e) => [e.room_id, e])), P = Dl(ee.map((e) => e.room_id), M.order).map((e) => N[e]), te = (e) => M.sizes[e.room_id] ?? (e.lights.length > 3 ? 2 : 1), ne = () => {
 		let t = (t) => Bl(e.states[t] ?? {
 			entity_id: t,
 			state: "",
 			attributes: {}
-		});
-		f({
-			order: M.map((e) => e.room_id),
-			sizes: Object.fromEntries(M.map((e) => [e.room_id, N(e)])),
+		}), r = {
+			order: P.map((e) => e.room_id),
+			sizes: Object.fromEntries(P.map((e) => [e.room_id, te(e)])),
 			roomNames: Object.fromEntries(n.map((e) => [e.room_id, e.name])),
-			lightNames: Object.fromEntries(A.flatMap((e) => e.lights).map((e) => [e, t(e)])),
+			lightNames: Object.fromEntries(ee.flatMap((e) => e.lights).map((e) => [e, t(e)])),
 			styles: { ...i }
+		};
+		f({
+			...r,
+			base: r
 		}), u("");
-	}, te = async () => {
+	}, re = async () => {
 		if (!d) return;
+		let { base: n } = d, r = (e, t) => Object.keys(e).filter((n) => e[n] !== t[n]), i = r(d.lightNames, n.lightNames), a = r(d.roomNames, n.roomNames);
+		if ([...i.map((e) => d.lightNames[e]), ...a.map((e) => d.roomNames[e])].some((e) => !e.trim())) {
+			u(t.err_blank_name);
+			return;
+		}
 		m(!0), u("");
-		let r = [], a = async (e) => {
+		let o = [], s = async (e) => {
 			try {
 				await e();
 			} catch (e) {
-				r.push(zl(e));
+				o.push(zl(e));
 			}
-		};
-		await Promise.all([a(() => e.callWS({
+		}, c = JSON.stringify([d.order, d.sizes]) !== JSON.stringify([n.order, n.sizes]);
+		await Promise.all([...c ? [s(() => e.callWS({
 			type: "plejd/room_layout/set",
 			order: d.order,
 			sizes: d.sizes
-		}).then((e) => v(e))), ...Object.entries(d.styles).filter(([e, t]) => t !== (i[e] ?? "bulb")).map(([e, t]) => a(() => T(e, t)))]);
-		let o = (t) => Bl(e.states[t] ?? {
+		}).then((e) => v(e)))] : [], ...Object.entries(d.styles).filter(([e, t]) => t !== (n.styles[e] ?? "bulb")).map(([e, t]) => s(() => D(e, t)))]);
+		for (let t of i) await s(() => e.callWS({
+			type: "plejd/lights/rename",
 			entity_id: t,
-			state: "",
-			attributes: {}
-		});
-		for (let [t, n] of Object.entries(d.lightNames)) {
-			let r = n.trim();
-			r && r !== o(t) && await a(() => e.callWS({
-				type: "plejd/lights/rename",
-				entity_id: t,
-				name: r
-			}));
-		}
-		for (let t of n) {
-			let n = d.roomNames[t.room_id]?.trim();
-			n && n !== t.name && await a(() => e.callService("plejd", "update_room", {
-				room_id: t.room_id,
-				title: n
-			}));
-		}
-		m(!1), r.length ? u(Tl(t.edit_save_failed, { error: r.join("; ") })) : f(null);
-	}, ne = (e) => f((t) => t && {
+			name: d.lightNames[t].trim()
+		}));
+		for (let t of a) await s(() => e.callService("plejd", "update_room", {
+			room_id: t,
+			title: d.roomNames[t].trim()
+		}));
+		m(!1), o.length ? u(Tl(t.edit_save_failed, { error: o.join("; ") })) : f(null);
+	}, ie = (e) => f((t) => t && {
 		...t,
 		...e
-	}), re = d && {
+	}), ae = d && {
 		draft: d,
-		patch: ne,
-		move: (e, t) => ne({ order: Ol(d.order, e, t) }),
+		patch: ie,
+		move: (e, t) => ie({ order: Ol(d.order, e, t) }),
 		drag: h,
 		setDrag: g
 	};
@@ -22601,12 +22604,13 @@ function Yl({ hass: e }) {
 				/* @__PURE__ */ (0, $.jsx)("button", {
 					className: "btn",
 					disabled: p,
-					onClick: te,
+					onClick: re,
 					children: p ? t.saving : t.save
 				})
 			] }) : /* @__PURE__ */ (0, $.jsxs)("button", {
 				className: "btn ghost",
-				onClick: P,
+				onClick: ne,
+				disabled: !y,
 				"aria-label": t.edit_lights,
 				children: ["✎ ", t.edit]
 			})]
@@ -22619,16 +22623,16 @@ function Yl({ hass: e }) {
 				children: c
 			})
 		}),
-		M.map((t, n) => /* @__PURE__ */ (0, $.jsx)(Xl, {
+		P.map((t, n) => /* @__PURE__ */ (0, $.jsx)(Xl, {
 			hass: e,
 			room: t,
 			index: n,
-			count: M.length,
-			size: N(t),
+			count: P.length,
+			size: te(t),
 			styles: d?.styles ?? i,
-			edit: re || null
+			edit: ae || null
 		}, t.room_id || "other")),
-		!M.length && /* @__PURE__ */ (0, $.jsx)(ql, {
+		!P.length && /* @__PURE__ */ (0, $.jsx)(ql, {
 			title: t.lights,
 			wide: !0,
 			children: /* @__PURE__ */ (0, $.jsx)(Jl, { text: t.no_lights })
