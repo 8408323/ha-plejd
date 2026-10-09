@@ -99,6 +99,8 @@ function Lights({ hass }: Ctx) {
   // The server's last confirmed styles, and a per-light counter so only the newest save's failure rolls back.
   const confirmed = useRef<Record<string, LampStyle>>({});
   const saveSeq = useRef<Record<string, number>>({});
+  // Bumped on every lamp-type edit: a style read that started before an edit is stale once it lands.
+  const edits = useRef(0);
   // Plejd may still be starting or reloading (the panel registers before its commands do): keep
   // retrying instead of treating a failure as "no rooms", which would lump every light together.
   // Reloaded whenever HA's entity registry changes (hass.entities is replaced only then), so a
@@ -111,18 +113,26 @@ function Lights({ hass }: Ctx) {
       .then((r: any) => { if (!cancelled) { setRooms(r.rooms); setError(""); } })
       .catch((e: any) => { if (!cancelled) { setError(errMsg(e)); timer = window.setTimeout(load, 5000); } });
     // Lamp styles are cosmetic and load on their own: until they do, every lamp keeps the default look.
-    const loadStyles = () => hass.callWS({ type: "plejd/light_styles/get" })
-      .then((r: any) => { if (!cancelled) { confirmed.current = r.styles || {}; setStyles(confirmed.current); } })
-      .catch((e: any) => {
-        if (cancelled) return;
-        console.warn("Plejd panel: could not load lamp types, retrying", e);
-        styleTimer = window.setTimeout(loadStyles, 5000);
-      });
+    const loadStyles = () => {
+      const startedAt = edits.current;
+      return hass.callWS({ type: "plejd/light_styles/get" })
+        .then((r: any) => {
+          if (cancelled || edits.current !== startedAt) return; // an edit since then already has newer data
+          confirmed.current = r.styles || {};
+          setStyles(confirmed.current);
+        })
+        .catch((e: any) => {
+          if (cancelled) return;
+          console.warn("Plejd panel: could not load lamp types, retrying", e);
+          styleTimer = window.setTimeout(loadStyles, 5000);
+        });
+    };
     load();
     loadStyles();
     return () => { cancelled = true; clearTimeout(timer); clearTimeout(styleTimer); };
   }, [hass.entities, roomsVersion]);
   const setStyle = (entity_id: string, style: LampStyle) => {
+    edits.current++;
     const seq = (saveSeq.current[entity_id] = (saveSeq.current[entity_id] || 0) + 1);
     const latest = () => saveSeq.current[entity_id] === seq;
     setStyles((cur) => ({ ...cur, [entity_id]: style }));
