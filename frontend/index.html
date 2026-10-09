@@ -44,5 +44,5 @@ const hass = {
   callService: async (...a) => console.log("service", ...a),
 };
 p.narrow = innerWidth < 600;
-p.hass = hass;
+p.hass = window.mockHass = hass;
 </script></body></html>
