@@ -48,11 +48,12 @@ const ws = {
     { room_id: "r2", name: "Vardagsrum", entity_id: "light.vardagsrum", lights: ["light.golv", "light.bord", "light.vagg"] },
   ] }; },
   // ?stylesfail=N: the first N lamp-style reads fail (the lights must still show, and the styles arrive on retry)
-  // ?slowget: reads answer after 400 ms with the snapshot taken when they were sent
+  // ?slowget[=ms]: reads answer after 400 ms (or ms) with the snapshot taken when they were sent
   "plejd/light_styles/get": () => {
     if (stylesFail-- > 0) throw new Error("storage error");
     const snapshot = { styles: { ...styles } };
-    return location.search.includes("slowget") ? new Promise((res) => setTimeout(() => res(snapshot), 400)) : snapshot;
+    const slow = new URLSearchParams(location.search).get("slowget");
+    return slow != null ? new Promise((res) => setTimeout(() => res(snapshot), Number(slow) || 400)) : snapshot;
   },
   // ?setfail: saving a lamp type fails (the tile must go back to the stored type)
   "plejd/light_styles/set": (m) => location.search.includes("setfail") ? new Promise((_, rej) => setTimeout(() => rej(new Error("storage write failed")), 300)) : (m.style ? styles[m.entity_id] = m.style : delete styles[m.entity_id], { styles }),

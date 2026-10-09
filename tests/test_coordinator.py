@@ -3441,6 +3441,32 @@ async def test_poll_faults_does_not_backfill_rooms_from_a_malformed_site(monkeyp
     assert fetches == [1, 1]  # so the next poll tries again
 
 
+@pytest.mark.parametrize("closed", [False, True])
+async def test_poll_faults_stops_backfilling_and_starts_reauth_on_rejected_credentials(monkeypatch, closed):
+    from plejd.cloud import PlejdAuthError
+
+    entry = _cloud_entry()
+    entry.data[CONF_ROOMS] = []
+    entry.data.pop(CONF_ROOM_NAMES, None)
+    c = PlejdCoordinator(_hass(), entry)
+    c._device_addresses = {"d1": 1}
+    c._closed = closed
+    started, logins = [], []
+    entry.async_start_reauth = lambda h: started.append(h)
+
+    async def _login(*a):
+        logins.append(1)
+        raise PlejdAuthError("bad password")
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _login)
+    monkeypatch.setattr(c, "_write_vector", lambda vector: asyncio.sleep(0))
+    await c._async_poll_faults(None)
+    await c._async_poll_faults(None)
+    assert logins == [1]  # no login retried every poll with credentials known to be bad
+    assert len(started) == (0 if closed else 1)  # a shut-down coordinator doesn't prompt
+    assert CONF_ROOM_NAMES not in entry.data
+
+
 async def test_poll_faults_does_not_refetch_for_a_genuinely_room_less_site(monkeypatch):
     """CONF_ROOMS present but empty (a real site with no rooms) must not trigger a fetch every poll."""
     entry = _cloud_entry()
@@ -3461,7 +3487,7 @@ async def test_poll_faults_swallows_cloud_fetch_failure(monkeypatch):
     c = PlejdCoordinator(_hass(), _cloud_entry())  # has credentials, no cached device_addresses
 
     async def _boom(*a):
-        raise coordinator_mod.PlejdAuthError("bad creds")
+        raise coordinator_mod.PlejdCloudError("cloud unreachable")  # transient; auth has its own test
 
     attempted: list[int] = []
 

@@ -117,7 +117,10 @@ function Lights({ hass }: Ctx) {
       const startedAt = edits.current;
       return hass.callWS({ type: "plejd/light_styles/get" })
         .then((r: any) => {
-          if (cancelled || edits.current !== startedAt) return; // an edit since then already has newer data
+          if (cancelled) return;
+          // An edit landed while this read was in flight, so it may predate that edit: read again
+          // instead (the rollback of a failed edit needs a confirmed baseline to fall back to).
+          if (edits.current !== startedAt) { styleTimer = window.setTimeout(loadStyles, 1000); return; }
           confirmed.current = r.styles || {};
           setStyles(confirmed.current);
         })

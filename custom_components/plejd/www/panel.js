@@ -20758,7 +20758,7 @@ function Wl({ hass: e }) {
 		}), c = () => {
 			let n = m.current;
 			return e.callWS({ type: "plejd/light_styles/get" }).then((e) => {
-				t || m.current !== n || (f.current = e.styles || {}, i(f.current));
+				t || (m.current === n ? (f.current = e.styles || {}, i(f.current)) : a = window.setTimeout(c, 1e3));
 			}).catch((e) => {
 				t || (console.warn("Plejd panel: could not load lamp types, retrying", e), a = window.setTimeout(c, 5e3));
 			});
