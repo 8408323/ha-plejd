@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { LANGS } from "../frontend/src/i18n.ts";
-import { buildBinding, buildSchedule, clampPosition, fmt, stepTemperature, triggerLabel } from "../frontend/src/logic.ts";
+import { buildBinding, buildSchedule, clampPosition, fmt, moveId, orderIds, stepTemperature, triggerLabel } from "../frontend/src/logic.ts";
 
 const en = LANGS.en[0];
 
@@ -118,4 +118,15 @@ test("every language names every device fault flag the backend can report", () =
     "boot_single_faulty_bank", "overloaded", "wrong_zcd", "uart_error", "dont_dim", "adv_timeout", "product_hw_fault_a",
     "product_hw_fault_b", "group_setting_fault"]; // const.py NOTIFY_EVENT_FLAGS
   for (const [code, [t]] of Object.entries(LANGS)) for (const f of flags) assert.ok(t.faults[f], `${code} is missing fault ${f}`);
+});
+
+test("cards follow the saved order, new ones go last in their natural order", () => {
+  assert.deepEqual(orderIds(["a", "b", "c", "d"], ["c", "a"]), ["c", "a", "b", "d"]);
+  assert.deepEqual(orderIds(["a", "b"], []), ["a", "b"]);
+});
+
+test("moving a card puts it at the target position, clamped to the list", () => {
+  assert.deepEqual(moveId(["a", "b", "c"], "a", 2), ["b", "c", "a"]);
+  assert.deepEqual(moveId(["a", "b", "c"], "c", 0), ["c", "a", "b"]);
+  assert.deepEqual(moveId(["a", "b", "c"], "b", 99), ["a", "c", "b"]);
 });

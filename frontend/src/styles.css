@@ -40,8 +40,22 @@ h3 { font-size: 13.5px; font-weight: 600; margin: 0 0 10px; }
 .rooms { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 16px; align-items: start; }
 .rooms > .card.wide { grid-column: 1 / -1; }
 .room { padding: 14px 14px 10px; }
-.room.big { grid-column: span 2; }
-.narrow .room.big { grid-column: auto; }
+.room.size-2 { grid-column: span 2; }
+.room.size-3 { grid-column: 1 / -1; }
+.narrow .room.size-2, .narrow .room.size-3 { grid-column: auto; }
+@media (max-width: 720px) { .room.size-2 { grid-column: auto; } }
+.rooms-bar { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.rooms-bar .muted { flex-basis: 100%; order: 3; }
+.room.editing { outline: 1px dashed color-mix(in srgb, var(--pl-accent) 55%, transparent); outline-offset: -1px; cursor: grab; }
+.room.dragging { opacity: .45; }
+.handle { color: var(--pl-muted); cursor: grab; font-size: 16px; user-select: none; }
+.edit-tools { display: flex; align-items: center; gap: 4px; }
+.seg { display: inline-flex; border: 1px solid var(--pl-line); border-radius: 8px; overflow: hidden; margin-left: 4px; }
+.seg button { border: 0; background: transparent; color: var(--pl-muted); padding: 4px 9px; font: inherit; font-size: 12px; cursor: pointer; }
+.seg button.on { background: var(--pl-accent); color: var(--text-primary-color, #fff); }
+input.name-input { font-weight: 600; padding: 5px 8px; }
+input.name-input.small { font-size: 12px; font-weight: 500; padding: 4px 6px; margin-bottom: 2px; }
+button.icon:disabled { opacity: .3; cursor: default; }
 input[type="range"].idle { opacity: .35; }
 .room-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
 .room-head h2 { line-height: 1.2; }

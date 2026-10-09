@@ -11,6 +11,13 @@ All notable changes to this project are documented here. The format follows
 - The dashboard speaks English, Svenska, Norsk, Dansk, Suomi and Íslenska. It follows
   your Home Assistant language by default; **Settings → Language** overrides it for
   this browser.
+- **Edit** above the room cards: rename rooms and lights, pick lamp types, reorder
+  the cards (drag, or ◀ ▶ on touch screens) and size them S/M/L, then **Save** or
+  **Cancel**. Room and light renames go to Plejd too (`plejd.update_room`, and the
+  device rename mirror). Card order and sizes are stored in Home Assistant, so every
+  browser shows the same layout.
+- Five more lamp types: downlight, chandelier, outdoor lantern, ground light and
+  post light.
 
 ### Changed
 

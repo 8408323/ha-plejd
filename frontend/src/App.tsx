@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { LANGS, T, pick } from "./i18n";
 import { DEFAULT_STYLE, LAMP_STYLES, LampStyle, lampImage } from "./lamps";
-import { BindingForm, PRESS_ACTIONS, PressRow, Trigger, buildBinding, buildSchedule, clampPosition, fmt, stepTemperature, triggerLabel } from "./logic";
+import { BindingForm, PRESS_ACTIONS, PressRow, Trigger, buildBinding, buildSchedule, clampPosition, fmt, moveId, orderIds, stepTemperature, triggerLabel } from "./logic";
 
 // Home Assistant's panel host sets `hass` (states, entity/device/area registries, callWS/callService).
 type St = { entity_id: string; state: string; attributes: Record<string, any> };
@@ -95,6 +95,11 @@ function Lights({ hass }: Ctx) {
   const [styles, setStyles] = useState<Record<string, LampStyle>>({});
   const [error, setError] = useState("");
   const [saveError, setSaveError] = useState("");
+  // Edit mode: everything is a draft until Save; Cancel drops it.
+  const [draft, setDraft] = useState<Draft | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [drag, setDrag] = useState<string | null>(null);
+  const [layout, setLayout] = useState<{ order: string[]; sizes: Record<string, number> }>({ order: [], sizes: {} });
   // Bumped by plejd_rooms_changed (fired on every Plejd entry setup: room renames/moves, site syncs).
   const [roomsVersion, setRoomsVersion] = useState(0);
   useEffect(() => {
@@ -143,6 +148,9 @@ function Lights({ hass }: Ctx) {
     };
     load();
     loadStyles();
+    // Card order/sizes are cosmetic: without them the cards just use their natural order and size.
+    hass.callWS({ type: "plejd/room_layout/get" }).then((r: any) => { if (!cancelled) setLayout(r); })
+      .catch((e: any) => console.warn("Plejd panel: could not load the card layout", e));
     return () => { cancelled = true; clearTimeout(timer); clearTimeout(styleTimer); };
   }, [hass.entities, roomsVersion]);
   const setStyle = (entity_id: string, style: LampStyle) => {
@@ -177,35 +185,125 @@ function Lights({ hass }: Ctx) {
   const roomLights = new Set(rooms.map((r) => r.entity_id));
   const grouped = new Set(rooms.flatMap((r) => r.lights));
   const others = lights.filter((s) => !roomLights.has(s.entity_id) && !grouped.has(s.entity_id)).map((s) => s.entity_id);
-  const cards = [...rooms.filter((r) => r.lights.length), ...(others.length ? [{ room_id: "", name: rooms.length ? t.other_lights : t.lights, entity_id: null, lights: others }] : [])];
+  const all: Room[] = [...rooms.filter((r) => r.lights.length), ...(others.length ? [{ room_id: "", name: rooms.length ? t.other_lights : t.lights, entity_id: null, lights: others }] : [])];
+  const view = draft ?? { order: layout.order, sizes: layout.sizes };
+  const byId = Object.fromEntries(all.map((r) => [r.room_id, r]));
+  const cards = orderIds(all.map((r) => r.room_id), view.order).map((id) => byId[id]);
+  const sizeOf = (r: Room) => view.sizes[r.room_id] ?? (r.lights.length > 3 ? 2 : 1);
+
+  const startEdit = () => {
+    const nameOf_ = (id: string) => nameOf(hass.states[id] ?? { entity_id: id, state: "", attributes: {} });
+    setDraft({
+      order: cards.map((r) => r.room_id),
+      sizes: Object.fromEntries(cards.map((r) => [r.room_id, sizeOf(r)])),
+      roomNames: Object.fromEntries(rooms.map((r) => [r.room_id, r.name])),
+      lightNames: Object.fromEntries(all.flatMap((r) => r.lights).map((id) => [id, nameOf_(id)])),
+      styles: { ...styles },
+    });
+    setSaveError("");
+  };
+  const saveEdit = async () => {
+    if (!draft) return;
+    setBusy(true);
+    setSaveError("");
+    const jobs: Promise<unknown>[] = [
+      hass.callWS({ type: "plejd/room_layout/set", order: draft.order, sizes: draft.sizes }).then((r: any) => setLayout(r)),
+    ];
+    for (const r of rooms) {
+      const title = draft.roomNames[r.room_id]?.trim();
+      if (title && title !== r.name) jobs.push(hass.callService("plejd", "update_room", { room_id: r.room_id, title }));
+    }
+    for (const [id, raw] of Object.entries(draft.lightNames)) {
+      const name = raw.trim();
+      if (!name || name === nameOf(hass.states[id] ?? { entity_id: id, state: "", attributes: {} })) continue;
+      // The device name is what Plejd shows; renaming it there is mirrored to the Plejd app too.
+      const deviceId = hass.entities?.[id]?.device_id;
+      jobs.push(deviceId
+        ? hass.callWS({ type: "config/device_registry/update", device_id: deviceId, name_by_user: name })
+        : hass.callWS({ type: "config/entity_registry/update", entity_id: id, name }));
+    }
+    for (const [id, style] of Object.entries(draft.styles)) if (style !== (styles[id] ?? DEFAULT_STYLE)) setStyle(id, style);
+    const failed = (await Promise.allSettled(jobs)).filter((r) => r.status === "rejected") as PromiseRejectedResult[];
+    setBusy(false);
+    if (failed.length) setSaveError(fmt(t.edit_save_failed, { error: failed.map((f) => errMsg(f.reason)).join("; ") }));
+    else setDraft(null);
+  };
+  const patch = (p: Partial<Draft>) => setDraft((d) => (d ? { ...d, ...p } : d));
+  const edit = draft && {
+    draft,
+    patch,
+    move: (id: string, to: number) => patch({ order: moveId(draft.order, id, to) }),
+    drag,
+    setDrag,
+  };
+
   return (
     <>
+      <div className="rooms-bar">
+        <h2 className="grow">{t.lights}</h2>
+        {draft ? (
+          <>
+            <span className="muted">{t.edit_hint}</span>
+            <button className="btn ghost" disabled={busy} onClick={() => { setDraft(null); setSaveError(""); }}>{t.cancel}</button>
+            <button className="btn" disabled={busy} onClick={saveEdit}>{busy ? t.saving : t.save}</button>
+          </>
+        ) : (
+          <button className="btn ghost" onClick={startEdit} aria-label={t.edit_lights}>✎ {t.edit}</button>
+        )}
+      </div>
       {saveError && <Card title={t.lights} wide><p className="error">{saveError}</p></Card>}
-      {cards.map((r) => <RoomCard key={r.room_id || "other"} hass={hass} room={r} styles={styles} setStyle={setStyle} />)}
+      {cards.map((r, i) => <RoomCard key={r.room_id || "other"} hass={hass} room={r} index={i} count={cards.length} size={sizeOf(r)}
+        styles={draft?.styles ?? styles} edit={edit || null} />)}
       {!cards.length && <Card title={t.lights} wide><Empty text={t.no_lights} /></Card>}
     </>
   );
 }
 
-function RoomCard({ hass, room, styles, setStyle }: Ctx & { room: Room; styles: Record<string, LampStyle>; setStyle: (id: string, s: LampStyle) => void }) {
+type Draft = { order: string[]; sizes: Record<string, number>; roomNames: Record<string, string>; lightNames: Record<string, string>; styles: Record<string, LampStyle> };
+type Edit = { draft: Draft; patch: (p: Partial<Draft>) => void; move: (id: string, to: number) => void; drag: string | null; setDrag: (id: string | null) => void };
+
+function RoomCard({ hass, room, index, count, size, styles, edit }: Ctx & {
+  room: Room; index: number; count: number; size: number; styles: Record<string, LampStyle>; edit: Edit | null;
+}) {
   const t = useT();
-  const [editing, setEditing] = useState(false);
   const members = room.lights.map((id) => hass.states[id] as St | undefined).filter(Boolean) as St[];
   const onCount = members.filter((s) => s.state === "on").length;
   const roomState = room.entity_id ? (hass.states[room.entity_id] as St | undefined) : undefined;
+  const id = room.room_id;
+  // Desktop: drag a card onto another to take its place. Touch/keyboard: the arrow buttons.
+  const dnd = edit ? {
+    draggable: true,
+    onDragStart: (e: React.DragEvent) => { e.dataTransfer.effectAllowed = "move"; edit.setDrag(id); },
+    onDragEnd: () => edit.setDrag(null),
+    onDragOver: (e: React.DragEvent) => { if (edit.drag !== null && edit.drag !== id) e.preventDefault(); },
+    onDrop: (e: React.DragEvent) => { e.preventDefault(); if (edit.drag !== null) edit.move(edit.drag, edit.draft.order.indexOf(id)); edit.setDrag(null); },
+  } : {};
   return (
-    <section className={`card room ${members.length > 3 ? "big" : ""}`}>
+    <section className={`card room size-${size} ${edit ? "editing" : ""} ${edit?.drag === id ? "dragging" : ""}`} {...dnd}>
       <div className="room-head">
+        {edit && <span className="handle" aria-hidden="true">⠿</span>}
         <div className="grow">
-          <h2>{room.name}</h2>
-          <span className="muted">{onCount ? fmt(t.on_count, { on: onCount, total: members.length }) : t.all_off}</span>
+          {edit && id ? (
+            <input className="name-input" value={edit.draft.roomNames[id] ?? room.name} aria-label={fmt(t.rename, { name: room.name })}
+              onChange={(e) => edit.patch({ roomNames: { ...edit.draft.roomNames, [id]: e.target.value } })} />
+          ) : <h2>{room.name}</h2>}
+          {!edit && <span className="muted">{onCount ? fmt(t.on_count, { on: onCount, total: members.length }) : t.all_off}</span>}
         </div>
-        <button className={`icon ${editing ? "on" : ""}`} aria-label={fmt(t.choose_lamps, { room: room.name })} title={t.lamp_types} onClick={() => setEditing(!editing)}>✎</button>
-        {roomState ? <RoomControl hass={hass} s={roomState} /> : <GroupSwitch hass={hass} members={members} name={room.name} />}
+        {edit ? (
+          <div className="edit-tools">
+            <button className="icon" disabled={index === 0} aria-label={fmt(t.move_earlier, { name: room.name })} onClick={() => edit.move(id, index - 1)}>◀</button>
+            <button className="icon" disabled={index === count - 1} aria-label={fmt(t.move_later, { name: room.name })} onClick={() => edit.move(id, index + 1)}>▶</button>
+            <div className="seg" role="radiogroup" aria-label={t.card_size}>
+              {[1, 2, 3].map((n) => (
+                <button key={n} role="radio" aria-checked={size === n} className={size === n ? "on" : ""}
+                  onClick={() => edit.patch({ sizes: { ...edit.draft.sizes, [id]: n } })}>{t.sizes[n - 1]}</button>
+              ))}
+            </div>
+          </div>
+        ) : roomState ? <RoomControl hass={hass} s={roomState} /> : <GroupSwitch hass={hass} members={members} name={room.name} />}
       </div>
       <div className="tiles">
-        {members.map((s) => <LightTile key={s.entity_id} hass={hass} s={s} style={styles[s.entity_id] ?? DEFAULT_STYLE}
-          editing={editing} setStyle={(st) => setStyle(s.entity_id, st)} />)}
+        {members.map((s) => <LightTile key={s.entity_id} hass={hass} s={s} style={styles[s.entity_id] ?? DEFAULT_STYLE} edit={edit} />)}
       </div>
     </section>
   );
@@ -234,23 +332,32 @@ function GroupSwitch({ hass, members, name }: Ctx & { members: St[]; name: strin
   return <button type="button" role="switch" aria-checked={on} aria-label={fmt(on ? t.turn_off : t.turn_on, { name })} className={`switch ${on ? "on" : ""}`} onClick={toggle} />;
 }
 
-function LightTile({ hass, s, style, editing, setStyle }: Ctx & { s: St; style: LampStyle; editing: boolean; setStyle: (s: LampStyle) => void }) {
+function LightTile({ hass, s, style, edit }: Ctx & { s: St; style: LampStyle; edit: Edit | null }) {
   const t = useT();
   const l = useLight(hass, s);
+  const id = s.entity_id;
   return (
     <div className={`tile ${l.on ? "lit" : ""} ${l.unavailable ? "off" : ""}`}>
-      <button className="lamp" onClick={l.toggle} disabled={l.unavailable} aria-label={fmt(l.on ? t.turn_off : t.turn_on, { name: nameOf(s) })}>
+      {/* No switching while editing: a tap there is meant for the fields, not the light. */}
+      <button className="lamp" onClick={l.toggle} disabled={l.unavailable || !!edit} aria-label={fmt(l.on ? t.turn_off : t.turn_on, { name: nameOf(s) })}>
         <img src={lampImage(style, l.on ? (l.dimmable ? l.pct / 100 : 1) : 0)} alt="" draggable={false} />
       </button>
-      <div className="tile-name" title={nameOf(s)}>{nameOf(s)}</div>
-      <div className="muted">{l.level}</div>
-      {editing ? (
-        <select value={style} aria-label={fmt(t.lamp_type_for, { name: nameOf(s) })} onChange={(e) => setStyle(e.target.value as LampStyle)}>
-          {LAMP_STYLES.map((st) => <option key={st} value={st}>{t.lamps[st]}</option>)}
-        </select>
-      ) : l.dimmable && (
-        <input type="range" min={1} max={100} value={l.pct} disabled={l.unavailable} className={l.on ? "" : "idle"}
-          aria-label={fmt(t.brightness, { name: nameOf(s) })} onChange={(e) => l.slide(Number(e.target.value))} />
+      {edit ? (
+        <>
+          <input className="name-input small" value={edit.draft.lightNames[id] ?? nameOf(s)} aria-label={fmt(t.rename, { name: nameOf(s) })}
+            onChange={(e) => edit.patch({ lightNames: { ...edit.draft.lightNames, [id]: e.target.value } })} />
+          <select value={style} aria-label={fmt(t.lamp_type_for, { name: nameOf(s) })}
+            onChange={(e) => edit.patch({ styles: { ...edit.draft.styles, [id]: e.target.value as LampStyle } })}>
+            {LAMP_STYLES.map((st) => <option key={st} value={st}>{t.lamps[st]}</option>)}
+          </select>
+        </>
+      ) : (
+        <>
+          <div className="tile-name" title={nameOf(s)}>{nameOf(s)}</div>
+          <div className="muted">{l.level}</div>
+          {l.dimmable && <input type="range" min={1} max={100} value={l.pct} disabled={l.unavailable} className={l.on ? "" : "idle"}
+            aria-label={fmt(t.brightness, { name: nameOf(s) })} onChange={(e) => l.slide(Number(e.target.value))} />}
+        </>
       )}
     </div>
   );

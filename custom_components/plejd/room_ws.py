@@ -20,11 +20,16 @@ from .const import CATEGORY_LIGHT, CONF_ROOM_NAMES, DOMAIN, ROOM_DEVICE_ID_PREFI
 from .schedule_ws import DATA_ENTRY
 
 # Mirrors the lamp models in frontend/src/lamps.ts.
-LIGHT_STYLES = ("bulb", "pendant", "spot", "ceiling", "strip", "table", "floor", "wall")
+LIGHT_STYLES = (
+    "bulb", "pendant", "spot", "ceiling", "strip", "table", "floor", "wall",
+    "downlight", "chandelier", "lantern", "ground", "post",
+)  # fmt: skip
+ROOM_SIZES = (1, 2, 3)  # grid columns a room card spans
 
 EVENT_ROOMS_CHANGED = f"{DOMAIN}_rooms_changed"
 
 _STORE_KEY = f"{DOMAIN}.light_styles"
+_LAYOUT_STORE_KEY = f"{DOMAIN}.room_layout"
 _DATA_STYLES_LOCK = f"{DOMAIN}_light_styles_lock"
 
 
@@ -98,10 +103,36 @@ async def ws_styles_set(hass: HomeAssistant, connection, msg) -> None:
     connection.send_result(msg["id"], {"styles": _by_entity_id(hass, stored)})
 
 
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): "plejd/room_layout/get"})
+@websocket_api.async_response
+async def ws_layout_get(hass: HomeAssistant, connection, msg) -> None:
+    layout = await Store(hass, 1, _LAYOUT_STORE_KEY).async_load() or {}
+    connection.send_result(msg["id"], {"order": layout.get("order", []), "sizes": layout.get("sizes", {})})
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "plejd/room_layout/set",
+        # Room ids in display order; "" is the "Other lights" card.
+        vol.Required("order"): [str],
+        vol.Required("sizes"): {str: vol.In(ROOM_SIZES)},
+    }
+)
+@websocket_api.async_response
+async def ws_layout_set(hass: HomeAssistant, connection, msg) -> None:
+    layout = {"order": msg["order"], "sizes": msg["sizes"]}
+    await Store(hass, 1, _LAYOUT_STORE_KEY).async_save(layout)
+    connection.send_result(msg["id"], layout)
+
+
 def async_register(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_rooms)
     websocket_api.async_register_command(hass, ws_styles_get)
     websocket_api.async_register_command(hass, ws_styles_set)
+    websocket_api.async_register_command(hass, ws_layout_get)
+    websocket_api.async_register_command(hass, ws_layout_set)
 
 
 def _entity_ids(hass: HomeAssistant, entry) -> dict[str, str]:

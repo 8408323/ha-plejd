@@ -5,7 +5,10 @@ import {
 } from "three";
 
 // The lamp models the room cards can draw; mirrors room_ws.LIGHT_STYLES.
-export const LAMP_STYLES = ["bulb", "pendant", "spot", "ceiling", "strip", "table", "floor", "wall"] as const;
+export const LAMP_STYLES = [
+  "bulb", "pendant", "spot", "ceiling", "downlight", "chandelier", "strip", "table", "floor", "wall",
+  "lantern", "ground", "post",
+] as const;
 export type LampStyle = (typeof LAMP_STYLES)[number];
 export const DEFAULT_STYLE: LampStyle = "bulb";
 
@@ -49,6 +52,16 @@ const mesh = (geo: any, mat: MeshStandardMaterial, [x, y, z] = [0, 0, 0]) => {
   return m;
 };
 
+// A cone of light under (or, flipped, above) a fixture; lit with the level by lampImage().
+function beam(radius: number, height: number, y: number, up = false) {
+  const m = mesh(new ConeGeometry(radius, height, 32, 1, true), new MeshStandardMaterial({
+    color: WARM, emissive: WARM, emissiveIntensity: 0.6, transparent: true, opacity: 0, depthWrite: false, side: DoubleSide,
+  }), [0, up ? y + height / 2 : y, 0]);
+  if (up) m.rotation.x = Math.PI;
+  m.name = "beam";
+  return m;
+}
+
 // The emitting part of a lamp: its brightness follows the light's level.
 function emitter(level: number) {
   return new MeshStandardMaterial({
@@ -82,12 +95,30 @@ const BUILDERS: Record<LampStyle, (e: MeshStandardMaterial, level: number) => [O
     g.add(mesh(new CylinderGeometry(0.75, 0.75, 0.08, 40), body, [0, 0.45, 0]));
     g.add(mesh(new CylinderGeometry(0.45, 0.38, 0.35, 32), dark, [0, 0.25, 0]));
     g.add(mesh(new CylinderGeometry(0.3, 0.3, 0.04, 32), e, [0, 0.06, 0]));
-    const beam = mesh(new ConeGeometry(0.9, 1.4, 32, 1, true), new MeshStandardMaterial({
-      color: WARM, emissive: WARM, emissiveIntensity: 0.6, transparent: true, opacity: 0, depthWrite: false, side: DoubleSide,
-    }), [0, -0.65, 0]);
-    beam.name = "beam";
-    g.add(beam);
+    g.add(beam(0.9, 1.4, -0.65));
     return [g, [0, 0, 0]];
+  },
+  downlight: (e) => {
+    const g = new Group();
+    g.add(mesh(new BoxGeometry(2.2, 0.06, 1.2), new MeshStandardMaterial({ color: 0xd8d8d8, roughness: 0.95 }), [0, 0.55, 0])); // the ceiling
+    g.add(mesh(new TorusGeometry(0.34, 0.05, 12, 40), body, [0, 0.5, 0]).rotateX(Math.PI / 2));
+    g.add(mesh(new CylinderGeometry(0.3, 0.3, 0.03, 40), e, [0, 0.5, 0]));
+    g.add(beam(0.8, 1.6, -0.3));
+    return [g, [0, 0.45, 0]];
+  },
+  chandelier: (e) => {
+    const g = new Group();
+    g.add(mesh(new CylinderGeometry(0.02, 0.02, 0.8, 8), cord, [0, 0.75, 0]));
+    g.add(mesh(new SphereGeometry(0.1, 16, 12), body, [0, 0.33, 0]));
+    g.add(mesh(new TorusGeometry(0.7, 0.03, 8, 48), body, [0, 0.1, 0]).rotateX(Math.PI / 2));
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2;
+      const [x, z] = [Math.cos(a) * 0.7, Math.sin(a) * 0.7];
+      g.add(mesh(new CylinderGeometry(0.06, 0.06, 0.14, 12), body, [x, 0.17, z]));
+      g.add(mesh(new SphereGeometry(0.11, 16, 12), e, [x, 0.32, z]));
+    }
+    g.rotation.x = 0.35;
+    return [g, [0, 0.3, 0]];
   },
   ceiling: (e) => {
     const g = new Group();
@@ -119,6 +150,34 @@ const BUILDERS: Record<LampStyle, (e: MeshStandardMaterial, level: number) => [O
     g.add(mesh(new SphereGeometry(0.16, 20, 14), e, [0, 0.6, 0]));
     g.add(mesh(new CylinderGeometry(0.35, 0.55, 0.55, 40, 1, true), shade(level), [0, 0.75, 0]));
     return [g, [0, 0.65, 0]];
+  },
+  lantern: (e) => {
+    const g = new Group();
+    g.add(mesh(new BoxGeometry(0.4, 0.7, 0.06), dark, [0, 0.05, -0.5])); // wall plate
+    g.add(mesh(new BoxGeometry(0.06, 0.06, 0.4), dark, [0, 0.25, -0.3]));
+    g.add(mesh(new BoxGeometry(0.62, 0.85, 0.62), e, [0, -0.1, 0]));
+    for (const [x, z] of [[-0.31, -0.31], [0.31, -0.31], [-0.31, 0.31], [0.31, 0.31]]) g.add(mesh(new BoxGeometry(0.05, 0.9, 0.05), dark, [x, -0.1, z]));
+    g.add(mesh(new BoxGeometry(0.72, 0.06, 0.72), dark, [0, -0.55, 0]));
+    g.add(mesh(new ConeGeometry(0.55, 0.35, 4), dark, [0, 0.5, 0]).rotateY(Math.PI / 4));
+    g.rotation.y = 0.55;
+    return [g, [0, -0.1, 0]];
+  },
+  ground: (e) => {
+    const g = new Group();
+    g.add(mesh(new CylinderGeometry(1.0, 1.0, 0.1, 48), new MeshStandardMaterial({ color: 0x4d5a3f, roughness: 1 }), [0, -0.9, 0])); // lawn
+    g.add(mesh(new CylinderGeometry(0.42, 0.42, 0.06, 40), body, [0, -0.82, 0]));
+    g.add(mesh(new CylinderGeometry(0.3, 0.3, 0.03, 40), e, [0, -0.78, 0]));
+    g.add(beam(0.8, 1.6, -0.78, true)); // tip at the lens, widening upward
+    g.rotation.x = 0.35;
+    return [g, [0, -0.7, 0]];
+  },
+  post: (e) => {
+    const g = new Group();
+    g.add(mesh(new CylinderGeometry(0.3, 0.34, 0.08, 32), dark, [0, -1.0, 0]));
+    g.add(mesh(new CylinderGeometry(0.22, 0.22, 1.5, 32), dark, [0, -0.25, 0]));
+    g.add(mesh(new CylinderGeometry(0.21, 0.21, 0.35, 32), e, [0, 0.62, 0]));
+    g.add(mesh(new CylinderGeometry(0.28, 0.28, 0.08, 32), dark, [0, 0.83, 0]));
+    return [g, [0, 0.62, 0]];
   },
   wall: (e) => {
     const g = new Group();

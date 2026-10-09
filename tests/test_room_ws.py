@@ -151,4 +151,20 @@ async def test_styles_are_empty_when_plejd_is_not_loaded():
 def test_async_register_registers_all_commands():
     hass = types.SimpleNamespace(data={})
     room_ws.async_register(hass)
-    assert {room_ws.ws_rooms, room_ws.ws_styles_get, room_ws.ws_styles_set} <= set(hass.data["ws_commands"])
+    assert {
+        room_ws.ws_rooms,
+        room_ws.ws_styles_get,
+        room_ws.ws_styles_set,
+        room_ws.ws_layout_get,
+        room_ws.ws_layout_set,
+    } <= set(hass.data["ws_commands"])
+
+
+async def test_layout_defaults_to_empty_then_round_trips():
+    hass = _hass()
+    conn = _Conn()
+    await room_ws.ws_layout_get(hass, conn, {"id": 1})
+    assert conn.result == (1, {"order": [], "sizes": {}})
+    await room_ws.ws_layout_set(hass, conn, {"id": 2, "order": ["r2", "", "r1"], "sizes": {"r1": 3, "": 1}})
+    await room_ws.ws_layout_get(hass, conn, {"id": 3})
+    assert conn.result == (3, {"order": ["r2", "", "r1"], "sizes": {"r1": 3, "": 1}})
