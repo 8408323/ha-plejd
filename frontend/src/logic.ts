@@ -1,3 +1,5 @@
+import type { T } from "./i18n"; // type-only: erased, so node can still run this file
+
 // Pure helpers kept free of React/DOM imports so tests/test_panel_logic.mjs can run them under plain node.
 
 export type Trigger = Record<string, any>;
@@ -23,31 +25,34 @@ export function stepTemperature(target: number, direction: 1 | -1, attrs: Record
   return next;
 }
 
+// Fills "{x}" placeholders in a translated string.
+export const fmt = (s: string, vars: Record<string, string | number>) => s.replace(/\{(\w+)\}/g, (_, k) => String(vars[k] ?? `{${k}}`));
+
 const pick = (triggers: Trigger[], index: string) => (index === "" ? null : triggers[Number(index)] || null);
 
 // Form -> binding payload, mirroring the backend's validation so obvious mistakes are caught
 // before a round-trip. Throws Error(message) for the user.
-export function buildBinding(form: BindingForm, triggers: Trigger[]): Record<string, any> {
-  if (!form.device) throw new Error("Pick a remote.");
+export function buildBinding(form: BindingForm, triggers: Trigger[], t: T): Record<string, any> {
+  if (!form.device) throw new Error(t.err_pick_remote);
   const up = pick(triggers, form.up);
   const down = pick(triggers, form.down);
   const stop = pick(triggers, form.stop);
-  if ((up || down) && !stop) throw new Error("Pick a release (stop) trigger.");
+  if ((up || down) && !stop) throw new Error(t.err_pick_release);
 
   const presses: Record<string, any>[] = [];
   form.presses.forEach((row, i) => {
     const trigger = pick(triggers, row.trigger);
     const extra = row.type === "scene" ? row.entity_id : row.type === "service" ? row.domain || row.service || row.data.trim() : "";
     if (!trigger && !row.type && !extra) return; // an untouched row is skipped, a half-filled one is an error
-    const n = `Press action ${i + 1}`;
-    if (!trigger) throw new Error(`${n}: pick a trigger.`);
-    if (!PRESS_ACTIONS.includes(row.type)) throw new Error(`${n}: pick an action.`);
+    const n = { n: i + 1 };
+    if (!trigger) throw new Error(fmt(t.err_press_trigger, n));
+    if (!PRESS_ACTIONS.includes(row.type)) throw new Error(fmt(t.err_press_action, n));
     const action: Record<string, any> = { type: row.type };
     if (row.type === "scene") {
-      if (!row.entity_id) throw new Error(`${n}: pick a scene.`);
+      if (!row.entity_id) throw new Error(fmt(t.err_press_scene, n));
       action.entity_id = row.entity_id;
     } else if (row.type === "service") {
-      if (!row.domain.trim() || !row.service.trim()) throw new Error(`${n}: service actions need a domain and a service.`);
+      if (!row.domain.trim() || !row.service.trim()) throw new Error(fmt(t.err_press_service, n));
       action.domain = row.domain.trim();
       action.service = row.service.trim();
       if (row.data.trim()) {
@@ -55,22 +60,22 @@ export function buildBinding(form: BindingForm, triggers: Trigger[]): Record<str
         try {
           data = JSON.parse(row.data);
         } catch {
-          throw new Error(`${n}: data must be valid JSON.`);
+          throw new Error(fmt(t.err_press_json, n));
         }
         // The backend merges it into the service call with **data, which needs a mapping.
-        if (typeof data !== "object" || data === null || Array.isArray(data)) throw new Error(`${n}: data must be a JSON object.`);
+        if (typeof data !== "object" || data === null || Array.isArray(data)) throw new Error(fmt(t.err_press_object, n));
         action.data = data;
       }
     }
     presses.push({ trigger, action });
   });
-  if (!up && !down && !presses.length) throw new Error("Pick a dim up/down trigger or add at least one press action.");
+  if (!up && !down && !presses.length) throw new Error(t.err_need_dim_or_press);
 
   // Only dimming and toggle/on/off act on the target; scene and service actions don't need one.
   const needsTarget = Boolean(up || down) || presses.some((p) => !["scene", "service"].includes(p.action.type));
   const [kind, id] = [form.target.slice(0, form.target.indexOf(":")), form.target.slice(form.target.indexOf(":") + 1)];
   const targets = kind === "light" ? { entity_id: [id] } : kind === "area" ? { area_id: [id] } : null;
-  if (needsTarget && !targets) throw new Error("Pick a light or room.");
+  if (needsTarget && !targets) throw new Error(t.err_pick_target);
 
   const binding: Record<string, any> = {};
   if (targets) binding.targets = targets;
@@ -82,13 +87,13 @@ export function buildBinding(form: BindingForm, triggers: Trigger[]): Record<str
   return binding;
 }
 
-export function buildSchedule(form: ScheduleForm) {
+export function buildSchedule(form: ScheduleForm, t: T) {
   const name = form.name.trim();
-  if (!name) throw new Error("Name is required.");
-  if (!form.days.length) throw new Error("Pick at least one day.");
-  if (!/^\d{2}:\d{2}$/.test(form.time)) throw new Error("Pick a valid time.");
-  if (form.scene === "") throw new Error("Pick a scene.");
+  if (!name) throw new Error(t.err_sched_name);
+  if (!form.days.length) throw new Error(t.err_sched_days);
+  if (!/^\d{2}:\d{2}$/.test(form.time)) throw new Error(t.err_sched_time);
+  if (form.scene === "") throw new Error(t.err_sched_scene);
   const fade = Number(form.fade === "" ? 0 : form.fade);
-  if (!Number.isInteger(fade) || fade < 0) throw new Error("Fade must be zero or a whole number of seconds.");
+  if (!Number.isInteger(fade) || fade < 0) throw new Error(t.err_sched_fade);
   return { name, days: [...form.days].sort((a, b) => a - b), time: form.time, scene: Number(form.scene), fade };
 }

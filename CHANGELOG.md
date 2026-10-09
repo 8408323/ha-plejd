@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- The dashboard speaks English, Svenska, Norsk, Dansk, Suomi and Íslenska. It follows
+  your Home Assistant language by default; **Settings → Language** overrides it for
+  this browser.
+
 ### Changed
 
 - The dashboard is rebuilt in React + Vite (`frontend/`, built to `www/panel.js`) and

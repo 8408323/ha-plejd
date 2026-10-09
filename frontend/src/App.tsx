@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from "react";
-import { DEFAULT_STYLE, LAMP_LABELS, LAMP_STYLES, LampStyle, lampImage } from "./lamps";
-import { BindingForm, PRESS_ACTIONS, PressRow, Trigger, buildBinding, buildSchedule, clampPosition, stepTemperature } from "./logic";
+import { createContext, useContext, useEffect, useRef, useState } from "react";
+import { LANGS, T, pick } from "./i18n";
+import { DEFAULT_STYLE, LAMP_STYLES, LampStyle, lampImage } from "./lamps";
+import { BindingForm, PRESS_ACTIONS, PressRow, Trigger, buildBinding, buildSchedule, clampPosition, fmt, stepTemperature } from "./logic";
 
 // Home Assistant's panel host sets `hass` (states, entity/device/area registries, callWS/callService).
 type St = { entity_id: string; state: string; attributes: Record<string, any> };
@@ -11,17 +12,13 @@ type RegCtx = Ctx & { reg: Reg };
 
 const TABS = ["devices", "automations", "settings"] as const;
 type Tab = (typeof TABS)[number];
-const TAB_LABELS: Record<Tab, string> = { devices: "Devices", automations: "Automations", settings: "Settings" };
 // Matches DIM_INTERVAL in dim_ramp.py: the same pacing the hold-to-dim ramp uses per tick.
 const DRAG_SEND_INTERVAL_MS = 100;
 const COVER_FEATURE_SET_POSITION = 4; // CoverEntityFeature.SET_POSITION
-const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]; // index 0=Mon, mirrors const.py WEEKDAYS
-const PRESS_LABELS: Record<string, string> = { toggle: "Toggle", on: "Turn on", off: "Turn off", scene: "Activate scene", service: "Call service" };
-const TRANSPORTS = [
-  ["auto", "Automatic (gateway first, Bluetooth fallback)"],
-  ["gateway", "Gateway only (remote/cloud)"],
-  ["ble", "Bluetooth only (local)"],
-];
+const TRANSPORTS = ["auto", "gateway", "ble"] as const;
+// The panel's strings, in the language picked under Settings (or HA's).
+const TCtx = createContext<T>(LANGS.en[0]);
+const useT = () => useContext(TCtx);
 
 const errMsg = (e: any) => e?.message || String(e);
 const nameOf = (s: St) => s.attributes.friendly_name || s.entity_id;
@@ -40,7 +37,12 @@ const ownerName = (hass: any, reg: Reg, s: St) => {
 
 export default function App({ hass, narrow }: { hass: any; narrow: boolean }) {
   const [tab, setTab] = useState<Tab>(() => (localStorage.getItem("plejd_tab") as Tab) || "devices");
-  const go = (t: Tab) => { setTab(t); localStorage.setItem("plejd_tab", t); };
+  const go = (x: Tab) => { setTab(x); localStorage.setItem("plejd_tab", x); };
+  // Per browser, like HA's own language setting; null follows HA.
+  const [lang, setLangState] = useState<string | null>(() => localStorage.getItem("plejd_lang"));
+  const setLang = (x: string | null) => { setLangState(x); x ? localStorage.setItem("plejd_lang", x) : localStorage.removeItem("plejd_lang"); };
+  const t = pick(hass.locale?.language ?? hass.language, lang);
+  const tabLabels: Record<Tab, string> = { devices: t.tab_devices, automations: t.tab_automations, settings: t.tab_settings };
   const [fetched, setFetched] = useState<Reg | null>(null);
   useEffect(() => {
     Promise.all([hass.callWS({ type: "config/area_registry/list" }), hass.callWS({ type: "config/device_registry/list" })])
@@ -49,11 +51,12 @@ export default function App({ hass, narrow }: { hass: any; narrow: boolean }) {
   }, []);
   const ctx = { hass, reg: fetched ?? { areas: hass.areas || {}, devices: hass.devices || {} } };
   return (
+    <TCtx.Provider value={t}>
     <div className={`page ${narrow ? "narrow" : ""}`}>
       <header>
         <h1>Plejd</h1>
         <nav className="tabs">
-          {TABS.map((t) => <button key={t} className={tab === t ? "on" : ""} onClick={() => go(t)}>{TAB_LABELS[t]}</button>)}
+          {TABS.map((x) => <button key={x} className={tab === x ? "on" : ""} onClick={() => go(x)}>{tabLabels[x]}</button>)}
         </nav>
       </header>
       {tab === "devices" && (
@@ -63,8 +66,9 @@ export default function App({ hass, narrow }: { hass: any; narrow: boolean }) {
         </div>
       )}
       {tab === "automations" && <div className="grid"><Schedules {...ctx} /><Bindings {...ctx} /></div>}
-      {tab === "settings" && <div className="grid"><Settings {...ctx} /><AddDevice {...ctx} /></div>}
+      {tab === "settings" && <div className="grid"><Settings {...ctx} /><Language lang={lang} setLang={setLang} /><AddDevice {...ctx} /></div>}
     </div>
+    </TCtx.Provider>
   );
 }
 
@@ -86,6 +90,7 @@ type Room = { room_id: string; name: string; entity_id: string | null; lights: s
 // Lights grouped by their Plejd room, as in the app. The room header drives the room's own group light
 // (one mesh command for the whole room); inside, each light is a tile drawn as its configured lamp.
 function Lights({ hass }: Ctx) {
+  const t = useT();
   const [rooms, setRooms] = useState<Room[] | null>(null);
   const [styles, setStyles] = useState<Record<string, LampStyle>>({});
   const [error, setError] = useState("");
@@ -162,27 +167,28 @@ function Lights({ hass }: Ctx) {
           else delete next[entity_id];
           return next;
         });
-        setSaveError(`Could not save the lamp type: ${errMsg(e)}`);
+        setSaveError(fmt(t.lamp_save_failed, { error: errMsg(e) }));
       })
       .finally(() => { pendingSaves.current--; });
   };
 
   const lights = plejdStates(hass, "light");
-  if (rooms === null) return <Card title="Lights" wide><Empty text={error ? `Waiting for Plejd… (${error})` : "Loading…"} /></Card>;
+  if (rooms === null) return <Card title={t.lights} wide><Empty text={error ? fmt(t.waiting, { error }) : t.loading} /></Card>;
   const roomLights = new Set(rooms.map((r) => r.entity_id));
   const grouped = new Set(rooms.flatMap((r) => r.lights));
   const others = lights.filter((s) => !roomLights.has(s.entity_id) && !grouped.has(s.entity_id)).map((s) => s.entity_id);
-  const cards = [...rooms.filter((r) => r.lights.length), ...(others.length ? [{ room_id: "", name: rooms.length ? "Other lights" : "Lights", entity_id: null, lights: others }] : [])];
+  const cards = [...rooms.filter((r) => r.lights.length), ...(others.length ? [{ room_id: "", name: rooms.length ? t.other_lights : t.lights, entity_id: null, lights: others }] : [])];
   return (
     <>
-      {saveError && <Card title="Lights" wide><p className="error">{saveError}</p></Card>}
+      {saveError && <Card title={t.lights} wide><p className="error">{saveError}</p></Card>}
       {cards.map((r) => <RoomCard key={r.room_id || "other"} hass={hass} room={r} styles={styles} setStyle={setStyle} />)}
-      {!cards.length && <Card title="Lights" wide><Empty text="No Plejd lights found." /></Card>}
+      {!cards.length && <Card title={t.lights} wide><Empty text={t.no_lights} /></Card>}
     </>
   );
 }
 
 function RoomCard({ hass, room, styles, setStyle }: Ctx & { room: Room; styles: Record<string, LampStyle>; setStyle: (id: string, s: LampStyle) => void }) {
+  const t = useT();
   const [editing, setEditing] = useState(false);
   const members = room.lights.map((id) => hass.states[id] as St | undefined).filter(Boolean) as St[];
   const onCount = members.filter((s) => s.state === "on").length;
@@ -192,9 +198,9 @@ function RoomCard({ hass, room, styles, setStyle }: Ctx & { room: Room; styles: 
       <div className="room-head">
         <div className="grow">
           <h2>{room.name}</h2>
-          <span className="muted">{onCount ? `${onCount} of ${members.length} on` : "All off"}</span>
+          <span className="muted">{onCount ? fmt(t.on_count, { on: onCount, total: members.length }) : t.all_off}</span>
         </div>
-        <button className={`icon ${editing ? "on" : ""}`} aria-label={`Choose lamp types in ${room.name}`} title="Lamp types" onClick={() => setEditing(!editing)}>✎</button>
+        <button className={`icon ${editing ? "on" : ""}`} aria-label={fmt(t.choose_lamps, { room: room.name })} title={t.lamp_types} onClick={() => setEditing(!editing)}>✎</button>
         {roomState ? <RoomControl hass={hass} s={roomState} /> : <GroupSwitch hass={hass} members={members} name={room.name} />}
       </div>
       <div className="tiles">
@@ -207,12 +213,13 @@ function RoomCard({ hass, room, styles, setStyle }: Ctx & { room: Room; styles: 
 
 // The Plejd room light: a switch, plus a slider when any member dims.
 function RoomControl({ hass, s }: Ctx & { s: St }) {
+  const t = useT();
   const l = useLight(hass, s);
   return (
     <div className="room-control">
       {l.dimmable && <input type="range" min={1} max={100} value={l.pct} disabled={l.unavailable} className={l.on ? "" : "idle"}
-        aria-label={`Brightness ${nameOf(s)}`} onChange={(e) => l.slide(Number(e.target.value))} />}
-      <button type="button" role="switch" aria-checked={l.on} aria-label={`${l.on ? "Turn off" : "Turn on"} ${nameOf(s)}`}
+        aria-label={fmt(t.brightness, { name: nameOf(s) })} onChange={(e) => l.slide(Number(e.target.value))} />}
+      <button type="button" role="switch" aria-checked={l.on} aria-label={fmt(l.on ? t.turn_off : t.turn_on, { name: nameOf(s) })}
         className={`switch ${l.on ? "on" : ""}`} disabled={l.unavailable} onClick={l.toggle} />
     </div>
   );
@@ -220,28 +227,30 @@ function RoomControl({ hass, s }: Ctx & { s: St }) {
 
 // Lights outside any Plejd room have no group light; switch them together with one service call.
 function GroupSwitch({ hass, members, name }: Ctx & { members: St[]; name: string }) {
+  const t = useT();
   const on = members.some((s) => s.state === "on");
   const toggle = () => hass.callService("light", on ? "turn_off" : "turn_on", { entity_id: members.map((s) => s.entity_id) })
     .catch((e: any) => console.warn("Plejd panel: failed to switch", name, e));
-  return <button type="button" role="switch" aria-checked={on} aria-label={`${on ? "Turn off" : "Turn on"} ${name}`} className={`switch ${on ? "on" : ""}`} onClick={toggle} />;
+  return <button type="button" role="switch" aria-checked={on} aria-label={fmt(on ? t.turn_off : t.turn_on, { name })} className={`switch ${on ? "on" : ""}`} onClick={toggle} />;
 }
 
 function LightTile({ hass, s, style, editing, setStyle }: Ctx & { s: St; style: LampStyle; editing: boolean; setStyle: (s: LampStyle) => void }) {
+  const t = useT();
   const l = useLight(hass, s);
   return (
     <div className={`tile ${l.on ? "lit" : ""} ${l.unavailable ? "off" : ""}`}>
-      <button className="lamp" onClick={l.toggle} disabled={l.unavailable} aria-label={`${l.on ? "Turn off" : "Turn on"} ${nameOf(s)}`}>
+      <button className="lamp" onClick={l.toggle} disabled={l.unavailable} aria-label={fmt(l.on ? t.turn_off : t.turn_on, { name: nameOf(s) })}>
         <img src={lampImage(style, l.on ? (l.dimmable ? l.pct / 100 : 1) : 0)} alt="" draggable={false} />
       </button>
       <div className="tile-name" title={nameOf(s)}>{nameOf(s)}</div>
       <div className="muted">{l.level}</div>
       {editing ? (
-        <select value={style} aria-label={`Lamp type for ${nameOf(s)}`} onChange={(e) => setStyle(e.target.value as LampStyle)}>
-          {LAMP_STYLES.map((st) => <option key={st} value={st}>{LAMP_LABELS[st]}</option>)}
+        <select value={style} aria-label={fmt(t.lamp_type_for, { name: nameOf(s) })} onChange={(e) => setStyle(e.target.value as LampStyle)}>
+          {LAMP_STYLES.map((st) => <option key={st} value={st}>{t.lamps[st]}</option>)}
         </select>
       ) : l.dimmable && (
         <input type="range" min={1} max={100} value={l.pct} disabled={l.unavailable} className={l.on ? "" : "idle"}
-          aria-label={`Brightness ${nameOf(s)}`} onChange={(e) => l.slide(Number(e.target.value))} />
+          aria-label={fmt(t.brightness, { name: nameOf(s) })} onChange={(e) => l.slide(Number(e.target.value))} />
       )}
     </div>
   );
@@ -250,6 +259,7 @@ function LightTile({ hass, s, style, editing, setStyle }: Ctx & { s: St; style: 
 // Optimistic on/brightness until hass's own push catches up: a repeated click lands well within the
 // round-trip, so reading hass.states would resend the pre-click state instead of alternating.
 function useLight(hass: any, s: St) {
+  const t = useT();
   const id = s.entity_id;
   const unavailable = s.state === "unavailable";
   const bri = s.attributes.brightness;
@@ -270,7 +280,7 @@ function useLight(hass: any, s: St) {
   const on = onOverride ?? realOn;
   const pct = pctOverride ?? realPct;
   const dimmable = Array.isArray(s.attributes.supported_color_modes) ? s.attributes.supported_color_modes.includes("brightness") : bri != null;
-  const level = unavailable ? "unavailable" : on && bri != null ? `${pct}%` : on ? "on" : "off";
+  const level = unavailable ? t.state_unavailable : on && bri != null ? `${pct}%` : on ? t.state_on : t.state_off;
 
   const toggle = () => {
     if (unavailable) return;
@@ -317,16 +327,18 @@ function useLight(hass: any, s: St) {
 }
 
 function Climate({ hass }: Ctx) {
+  const t = useT();
   const climates = plejdStates(hass, "climate");
   return (
-    <Card title="Climate" count={climates.length}>
+    <Card title={t.climate} count={climates.length}>
       {climates.map((s) => <ClimateRow key={s.entity_id} hass={hass} s={s} />)}
-      {!climates.length && <Empty text="No Plejd thermostats found." />}
+      {!climates.length && <Empty text={t.no_climate} />}
     </Card>
   );
 }
 
 function ClimateRow({ hass, s }: Ctx & { s: St }) {
+  const t = useT();
   const real = s.attributes.temperature;
   // Optimistic setpoint so quick taps accumulate instead of all stepping from the same stale value.
   const [override, setOverride] = useState<number | null>(null);
@@ -344,24 +356,26 @@ function ClimateRow({ hass, s }: Ctx & { s: St }) {
   return (
     <div className="row line">
       <span className="grow">{nameOf(s)}</span>
-      <button className="btn small" disabled={disabled} onClick={() => step(-1)} aria-label="Decrease target temperature">−</button>
+      <button className="btn small" disabled={disabled} onClick={() => step(-1)} aria-label={t.temp_down}>−</button>
       <span className="temp">{target != null ? `${target}°C` : "—"}</span>
-      <button className="btn small" disabled={disabled} onClick={() => step(1)} aria-label="Increase target temperature">+</button>
+      <button className="btn small" disabled={disabled} onClick={() => step(1)} aria-label={t.temp_up}>+</button>
     </div>
   );
 }
 
 function Covers({ hass }: Ctx) {
+  const t = useT();
   const covers = plejdStates(hass, "cover");
   return (
-    <Card title="Covers" count={covers.length}>
+    <Card title={t.covers} count={covers.length}>
       {covers.map((s) => <CoverRow key={s.entity_id} hass={hass} s={s} />)}
-      {!covers.length && <Empty text="No Plejd covers found." />}
+      {!covers.length && <Empty text={t.no_covers} />}
     </Card>
   );
 }
 
 function CoverRow({ hass, s }: Ctx & { s: St }) {
+  const t = useT();
   const id = s.entity_id;
   const unavailable = s.state === "unavailable";
   const position = clampPosition(s.attributes.current_position);
@@ -399,41 +413,43 @@ function CoverRow({ hass, s }: Ctx & { s: St }) {
     <div className="row">
       <div className="line">
         <span className="grow">{nameOf(s)}</span>
-        <span className="count">{unavailable ? "unavailable" : position != null ? `${position}%` : s.state}</span>
+        <span className="count">{unavailable ? t.state_unavailable : position != null ? `${position}%` : ({ open: t.cover_open, closed: t.cover_closed, opening: t.cover_opening, closing: t.cover_closing } as Record<string, string>)[s.state] ?? s.state}</span>
       </div>
       <div className="line" style={{ marginTop: 8 }}>
-        <button className="btn" disabled={unavailable} onClick={() => command("open_cover", {}, 100)}>Open</button>
-        <button className="btn ghost" disabled={unavailable} onClick={() => command("stop_cover", {}, null)}>Stop</button>
-        <button className="btn" disabled={unavailable} onClick={() => command("close_cover", {}, 0)}>Close</button>
+        <button className="btn" disabled={unavailable} onClick={() => command("open_cover", {}, 100)}>{t.open}</button>
+        <button className="btn ghost" disabled={unavailable} onClick={() => command("stop_cover", {}, null)}>{t.stop}</button>
+        <button className="btn" disabled={unavailable} onClick={() => command("close_cover", {}, 0)}>{t.close}</button>
         {canSetPosition && <input ref={slider} type="range" min={0} max={100} value={drag ?? known ?? 50} disabled={unavailable}
-          aria-label={`Position ${nameOf(s)}`} onChange={(e) => setDrag(Number(e.target.value))} onPointerCancel={() => setDrag(null)} />}
+          aria-label={fmt(t.position, { name: nameOf(s) })} onChange={(e) => setDrag(Number(e.target.value))} onPointerCancel={() => setDrag(null)} />}
       </div>
     </div>
   );
 }
 
 function Scenes({ hass }: Ctx) {
+  const t = useT();
   const scenes = plejdStates(hass, "scene");
   const [error, setError] = useState("");
   const activate = (id: string) => {
     setError("");
-    hass.callService("scene", "turn_on", { entity_id: id }).catch((e: any) => setError(`Could not activate scene: ${errMsg(e)}`));
+    hass.callService("scene", "turn_on", { entity_id: id }).catch((e: any) => setError(fmt(t.scene_failed, { error: errMsg(e) })));
   };
   return (
-    <Card title="Scenes" count={scenes.length}>
+    <Card title={t.scenes} count={scenes.length}>
       {scenes.map((s) => (
         <div key={s.entity_id} className="row line">
           <span className="grow">{nameOf(s)}</span>
-          <button className="btn" onClick={() => activate(s.entity_id)}>Activate</button>
+          <button className="btn" onClick={() => activate(s.entity_id)}>{t.activate}</button>
         </div>
       ))}
-      {!scenes.length && <Empty text="No Plejd scenes found." />}
+      {!scenes.length && <Empty text={t.no_scenes} />}
       {error && <p className="error">{error}</p>}
     </Card>
   );
 }
 
 function Motion({ hass, reg }: RegCtx) {
+  const t = useT();
   const sensors = plejdStates(hass, "binary_sensor", (s) => s.attributes.device_class === "motion");
   const lux = (s: St) => {
     const deviceId = hass.entities?.[s.entity_id]?.device_id;
@@ -442,29 +458,30 @@ function Motion({ hass, reg }: RegCtx) {
     return sensor && !["unavailable", "unknown"].includes(sensor.state) ? ` · ${sensor.state} lx` : "";
   };
   return (
-    <Card title="Motion & illuminance" count={sensors.length}>
+    <Card title={t.motion} count={sensors.length}>
       {sensors.map((s) => (
         <div key={s.entity_id} className="row line">
           <span className={`dot ${s.state === "on" ? "on" : ""}`} />
           <span className="grow">{ownerName(hass, reg, s)}</span>
-          <span className="count">{["unavailable", "unknown"].includes(s.state) ? "Unavailable" : s.state === "on" ? "Detected" : "Clear"}{lux(s)}</span>
+          <span className="count">{["unavailable", "unknown"].includes(s.state) ? t.unavailable : s.state === "on" ? t.detected : t.clear}{lux(s)}</span>
         </div>
       ))}
-      {!sensors.length && <Empty text="No motion sensors found." />}
+      {!sensors.length && <Empty text={t.no_motion} />}
     </Card>
   );
 }
 
 function Health({ hass, reg }: RegCtx) {
+  const t = useT();
   const faulted = plejdStates(hass, "binary_sensor", (s) => s.attributes.device_class === "problem" && s.state === "on")
     .map((s) => ({ id: s.entity_id, name: ownerName(hass, reg, s), flags: (s.attributes.active_faults || []).map((f: string) => f.replace(/_/g, " ")).join(", ") }))
     .sort(byName);
   return (
-    <Card title="Device health" count={faulted.length}>
+    <Card title={t.health} count={faulted.length}>
       {faulted.map((f) => (
         <div key={f.id} className="row line"><span className="dot bad" /><span className="grow">{f.name}</span><span className="count">{f.flags}</span></div>
       ))}
-      {!faulted.length && <Empty text="All devices healthy." />}
+      {!faulted.length && <Empty text={t.all_healthy} />}
     </Card>
   );
 }
@@ -475,6 +492,7 @@ type Schedule = { id: number; name: string; days: number[]; time: string; scene:
 const EMPTY_SCHEDULE = { name: "", days: [] as number[], time: "07:00", scene: "", fade: "0" };
 
 function Schedules({ hass }: Ctx) {
+  const t = useT();
   // null until loaded; a failed load offers Retry rather than an add form with no scene list.
   const [list, setList] = useState<Schedule[] | null>(null);
   const [scenes, setScenes] = useState<{ index: number; name: string }[]>([]);
@@ -488,7 +506,7 @@ function Schedules({ hass }: Ctx) {
     setLoadError("");
     hass.callWS({ type: "plejd/schedules/list" })
       .then((r: any) => { setList(r.schedules || []); setScenes(r.scenes || []); })
-      .catch((e: any) => setLoadError(`Could not load schedules: ${errMsg(e)}`));
+      .catch((e: any) => setLoadError(fmt(t.schedules_load_failed, { error: errMsg(e) })));
   };
   useEffect(load, []);
 
@@ -498,7 +516,7 @@ function Schedules({ hass }: Ctx) {
       const r = await hass.callWS(msg);
       setList(r.schedules || []);
       // Saved, but the entry didn't reload: the on-device event may not match yet, so say so.
-      setNotice(r.reload_failed || (after ? "Saved." : ""));
+      setNotice(r.reload_failed || (after ? t.saved : ""));
       after?.();
     } catch (e) {
       setError(errMsg(e));
@@ -508,51 +526,51 @@ function Schedules({ hass }: Ctx) {
   };
   const add = () => {
     let payload;
-    try { payload = buildSchedule(form); } catch (e) { setError(errMsg(e)); setNotice(""); return; }
+    try { payload = buildSchedule(form, t); } catch (e) { setError(errMsg(e)); setNotice(""); return; }
     run({ type: "plejd/schedules/add", ...payload }, () => setForm(EMPTY_SCHEDULE));
   };
-  const sceneName = (i: number) => scenes.find((s) => s.index === i)?.name || `Scene ${i}`;
+  const sceneName = (i: number) => scenes.find((s) => s.index === i)?.name || fmt(t.scene_n, { n: i });
   const set = (patch: Partial<typeof form>) => setForm({ ...form, ...patch });
 
   return (
-    <Card title="Schedules" wide>
-      <p className="lead">Run a scene automatically on a weekly schedule, straight from the mesh — no automation needed.</p>
+    <Card title={t.schedules} wide>
+      <p className="lead">{t.schedules_lead}</p>
       {list === null ? (
-        loadError ? <><p className="error">{loadError}</p><div className="actions"><button className="btn" onClick={load}>Retry</button></div></> : <Empty text="Loading…" />
+        loadError ? <><p className="error">{loadError}</p><div className="actions"><button className="btn" onClick={load}>{t.retry}</button></div></> : <Empty text={t.loading} />
       ) : (
         <>
           {list.map((s) => (
             <div key={s.id} className="row line">
               <div className="grow">
                 <div>{s.name}</div>
-                <div className="muted">{s.days?.length ? s.days.map((d) => WEEKDAYS[d]).join(", ") : "—"} · {s.time} · {sceneName(s.scene)}{s.fade ? ` · ${s.fade}s fade` : ""}</div>
+                <div className="muted">{s.days?.length ? s.days.map((d) => t.weekdays[d]).join(", ") : "—"} · {s.time} · {sceneName(s.scene)}{s.fade ? ` · ${fmt(t.fade_s, { n: s.fade })}` : ""}</div>
               </div>
-              <button className="btn danger" disabled={busy} onClick={() => run({ type: "plejd/schedules/delete", schedule_id: s.id })}>Delete</button>
+              <button className="btn danger" disabled={busy} onClick={() => run({ type: "plejd/schedules/delete", schedule_id: s.id })}>{t.delete}</button>
             </div>
           ))}
-          {!list.length && <Empty text="No schedules yet." />}
+          {!list.length && <Empty text={t.no_schedules} />}
           <div className="form">
-            <h3>Add a schedule</h3>
+            <h3>{t.add_schedule_title}</h3>
             <div className="fields">
-              <label className="f"><span>Name</span><input value={form.name} placeholder="Evening lights" onChange={(e) => set({ name: e.target.value })} /></label>
-              <label className="f"><span>Scene</span>
+              <label className="f"><span>{t.name}</span><input value={form.name} placeholder={t.name_placeholder} onChange={(e) => set({ name: e.target.value })} /></label>
+              <label className="f"><span>{t.scene}</span>
                 <select value={form.scene} onChange={(e) => set({ scene: e.target.value })}>
-                  <option value="">Select a scene…</option>
+                  <option value="">{t.select_scene}</option>
                   {scenes.map((s) => <option key={s.index} value={s.index}>{s.name}</option>)}
                 </select>
               </label>
-              <label className="f"><span>Time</span><input type="time" value={form.time} onChange={(e) => set({ time: e.target.value })} /></label>
-              <label className="f"><span>Fade (seconds, optional)</span><input type="number" min={0} value={form.fade} onChange={(e) => set({ fade: e.target.value })} /></label>
+              <label className="f"><span>{t.time}</span><input type="time" value={form.time} onChange={(e) => set({ time: e.target.value })} /></label>
+              <label className="f"><span>{t.fade_optional}</span><input type="number" min={0} value={form.fade} onChange={(e) => set({ fade: e.target.value })} /></label>
             </div>
-            <span className="label" style={{ marginTop: 10 }}>Days</span>
+            <span className="label" style={{ marginTop: 10 }}>{t.days}</span>
             <div className="checks">
-              {WEEKDAYS.map((label, i) => (
+              {t.weekdays.map((label, i) => (
                 <label key={i}><input type="checkbox" checked={form.days.includes(i)}
                   onChange={(e) => set({ days: e.target.checked ? [...form.days, i] : form.days.filter((d) => d !== i) })} />{label}</label>
               ))}
             </div>
             {error ? <p className="error">{error}</p> : notice && <p className="notice">{notice}</p>}
-            <div className="actions"><button className="btn" disabled={busy} onClick={add}>{busy ? "Saving…" : "Add schedule"}</button></div>
+            <div className="actions"><button className="btn" disabled={busy} onClick={add}>{busy ? t.saving : t.add_schedule}</button></div>
           </div>
         </>
       )}
@@ -569,6 +587,7 @@ const triggerLabel = (t: Trigger) => {
 };
 
 function Bindings({ hass, reg }: RegCtx) {
+  const t = useT();
   // null until loaded. Saving sends the full list as a replacement, so never save from a failed load.
   const [list, setList] = useState<any[] | null>(null);
   const [loadError, setLoadError] = useState("");
@@ -582,7 +601,7 @@ function Bindings({ hass, reg }: RegCtx) {
     setLoadError("");
     hass.callWS({ type: "plejd/dim_bindings/list" })
       .then((r: any) => setList(r.bindings || []))
-      .catch((e: any) => setLoadError(`Could not load bindings: ${errMsg(e)}`));
+      .catch((e: any) => setLoadError(fmt(t.bindings_load_failed, { error: errMsg(e) })));
   };
   useEffect(load, []);
 
@@ -595,7 +614,7 @@ function Bindings({ hass, reg }: RegCtx) {
       const r = await hass.callWS({ type: "plejd/device_triggers", device_id: device });
       setTriggers((cur) => ({ ...cur, [device]: { triggers: r.triggers || [], kind: r.device_kind || "remote" } }));
     } catch (e) {
-      setError(`Could not load triggers: ${errMsg(e)}`);
+      setError(fmt(t.triggers_load_failed, { error: errMsg(e) }));
     }
   };
   const save = async (bindings: any[], resetForm: boolean) => {
@@ -603,7 +622,7 @@ function Bindings({ hass, reg }: RegCtx) {
     try {
       const r = await hass.callWS({ type: "plejd/dim_bindings/save", bindings });
       setList(r.bindings || []);
-      setNotice("Saved.");
+      setNotice(t.saved);
       if (resetForm) setForm(EMPTY_BINDING); // a delete must not wipe an in-progress add
     } catch (e) {
       setError(errMsg(e));
@@ -613,7 +632,7 @@ function Bindings({ hass, reg }: RegCtx) {
   };
   const add = () => {
     try {
-      save([...list!, buildBinding(form, triggers[form.device]?.triggers || [])], true);
+      save([...list!, buildBinding(form, triggers[form.device]?.triggers || [], t)], true);
     } catch (e) {
       setError(errMsg(e)); setNotice("");
     }
@@ -622,18 +641,18 @@ function Bindings({ hass, reg }: RegCtx) {
   const areaName = (id: string) => reg.areas[id]?.name || id;
   const entityName = (id: string) => hass.states[id]?.attributes.friendly_name || id;
   const targetName = (b: any) => {
-    const t = b.targets || {};
+    const tg = b.targets || {};
     const names = [
-      ...[].concat(t.entity_id || []).map(entityName),
-      ...[].concat(t.area_id || []).map(areaName),
-      ...[].concat(t.device_id || []).map((id: string) => deviceName(reg, id)),
+      ...[].concat(tg.entity_id || []).map(entityName),
+      ...[].concat(tg.area_id || []).map(areaName),
+      ...[].concat(tg.device_id || []).map((id: string) => deviceName(reg, id)),
     ];
     return names.length ? names.join(", ") : "—";
   };
   const summary = (b: any) => {
     const parts = [["up", "down", "stop"].filter((k) => b[k]).join(" / ")].filter(Boolean);
     const n = (b.presses || []).length;
-    if (n) parts.push(`${n} press action${n === 1 ? "" : "s"}`);
+    if (n) parts.push(n === 1 ? t.press_count_one : fmt(t.press_count, { n }));
     const remote = (b.up || b.down || b.stop || b.presses?.[0]?.trigger)?.device_id;
     return `${remote ? deviceName(reg, remote) : "—"} · ${parts.join(", ") || "—"}`;
   };
@@ -647,38 +666,39 @@ function Bindings({ hass, reg }: RegCtx) {
   const dev = triggers[form.device];
   const kind = dev?.kind || "remote";
   const triggerOptions = (
-    <><option value="">(none)</option>{(dev?.triggers || []).map((t, i) => <option key={i} value={i}>{triggerLabel(t)}</option>)}</>
+    <><option value="">{t.none_opt}</option>{(dev?.triggers || []).map((tr, i) => <option key={i} value={i}>{triggerLabel(tr)}</option>)}</>
   );
+  const pressLabels: Record<string, string> = { toggle: t.press_toggle, on: t.press_on, off: t.press_off, scene: t.press_scene, service: t.press_service };
   const setPress = (i: number, patch: Partial<PressRow>) =>
     setForm({ ...form, presses: form.presses.map((p, j) => (j === i ? { ...p, ...patch } : p)) });
 
   return (
-    <Card title="Remote dim bindings" wide>
-      <p className="lead">Bind a dimmer remote's hold/release to smooth dimming of a light or a whole room, and/or map any of its other triggers to an instant press action.</p>
+    <Card title={t.bindings} wide>
+      <p className="lead">{t.bindings_lead}</p>
       {list === null ? (
-        loadError ? <><p className="error">{loadError}</p><div className="actions"><button className="btn" onClick={load}>Retry</button></div></> : <Empty text="Loading…" />
+        loadError ? <><p className="error">{loadError}</p><div className="actions"><button className="btn" onClick={load}>{t.retry}</button></div></> : <Empty text={t.loading} />
       ) : (
         <>
           {list.map((b) => (
             <div key={b.id} className="row line">
               <div className="grow"><div>{targetName(b)}</div><div className="muted">{summary(b)}</div></div>
-              <button className="btn danger" disabled={busy} onClick={() => save(list.filter((x) => String(x.id) !== String(b.id)), false)}>Delete</button>
+              <button className="btn danger" disabled={busy} onClick={() => save(list.filter((x) => String(x.id) !== String(b.id)), false)}>{t.delete}</button>
             </div>
           ))}
-          {!list.length && <Empty text="No bindings yet." />}
+          {!list.length && <Empty text={t.no_bindings} />}
           <div className="form">
-            <h3>Add a binding</h3>
+            <h3>{t.add_binding_title}</h3>
             <div className="fields">
-              <label className="f"><span>Light or room</span>
+              <label className="f"><span>{t.light_or_room}</span>
                 <select value={form.target} onChange={(e) => setForm({ ...form, target: e.target.value })}>
-                  <option value="">Select a target…</option>
-                  <optgroup label="Lights">{lights.map((l) => <option key={l.id} value={`light:${l.id}`}>{l.name}</option>)}</optgroup>
-                  <optgroup label="Rooms">{areas.map((a) => <option key={a.id} value={`area:${a.id}`}>{a.name}</option>)}</optgroup>
+                  <option value="">{t.select_target}</option>
+                  <optgroup label={t.lights}>{lights.map((l) => <option key={l.id} value={`light:${l.id}`}>{l.name}</option>)}</optgroup>
+                  <optgroup label={t.rooms}>{areas.map((a) => <option key={a.id} value={`area:${a.id}`}>{a.name}</option>)}</optgroup>
                 </select>
               </label>
-              <label className="f"><span>Remote</span>
+              <label className="f"><span>{t.remote}</span>
                 <select value={form.device} onChange={(e) => pickDevice(e.target.value)}>
-                  <option value="">Select a remote…</option>
+                  <option value="">{t.select_remote}</option>
                   {devices.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
                 </select>
               </label>
@@ -687,34 +707,34 @@ function Bindings({ hass, reg }: RegCtx) {
               <>
                 {kind === "remote" ? (
                   <div className="fields">
-                    <label className="f"><span>Dim up (hold)</span><select value={form.up} onChange={(e) => setForm({ ...form, up: e.target.value })}>{triggerOptions}</select></label>
-                    <label className="f"><span>Dim down (hold)</span><select value={form.down} onChange={(e) => setForm({ ...form, down: e.target.value })}>{triggerOptions}</select></label>
-                    <label className="f"><span>Release (stop)</span><select value={form.stop} onChange={(e) => setForm({ ...form, stop: e.target.value })}>{triggerOptions}</select></label>
+                    <label className="f"><span>{t.dim_up}</span><select value={form.up} onChange={(e) => setForm({ ...form, up: e.target.value })}>{triggerOptions}</select></label>
+                    <label className="f"><span>{t.dim_down}</span><select value={form.down} onChange={(e) => setForm({ ...form, down: e.target.value })}>{triggerOptions}</select></label>
+                    <label className="f"><span>{t.release}</span><select value={form.stop} onChange={(e) => setForm({ ...form, stop: e.target.value })}>{triggerOptions}</select></label>
                   </div>
                 ) : (
-                  <p className="muted">This is a {kind === "door_window" ? "door/window" : "motion"} sensor, not a dimmer remote — use a press action below to react to it.</p>
+                  <p className="muted">{kind === "door_window" ? t.sensor_door : t.sensor_motion}</p>
                 )}
-                {dev && !dev.triggers.length && <p className="muted">This device exposes no triggers.</p>}
+                {dev && !dev.triggers.length && <p className="muted">{t.no_triggers}</p>}
                 <div className="line" style={{ marginTop: 14 }}>
-                  <span className="label grow" style={{ margin: 0 }}>Press actions</span>
-                  <button className="btn" onClick={() => setForm({ ...form, presses: [...form.presses, EMPTY_PRESS] })}>+ Add press action</button>
+                  <span className="label grow" style={{ margin: 0 }}>{t.press_actions}</span>
+                  <button className="btn" onClick={() => setForm({ ...form, presses: [...form.presses, EMPTY_PRESS] })}>{t.add_press}</button>
                 </div>
                 {form.presses.map((p, i) => (
                   <div key={i} className="box">
                     <div className="fields press" style={{ marginTop: 0 }}>
-                      <label className="f"><span>Trigger</span><select value={p.trigger} onChange={(e) => setPress(i, { trigger: e.target.value })}>{triggerOptions}</select></label>
-                      <label className="f"><span>Action</span>
+                      <label className="f"><span>{t.trigger}</span><select value={p.trigger} onChange={(e) => setPress(i, { trigger: e.target.value })}>{triggerOptions}</select></label>
+                      <label className="f"><span>{t.action}</span>
                         <select value={p.type} onChange={(e) => setPress(i, { type: e.target.value })}>
-                          <option value="">Select an action…</option>
-                          {PRESS_ACTIONS.map((a) => <option key={a} value={a}>{PRESS_LABELS[a]}</option>)}
+                          <option value="">{t.select_action}</option>
+                          {PRESS_ACTIONS.map((a) => <option key={a} value={a}>{pressLabels[a]}</option>)}
                         </select>
                       </label>
-                      <button className="btn danger" aria-label="Remove press action" onClick={() => setForm({ ...form, presses: form.presses.filter((_, j) => j !== i) })}>✕</button>
+                      <button className="btn danger" aria-label={t.remove_press} onClick={() => setForm({ ...form, presses: form.presses.filter((_, j) => j !== i) })}>✕</button>
                     </div>
                     {p.type === "scene" && (
-                      <label className="f" style={{ marginTop: 8 }}><span>Scene</span>
+                      <label className="f" style={{ marginTop: 8 }}><span>{t.scene}</span>
                         <select value={p.entity_id} onChange={(e) => setPress(i, { entity_id: e.target.value })}>
-                          <option value="">Select a scene…</option>
+                          <option value="">{t.select_scene}</option>
                           {allScenes.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
                         </select>
                       </label>
@@ -722,19 +742,19 @@ function Bindings({ hass, reg }: RegCtx) {
                     {p.type === "service" && (
                       <>
                         <div className="fields">
-                          <label className="f"><span>Domain</span><input value={p.domain} placeholder="light" onChange={(e) => setPress(i, { domain: e.target.value })} /></label>
-                          <label className="f"><span>Service</span><input value={p.service} placeholder="turn_on" onChange={(e) => setPress(i, { service: e.target.value })} /></label>
+                          <label className="f"><span>{t.domain}</span><input value={p.domain} placeholder="light" onChange={(e) => setPress(i, { domain: e.target.value })} /></label>
+                          <label className="f"><span>{t.service}</span><input value={p.service} placeholder="turn_on" onChange={(e) => setPress(i, { service: e.target.value })} /></label>
                         </div>
-                        <label className="f" style={{ marginTop: 8 }}><span>Data (JSON, optional)</span><textarea value={p.data} onChange={(e) => setPress(i, { data: e.target.value })} /></label>
+                        <label className="f" style={{ marginTop: 8 }}><span>{t.data_json}</span><textarea value={p.data} onChange={(e) => setPress(i, { data: e.target.value })} /></label>
                       </>
                     )}
                   </div>
                 ))}
-                {!form.presses.length && <p className="muted">No press actions yet.</p>}
+                {!form.presses.length && <p className="muted">{t.no_presses}</p>}
               </>
             )}
             {error ? <p className="error">{error}</p> : notice && <p className="notice">{notice}</p>}
-            <div className="actions"><button className="btn" disabled={busy} onClick={add}>{busy ? "Saving…" : "Add binding"}</button></div>
+            <div className="actions"><button className="btn" disabled={busy} onClick={add}>{busy ? t.saving : t.add_binding}</button></div>
           </div>
         </>
       )}
@@ -747,6 +767,7 @@ function Bindings({ hass, reg }: RegCtx) {
 type SettingsData = { transport: string; has_gateway: boolean; holiday_lights: string[]; holiday_window_start: string; holiday_window_end: string };
 
 function Settings({ hass }: Ctx) {
+  const t = useT();
   const [saved, setSaved] = useState<SettingsData | null>(null);
   const [draft, setDraft] = useState<SettingsData | null>(null);
   const [loadError, setLoadError] = useState("");
@@ -758,14 +779,14 @@ function Settings({ hass }: Ctx) {
     setLoadError("");
     hass.callWS({ type: "plejd/settings/get" })
       .then((r: SettingsData) => { setSaved(r); setDraft(r); })
-      .catch((e: any) => setLoadError(`Could not load settings: ${errMsg(e)}`));
+      .catch((e: any) => setLoadError(fmt(t.settings_load_failed, { error: errMsg(e) })));
   };
   useEffect(load, []);
 
   if (!draft || !saved) {
     return (
-      <Card title="Settings">
-        {loadError ? <><p className="error">{loadError}</p><div className="actions"><button className="btn" onClick={load}>Retry</button></div></> : <Empty text="Loading…" />}
+      <Card title={t.settings}>
+        {loadError ? <><p className="error">{loadError}</p><div className="actions"><button className="btn" onClick={load}>{t.retry}</button></div></> : <Empty text={t.loading} />}
       </Card>
     );
   }
@@ -776,7 +797,7 @@ function Settings({ hass }: Ctx) {
     try {
       const { transport, holiday_lights, holiday_window_start, holiday_window_end } = draft;
       const r = await hass.callWS({ type: "plejd/settings/set", transport, holiday_lights, holiday_window_start, holiday_window_end });
-      setNotice(r.reload_failed || "Saved.");
+      setNotice(r.reload_failed || t.saved);
       load();
     } catch (e) {
       setError(errMsg(e));
@@ -790,34 +811,34 @@ function Settings({ hass }: Ctx) {
     set({ holiday_lights: on ? [...draft.holiday_lights, id] : draft.holiday_lights.filter((l) => l !== id) });
 
   return (
-    <Card title="Settings">
+    <Card title={t.settings}>
       {draft.has_gateway && (
         <>
-          <h3>Communication</h3>
-          <label className="f"><span>Send commands via</span>
+          <h3>{t.communication}</h3>
+          <label className="f"><span>{t.send_via}</span>
             <select value={draft.transport} onChange={(e) => set({ transport: e.target.value })}>
-              {TRANSPORTS.map(([v, label]) => <option key={v} value={v}>{label}</option>)}
+              {TRANSPORTS.map((v) => <option key={v} value={v}>{t[`transport_${v}`]}</option>)}
             </select>
           </label>
           <div className="form" />
         </>
       )}
-      <h3>Holiday mode</h3>
-      <p className="lead">While the Holiday mode switch is on and the time is inside this window, a random subset of these lights turns on and off to make the home look lived-in. Pick none to use every Plejd light.</p>
+      <h3>{t.holiday}</h3>
+      <p className="lead">{t.holiday_lead}</p>
       <div className="fields">
-        <label className="f"><span>Window start</span><input type="time" value={draft.holiday_window_start} onChange={(e) => set({ holiday_window_start: e.target.value })} /></label>
-        <label className="f"><span>Window end</span><input type="time" value={draft.holiday_window_end} onChange={(e) => set({ holiday_window_end: e.target.value })} /></label>
+        <label className="f"><span>{t.window_start}</span><input type="time" value={draft.holiday_window_start} onChange={(e) => set({ holiday_window_start: e.target.value })} /></label>
+        <label className="f"><span>{t.window_end}</span><input type="time" value={draft.holiday_window_end} onChange={(e) => set({ holiday_window_end: e.target.value })} /></label>
       </div>
-      <span className="label" style={{ marginTop: 10 }}>Lights</span>
+      <span className="label" style={{ marginTop: 10 }}>{t.lights}</span>
       <div className="checks col">
         {lights.map((s) => (
           <label key={s.entity_id}><input type="checkbox" checked={draft.holiday_lights.includes(s.entity_id)}
             onChange={(e) => toggleLight(s.entity_id, e.target.checked)} />{nameOf(s)}</label>
         ))}
-        {!lights.length && <Empty text="No Plejd lights found." />}
+        {!lights.length && <Empty text={t.no_lights} />}
       </div>
       {error ? <p className="error">{error}</p> : notice && <p className="notice">{notice}</p>}
-      <div className="actions"><button className="btn" disabled={busy || !dirty} onClick={save}>{busy ? "Saving…" : "Save"}</button></div>
+      <div className="actions"><button className="btn" disabled={busy || !dirty} onClick={save}>{busy ? t.saving : t.save}</button></div>
     </Card>
   );
 }
@@ -825,6 +846,7 @@ function Settings({ hass }: Ctx) {
 type NewDevice = { address: string; name: string; rssi: number; hardware_id: string; model: string; firmware_build_time: number };
 
 function AddDevice({ hass }: Ctx) {
+  const t = useT();
   const [scan, setScan] = useState<{ bluetooth: boolean; devices: NewDevice[]; room_categories: string[] } | null>(null);
   const [picked, setPicked] = useState<NewDevice | null>(null);
   const [name, setName] = useState("");
@@ -840,7 +862,7 @@ function AddDevice({ hass }: Ctx) {
   };
   const add = async () => {
     if (!picked) return;
-    if (!name.trim()) { setError("Enter a name for the device."); return; }
+    if (!name.trim()) { setError(t.enter_name); return; }
     setBusy(true); setError(""); setNotice("");
     try {
       await hass.callService("plejd", "add_device", {
@@ -851,20 +873,20 @@ function AddDevice({ hass }: Ctx) {
         ...(room.trim() ? { room_title: room.trim() } : {}),
         ...(category ? { room_category: category } : {}),
       });
-      setNotice(`${name.trim()} added.`);
+      setNotice(fmt(t.device_added, { name: name.trim() }));
       setPicked(null); setName(""); setRoom(""); setCategory(""); setScan(null);
     } catch (e) {
-      setError(`Failed to add the device: ${errMsg(e)}`);
+      setError(fmt(t.add_failed, { error: errMsg(e) }));
     } finally {
       setBusy(false);
     }
   };
 
   return (
-    <Card title="Add a device">
-      <p className="lead">Power on a new Plejd device near a Bluetooth adapter or proxy, scan, then name it. It is registered in your Plejd account and joined to the mesh.</p>
-      {scan && !scan.bluetooth && <p className="error">Bluetooth is not available on this Home Assistant instance. Add a local Bluetooth adapter or an ESPHome Bluetooth proxy (in active mode), then try again.</p>}
-      {scan?.bluetooth && !scan.devices.length && <p className="muted">No unprovisioned Plejd devices found nearby. Make sure the device is powered and in Bluetooth range, then scan again.</p>}
+    <Card title={t.add_device}>
+      <p className="lead">{t.add_device_lead}</p>
+      {scan && !scan.bluetooth && <p className="error">{t.no_bluetooth}</p>}
+      {scan?.bluetooth && !scan.devices.length && <p className="muted">{t.no_new_devices}</p>}
       {scan?.devices.map((d) => (
         <label key={d.address} className="row line click">
           <input type="radio" name="new-device" checked={picked?.address === d.address} onChange={() => { setPicked(d); setName(d.name || d.model); }} />
@@ -873,21 +895,35 @@ function AddDevice({ hass }: Ctx) {
       ))}
       {picked && (
         <div className="fields">
-          <label className="f"><span>Name</span><input value={name} onChange={(e) => setName(e.target.value)} /></label>
-          <label className="f"><span>New room (optional)</span><input value={room} onChange={(e) => setRoom(e.target.value)} /></label>
-          <label className="f"><span>Room category (optional)</span>
+          <label className="f"><span>{t.name}</span><input value={name} onChange={(e) => setName(e.target.value)} /></label>
+          <label className="f"><span>{t.new_room}</span><input value={room} onChange={(e) => setRoom(e.target.value)} /></label>
+          <label className="f"><span>{t.room_category}</span>
             <select value={category} onChange={(e) => setCategory(e.target.value)}>
-              <option value="">(default)</option>
-              {scan!.room_categories.map((c) => <option key={c} value={c}>{c}</option>)}
+              <option value="">{t.default_opt}</option>
+              {scan!.room_categories.map((c) => <option key={c} value={c}>{t.categories[c] ?? c}</option>)}
             </select>
           </label>
         </div>
       )}
       {error ? <p className="error">{error}</p> : notice && <p className="notice">{notice}</p>}
       <div className="actions">
-        <button className={`btn ${picked ? "ghost" : ""}`} disabled={busy} onClick={rescan}>{scan ? "Scan again" : "Scan"}</button>
-        {picked && <button className="btn" disabled={busy} onClick={add}>{busy ? "Adding…" : "Add device"}</button>}
+        <button className={`btn ${picked ? "ghost" : ""}`} disabled={busy} onClick={rescan}>{scan ? t.scan_again : t.scan}</button>
+        {picked && <button className="btn" disabled={busy} onClick={add}>{busy ? t.adding : t.add_device_btn}</button>}
       </div>
+    </Card>
+  );
+}
+
+function Language({ lang, setLang }: { lang: string | null; setLang: (x: string | null) => void }) {
+  const t = useT();
+  return (
+    <Card title={t.language}>
+      <label className="f"><span>{t.language}</span>
+        <select value={lang ?? ""} onChange={(e) => setLang(e.target.value || null)}>
+          <option value="">{t.lang_auto}</option>
+          {Object.entries(LANGS).map(([code, [, name]]) => <option key={code} value={code}>{name}</option>)}
+        </select>
+      </label>
     </Card>
   );
 }
