@@ -1585,3 +1585,31 @@ async def test_setup_survives_area_sync_failure(monkeypatch):
     entry = _entry()
     entry.options = {"sync_areas": True}
     assert await async_setup_entry(_hass(), entry) is True
+
+
+async def test_remove_entry_deletes_the_area_sync_store():
+    from plejd import async_remove_entry
+
+    hass, entry = _hass(), _entry()
+    hass.data[("store", "plejd.area_sync.e1")] = {"DEV": {"room": "r1:Garage", "area": "garage"}}
+    await async_remove_entry(hass, entry)
+    assert ("store", "plejd.area_sync.e1") not in hass.data
+
+
+async def test_setup_with_area_sync_off_clears_its_state(monkeypatch):
+    # Clearing on the reload that turns syncing off is what makes re-enabling align every device.
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    hass, entry = _hass(), _entry()
+    hass.data[("store", "plejd.area_sync.e1")] = {"DEV": {"room": "r1:Garage", "area": "hall"}}
+    await async_setup_entry(hass, entry)
+    assert ("store", "plejd.area_sync.e1") not in hass.data
+
+
+async def test_setup_survives_area_sync_reset_failure(monkeypatch):
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+
+    async def _boom(hass, entry):
+        raise OSError("read-only storage")
+
+    monkeypatch.setattr(plejd.area_sync, "async_reset_areas", _boom)
+    assert await async_setup_entry(_hass(), _entry()) is True

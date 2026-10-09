@@ -118,6 +118,7 @@ async def test_unchanged_rooms_do_not_rewrite_the_store():
     await async_sync_areas(hass, _entry())
     key = ("store", f"{area_sync.STORE_KEY}.e1")
     saved = hass.data[key]
+    assert saved == {"TEKNIK": {"room": "r-garage:Garage", "area": "garage"}}
     hass.data[key] = dict(saved)  # a different object with the same content
     marker = hass.data[key]
     await async_sync_areas(hass, _entry())
@@ -201,3 +202,31 @@ async def test_area_change_handler_swallows_sync_errors(monkeypatch):
     async_listen_area_changes(hass, _entry())
     [(_, handler)] = hass.bus.listeners
     await handler(types.SimpleNamespace(data={}))  # must not raise
+
+
+async def test_changed_area_match_retargets_an_automatically_assigned_device():
+    areas_before = list(AREAS)
+    AREAS[:] = [_area("pantry", "Pantry", aliases=["Garage"])]
+    try:
+        hass = _hass([_device("d1", "TEKNIK", None)])
+        await async_sync_areas(hass, _entry())
+        assert hass.device_registry.devices["d1"].area_id == "pantry"  # matched through the alias
+        AREAS.append(_area("garage", "Garage"))
+        await async_sync_areas(hass, _entry())
+        assert hass.device_registry.devices["d1"].area_id == "garage"  # exact name now wins
+    finally:
+        AREAS[:] = areas_before
+
+
+async def test_changed_area_match_keeps_a_hand_picked_area():
+    areas_before = list(AREAS)
+    AREAS[:] = [_area("pantry", "Pantry", aliases=["Garage"]), _area("hall", "Hall")]
+    try:
+        hass = _hass([_device("d1", "TEKNIK", None)])
+        await async_sync_areas(hass, _entry())
+        hass.device_registry.devices["d1"].area_id = "hall"
+        AREAS.append(_area("garage", "Garage"))
+        await async_sync_areas(hass, _entry())
+        assert hass.device_registry.devices["d1"].area_id == "hall"
+    finally:
+        AREAS[:] = areas_before

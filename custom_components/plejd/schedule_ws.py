@@ -20,7 +20,6 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 
-from . import area_sync
 from .cloud import PlejdCloudSite
 from .const import (
     CONF_DEVICE_ADDRESSES,
@@ -429,8 +428,6 @@ async def ws_settings_set(hass: HomeAssistant, connection, msg) -> None:
         updates[CONF_TRANSPORT] = msg["transport"]
     if "sync_areas" in msg:
         updates[CONF_SYNC_AREAS] = msg["sync_areas"]
-        if msg["sync_areas"] and not entry.options.get(CONF_SYNC_AREAS, False):
-            await area_sync.async_reset_areas(hass, entry)
 
     def _build(current_entry: ConfigEntry) -> tuple[dict, dict]:
         options = {**current_entry.options, **updates}

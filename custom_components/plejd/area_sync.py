@@ -63,25 +63,29 @@ def get_device_rooms(entry_data: dict[str, Any]) -> dict[str, str]:
 
 async def async_sync_areas(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Move devices whose Plejd room changed since the last sync to the matching HA area."""
-    # NOTE: record a device only once its room resolved to an area, so later room/area changes re-evaluate it.
+    # NOTE: record a device only once its room resolved to an area, so later room/area changes re-evaluate it;
+    # remembering the area we assigned lets a changed match retarget it without overriding a hand-picked one.
     room_names = {
         **{room["room_id"]: room["name"] for room in entry.data.get(CONF_ROOMS, [])},
         **(entry.data.get(CONF_ROOM_NAMES) or {}),
     }
     store = _store(hass, entry)
-    synced: dict[str, str] = await store.async_load() or {}
+    synced: dict[str, dict[str, str]] = await store.async_load() or {}
     devices = dr.async_get(hass)
     areas = list(ar.async_get(hass).async_list_areas())
 
-    resolved: dict[str, str] = {}
+    resolved: dict[str, dict[str, str]] = {}
     for plejd_id, room_id in get_device_rooms(entry.data).items():
         room_key = f"{room_id}:{room_names[room_id]}" if room_id in room_names else None
         device = devices.async_get_device(identifiers={(DOMAIN, plejd_id)})
         area = match_area(room_names[room_id], areas) if room_key else None
         if device is None or area is None:
             continue
-        resolved[plejd_id] = room_key
-        if synced.get(plejd_id) != room_key and device.area_id != area.id:
+        resolved[plejd_id] = {"room": room_key, "area": area.id}
+        previous = synced.get(plejd_id) or {}
+        room_changed = previous.get("room") != room_key
+        match_changed = previous.get("area") != area.id and device.area_id == previous.get("area")
+        if (room_changed or match_changed) and device.area_id != area.id:
             _LOGGER.info("Plejd: moving %s to area %s (Plejd room changed)", device.name, area.name)
             devices.async_update_device(device.id, area_id=area.id)
     if resolved != synced:
@@ -89,7 +93,7 @@ async def async_sync_areas(hass: HomeAssistant, entry: ConfigEntry) -> None:
 
 
 async def async_reset_areas(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Forget what was synced, so turning the option on aligns every device again."""
+    """Forget what was synced; run while the option is off and on entry removal."""
     await _store(hass, entry).async_remove()
 
 
