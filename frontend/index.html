@@ -46,7 +46,8 @@ const ws = {
     { room_id: "r1", name: "Kök", entity_id: "light.kok", lights: ["light.kitchen", "light.kok_spot", "light.kok_o", "light.kok_strip"] },
     { room_id: "r2", name: "Vardagsrum", entity_id: "light.vardagsrum", lights: ["light.golv", "light.bord", "light.vagg"] },
   ] }; },
-  "plejd/light_styles/get": () => ({ styles }),
+  // ?stylesfail: lamp styles can't be read (the lights must still show)
+  "plejd/light_styles/get": () => { if (location.search.includes("stylesfail")) throw new Error("storage error"); return { styles }; },
   "plejd/light_styles/set": (m) => (m.style ? styles[m.entity_id] = m.style : delete styles[m.entity_id], { styles }),
   "plejd/schedules/list": () => ({ schedules, scenes: [{ index: 1, name: "Evening" }] }),
   "plejd/schedules/add": (m) => (schedules = [...schedules, { ...m, id: schedules.length, time: m.time + ":00" }], { schedules }),

@@ -3356,7 +3356,9 @@ async def test_poll_faults_resolves_rooms_from_cloud_when_entry_predates_room_gr
     room = PlejdCloudRoom(
         room_id="r1", name="Kök", address=14, member_addresses=[11], dimmable=True, dimmable_addresses=[11]
     )
-    site = types.SimpleNamespace(device_addresses={"d1": 1}, rooms=[room])
+    site = types.SimpleNamespace(
+        device_addresses={"d1": 1}, rooms=[room], all_rooms=[types.SimpleNamespace(room_id="r1", name="Kök")]
+    )
     fetches = []
 
     async def _login(*a):
@@ -3376,9 +3378,36 @@ async def test_poll_faults_resolves_rooms_from_cloud_when_entry_predates_room_gr
     # Persisted to entry.data, not just the in-memory coordinator, so the room light
     # entity survives a restart/reload even if the cloud is unreachable at that point.
     assert entry.data[CONF_ROOMS] == [asdict(room)]
+    assert entry.data[CONF_ROOM_NAMES] == {"r1": "Kök"}
 
     await c._async_poll_faults(None)
     assert fetches == [1]  # cached — no repeat fetch once rooms are resolved
+
+
+async def test_poll_faults_backfills_room_names_for_an_entry_that_predates_them(monkeypatch):
+    # Rooms whose group holds a non-light output are only in all_rooms; without their names the
+    # dashboard can't give their lights a card, so fetch them now instead of at the daily sync.
+    entry = _cloud_entry()
+    entry.data[CONF_ROOMS] = []
+    entry.data.pop(CONF_ROOM_NAMES, None)
+    c = PlejdCoordinator(_hass(), entry)
+    c._device_addresses = {"d1": 1}
+    site = types.SimpleNamespace(
+        device_addresses={"d1": 1}, rooms=[], all_rooms=[types.SimpleNamespace(room_id="r9", name="Garage")]
+    )
+
+    async def _login(*a):
+        return "tok"
+
+    async def _get_site(*a):
+        return site
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _login)
+    monkeypatch.setattr(coordinator_mod, "async_get_site", _get_site)
+    monkeypatch.setattr(c, "_write_vector", lambda vector: asyncio.sleep(0))
+    await c._async_poll_faults(None)
+    assert entry.data[CONF_ROOM_NAMES] == {"r9": "Garage"}
+    assert entry.data[CONF_ROOMS] == []  # untouched: only the missing key is filled in
 
 
 async def test_poll_faults_does_not_refetch_for_a_genuinely_room_less_site(monkeypatch):

@@ -93,10 +93,13 @@ function Lights({ hass }: Ctx) {
   // retrying instead of treating a failure as "no rooms", which would lump every light together.
   useEffect(() => {
     let timer = 0;
-    const load = () => Promise.all([hass.callWS({ type: "plejd/rooms" }), hass.callWS({ type: "plejd/light_styles/get" })])
-      .then(([r, st]: any[]) => { setRooms(r.rooms); setStyles(st.styles || {}); setError(""); })
+    const load = () => hass.callWS({ type: "plejd/rooms" })
+      .then((r: any) => { setRooms(r.rooms); setError(""); })
       .catch((e: any) => { setError(errMsg(e)); timer = window.setTimeout(load, 5000); });
     load();
+    // Lamp styles are cosmetic: if they can't load, every lamp just keeps the default look.
+    hass.callWS({ type: "plejd/light_styles/get" }).then((r: any) => setStyles(r.styles || {}))
+      .catch((e: any) => console.warn("Plejd panel: could not load lamp types", e));
     return () => clearTimeout(timer);
   }, []);
   const setStyle = (entity_id: string, style: LampStyle) => {

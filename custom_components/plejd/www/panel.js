@@ -20744,12 +20744,12 @@ var Ul = ({ text: e }) => /* @__PURE__ */ (0, $.jsx)("p", {
 function Wl({ hass: e }) {
 	let [t, n] = (0, l.useState)(null), [r, i] = (0, l.useState)({}), [a, o] = (0, l.useState)("");
 	(0, l.useEffect)(() => {
-		let t = 0, r = () => Promise.all([e.callWS({ type: "plejd/rooms" }), e.callWS({ type: "plejd/light_styles/get" })]).then(([e, t]) => {
-			n(e.rooms), i(t.styles || {}), o("");
+		let t = 0, r = () => e.callWS({ type: "plejd/rooms" }).then((e) => {
+			n(e.rooms), o("");
 		}).catch((e) => {
 			o(Pl(e)), t = window.setTimeout(r, 5e3);
 		});
-		return r(), () => clearTimeout(t);
+		return r(), e.callWS({ type: "plejd/light_styles/get" }).then((e) => i(e.styles || {})).catch((e) => console.warn("Plejd panel: could not load lamp types", e)), () => clearTimeout(t);
 	}, []);
 	let s = (t, n) => {
 		i((e) => ({

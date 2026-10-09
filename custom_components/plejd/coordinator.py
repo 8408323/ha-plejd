@@ -960,13 +960,17 @@ class PlejdCoordinator:
         # device's own mesh address (may differ from an output's outputAddress).
         need_device_addresses = not self._device_addresses
         need_rooms = self._rooms_from_legacy_entry
-        if (need_device_addresses or need_rooms) and self._email and self._password:
+        # Entries from before CONF_ROOM_NAMES: fill it in now rather than wait for the daily sync,
+        # or lights in rooms without a group light sit under "Other lights" until then.
+        need_room_names = CONF_ROOM_NAMES not in self._entry.data
+        if (need_device_addresses or need_rooms or need_room_names) and self._email and self._password:
             try:
                 session = async_get_clientsession(self.hass)
                 token = await async_login(session, self._email, self._password)
                 site = await async_get_site(session, token, self.site_id)
                 if need_device_addresses:
                     self._device_addresses = dict(site.device_addresses)
+                data_updates: dict = {}
                 if need_rooms:
                     self.rooms = site.rooms
                     self._rooms_from_legacy_entry = False
@@ -974,10 +978,11 @@ class PlejdCoordinator:
                     # platform only builds PlejdRoomLight entities from CONF_ROOMS at setup,
                     # so an unpersisted backfill would lose room entities on the next
                     # restart/reload if the cloud is unreachable then (#86 review).
-                    self.hass.config_entries.async_update_entry(
-                        self._entry,
-                        data={**self._entry.data, CONF_ROOMS: [asdict(r) for r in site.rooms]},
-                    )
+                    data_updates[CONF_ROOMS] = [asdict(r) for r in site.rooms]
+                if need_room_names:
+                    data_updates[CONF_ROOM_NAMES] = {r.room_id: r.name for r in site.all_rooms}
+                if data_updates:
+                    self.hass.config_entries.async_update_entry(self._entry, data={**self._entry.data, **data_updates})
             except Exception:  # noqa: BLE001 - fault polling is best-effort; retry next interval
                 _LOGGER.debug("Plejd fault poll: could not resolve device addresses", exc_info=True)
         for address in set(self._device_addresses.values()):
