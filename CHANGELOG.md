@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-10-10
+
+A new dashboard: React-based, translated into English and the Nordic languages,
+with room cards and an edit mode. Device areas can now follow Plejd rooms.
+
 ### Added
 
 - The dashboard speaks English, Svenska, Norsk, Dansk, Suomi and Íslenska. It follows
