@@ -9,15 +9,21 @@ live in their own Store and are keyed by unique_id.
 from __future__ import annotations
 
 import asyncio
+import logging
 
 import voluptuous as vol
 from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.storage import Store
 
+from .cloud import PlejdAuthError
 from .const import CATEGORY_LIGHT, CONF_ROOM_NAMES, DOMAIN, ROOM_DEVICE_ID_PREFIX
 from .schedule_ws import DATA_ENTRY
+
+_LOGGER = logging.getLogger(__name__)
 
 # Mirrors the lamp models in frontend/src/lamps.ts.
 LIGHT_STYLES = (
@@ -61,7 +67,7 @@ async def ws_rooms(hass: HomeAssistant, connection, msg) -> None:
         for room_id, name in names.items()
     }
     for d in coordinator.devices:
-        uid = d.device_id if d.output_index == 0 else f"{d.device_id}_{d.output_index}"
+        uid = _unique_id(d)
         if d.category == CATEGORY_LIGHT and d.room_id in rooms and uid in by_unique_id:
             rooms[d.room_id]["lights"].append(by_unique_id[uid])
     connection.send_result(msg["id"], {"rooms": list(rooms.values())})
@@ -104,6 +110,60 @@ async def ws_styles_set(hass: HomeAssistant, connection, msg) -> None:
 
 
 @websocket_api.require_admin
+@websocket_api.websocket_command(
+    {vol.Required("type"): "plejd/lights/rename", vol.Required("entity_id"): str, vol.Required("name"): str}
+)
+@websocket_api.async_response
+async def ws_rename_light(hass: HomeAssistant, connection, msg) -> None:
+    """Rename one Plejd light: its own output in the Plejd cloud first (awaited), then in HA."""
+    entry = hass.data.get(DATA_ENTRY)
+    coordinator = getattr(entry, "runtime_data", None)
+    if coordinator is None:
+        connection.send_error(msg["id"], "not_loaded", "Plejd is not loaded")
+        return
+    name = msg["name"].strip()
+    if not name:
+        connection.send_error(msg["id"], "name_required", "Name is required")
+        return
+    reg_entry = er.async_get(hass).async_get(msg["entity_id"])
+    output = next(
+        (
+            d
+            for d in coordinator.devices
+            if reg_entry is not None and _unique_id(d) == reg_entry.unique_id and d.category == CATEGORY_LIGHT
+        ),
+        None,
+    )
+    if output is None:
+        connection.send_error(msg["id"], "not_found", "Not a Plejd light")
+        return
+    try:
+        await coordinator.async_rename_device(output.device_id, name, output.output_index)
+    except PlejdAuthError:
+        entry.async_start_reauth(hass)
+        connection.send_error(msg["id"], "auth_failed", "Plejd rejected the account credentials")
+        return
+    except HomeAssistantError as err:
+        connection.send_error(msg["id"], "rename_failed", str(err))
+        return
+    except Exception:  # noqa: BLE001 - log the detail server-side, return a stable message
+        _LOGGER.exception("Plejd: renaming %s failed", msg["entity_id"])
+        connection.send_error(msg["id"], "rename_failed", "Could not rename the light in Plejd")
+        return
+    # Plejd now has the name. A device with one light output is that light, so name the device (what HA
+    # shows everywhere); otherwise only this output's entity, since its siblings share the device.
+    # The device-registry mirror then repeats the same cloud rename, which is harmless.
+    lights_on_device = [
+        d for d in coordinator.devices if d.device_id == output.device_id and d.category == CATEGORY_LIGHT
+    ]
+    if len(lights_on_device) == 1 and reg_entry.device_id:
+        dr.async_get(hass).async_update_device(reg_entry.device_id, name_by_user=name)
+    else:
+        er.async_get(hass).async_update_entity(msg["entity_id"], name=name)
+    connection.send_result(msg["id"], {"name": name})
+
+
+@websocket_api.require_admin
 @websocket_api.websocket_command({vol.Required("type"): "plejd/room_layout/get"})
 @websocket_api.async_response
 async def ws_layout_get(hass: HomeAssistant, connection, msg) -> None:
@@ -133,6 +193,7 @@ def async_register(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_styles_set)
     websocket_api.async_register_command(hass, ws_layout_get)
     websocket_api.async_register_command(hass, ws_layout_set)
+    websocket_api.async_register_command(hass, ws_rename_light)
 
 
 def _entity_ids(hass: HomeAssistant, entry) -> dict[str, str]:
@@ -153,3 +214,8 @@ def _by_entity_id(hass: HomeAssistant, stored: dict[str, str]) -> dict[str, str]
         return {}
     ids = _entity_ids(hass, entry)
     return {ids[uid]: style for uid, style in stored.items() if uid in ids}
+
+
+def _unique_id(device) -> str:
+    """A Plejd output's light unique_id (mirrors PlejdLight in light.py)."""
+    return device.device_id if device.output_index == 0 else f"{device.device_id}_{device.output_index}"

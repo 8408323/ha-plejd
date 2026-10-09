@@ -22473,16 +22473,20 @@ function Yl({ hass: e }) {
 				t || (console.warn("Plejd panel: could not load lamp types, retrying", e), i = window.setTimeout(c, 5e3));
 			});
 		};
-		return o(), c(), e.callWS({ type: "plejd/room_layout/get" }).then((e) => {
+		o(), c();
+		let l = 0, u = () => e.callWS({ type: "plejd/room_layout/get" }).then((e) => {
 			t || v(e);
-		}).catch((e) => console.warn("Plejd panel: could not load the card layout", e)), () => {
-			t = !0, clearTimeout(n), clearTimeout(i);
+		}).catch((e) => {
+			t || (console.warn("Plejd panel: could not load the card layout, retrying", e), l = window.setTimeout(u, 5e3));
+		});
+		return u(), () => {
+			t = !0, clearTimeout(n), clearTimeout(i), clearTimeout(l);
 		};
 	}, [e.entities, y]);
 	let T = (n, r) => {
 		C.current++, w.current++;
 		let i = S.current[n] = (S.current[n] || 0) + 1, o = () => S.current[n] === i;
-		a((e) => ({
+		return a((e) => ({
 			...e,
 			[n]: r
 		})), e.callWS({
@@ -22495,10 +22499,10 @@ function Yl({ hass: e }) {
 				[n]: t[n]
 			}), u("");
 		}).catch((e) => {
-			o() && (a((e) => {
+			if (o()) throw a((e) => {
 				let t = { ...e };
 				return x.current[n] ? t[n] = x.current[n] : delete t[n], t;
-			}), u(Tl(t.lamp_save_failed, { error: zl(e) })));
+			}), u(Tl(t.lamp_save_failed, { error: zl(e) })), e;
 		}).finally(() => {
 			w.current--;
 		});
@@ -22532,39 +22536,39 @@ function Yl({ hass: e }) {
 	}, te = async () => {
 		if (!d) return;
 		m(!0), u("");
-		let r = [e.callWS({
+		let r = [], a = async (e) => {
+			try {
+				await e();
+			} catch (e) {
+				r.push(zl(e));
+			}
+		};
+		await Promise.all([a(() => e.callWS({
 			type: "plejd/room_layout/set",
 			order: d.order,
 			sizes: d.sizes
-		}).then((e) => v(e))];
+		}).then((e) => v(e))), ...Object.entries(d.styles).filter(([e, t]) => t !== (i[e] ?? "bulb")).map(([e, t]) => a(() => T(e, t)))]);
+		let o = (t) => Bl(e.states[t] ?? {
+			entity_id: t,
+			state: "",
+			attributes: {}
+		});
+		for (let [t, n] of Object.entries(d.lightNames)) {
+			let r = n.trim();
+			r && r !== o(t) && await a(() => e.callWS({
+				type: "plejd/lights/rename",
+				entity_id: t,
+				name: r
+			}));
+		}
 		for (let t of n) {
 			let n = d.roomNames[t.room_id]?.trim();
-			n && n !== t.name && r.push(e.callService("plejd", "update_room", {
+			n && n !== t.name && await a(() => e.callService("plejd", "update_room", {
 				room_id: t.room_id,
 				title: n
 			}));
 		}
-		for (let [t, n] of Object.entries(d.lightNames)) {
-			let i = n.trim();
-			if (!i || i === Bl(e.states[t] ?? {
-				entity_id: t,
-				state: "",
-				attributes: {}
-			})) continue;
-			let a = e.entities?.[t]?.device_id;
-			r.push(a ? e.callWS({
-				type: "config/device_registry/update",
-				device_id: a,
-				name_by_user: i
-			}) : e.callWS({
-				type: "config/entity_registry/update",
-				entity_id: t,
-				name: i
-			}));
-		}
-		for (let [e, t] of Object.entries(d.styles)) t !== (i[e] ?? "bulb") && T(e, t);
-		let a = (await Promise.allSettled(r)).filter((e) => e.status === "rejected");
-		m(!1), a.length ? u(Tl(t.edit_save_failed, { error: a.map((e) => zl(e.reason)).join("; ") })) : f(null);
+		m(!1), r.length ? u(Tl(t.edit_save_failed, { error: r.join("; ") })) : f(null);
 	}, ne = (e) => f((t) => t && {
 		...t,
 		...e

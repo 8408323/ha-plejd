@@ -148,18 +148,25 @@ function Lights({ hass }: Ctx) {
     };
     load();
     loadStyles();
-    // Card order/sizes are cosmetic: without them the cards just use their natural order and size.
-    hass.callWS({ type: "plejd/room_layout/get" }).then((r: any) => { if (!cancelled) setLayout(r); })
-      .catch((e: any) => console.warn("Plejd panel: could not load the card layout", e));
-    return () => { cancelled = true; clearTimeout(timer); clearTimeout(styleTimer); };
+    // Card order/sizes are cosmetic: until they load, the cards use their natural order and size.
+    let layoutTimer = 0;
+    const loadLayout = () => hass.callWS({ type: "plejd/room_layout/get" })
+      .then((r: any) => { if (!cancelled) setLayout(r); })
+      .catch((e: any) => {
+        if (cancelled) return;
+        console.warn("Plejd panel: could not load the card layout, retrying", e);
+        layoutTimer = window.setTimeout(loadLayout, 5000);
+      });
+    loadLayout();
+    return () => { cancelled = true; clearTimeout(timer); clearTimeout(styleTimer); clearTimeout(layoutTimer); };
   }, [hass.entities, roomsVersion]);
-  const setStyle = (entity_id: string, style: LampStyle) => {
+  const setStyle = (entity_id: string, style: LampStyle): Promise<void> => {
     edits.current++;
     pendingSaves.current++;
     const seq = (saveSeq.current[entity_id] = (saveSeq.current[entity_id] || 0) + 1);
     const latest = () => saveSeq.current[entity_id] === seq;
     setStyles((cur) => ({ ...cur, [entity_id]: style }));
-    hass.callWS({ type: "plejd/light_styles/set", entity_id, style })
+    return hass.callWS({ type: "plejd/light_styles/set", entity_id, style })
       .then((r: any) => {
         confirmed.current = r.styles;
         // An older save finishing after a newer pick must not overwrite that pick on screen.
@@ -176,6 +183,7 @@ function Lights({ hass }: Ctx) {
           return next;
         });
         setSaveError(fmt(t.lamp_save_failed, { error: errMsg(e) }));
+        throw e;
       })
       .finally(() => { pendingSaves.current--; });
   };
@@ -206,26 +214,28 @@ function Lights({ hass }: Ctx) {
     if (!draft) return;
     setBusy(true);
     setSaveError("");
-    const jobs: Promise<unknown>[] = [
-      hass.callWS({ type: "plejd/room_layout/set", order: draft.order, sizes: draft.sizes }).then((r: any) => setLayout(r)),
-    ];
-    for (const r of rooms) {
-      const title = draft.roomNames[r.room_id]?.trim();
-      if (title && title !== r.name) jobs.push(hass.callService("plejd", "update_room", { room_id: r.room_id, title }));
-    }
+    const errors: string[] = [];
+    const attempt = async (job: () => Promise<unknown>) => { try { await job(); } catch (e) { errors.push(errMsg(e)); } };
+    // Cosmetic and local: in parallel.
+    await Promise.all([
+      attempt(() => hass.callWS({ type: "plejd/room_layout/set", order: draft.order, sizes: draft.sizes }).then((r: any) => setLayout(r))),
+      ...Object.entries(draft.styles)
+        .filter(([id, style]) => style !== (styles[id] ?? DEFAULT_STYLE))
+        .map(([id, style]) => attempt(() => setStyle(id, style))),
+    ]);
+    // Renames write to the Plejd cloud: one at a time, lights before rooms (a room rename reloads the
+    // integration, and a light rename can't run while it does).
+    const currentName = (id: string) => nameOf(hass.states[id] ?? { entity_id: id, state: "", attributes: {} });
     for (const [id, raw] of Object.entries(draft.lightNames)) {
       const name = raw.trim();
-      if (!name || name === nameOf(hass.states[id] ?? { entity_id: id, state: "", attributes: {} })) continue;
-      // The device name is what Plejd shows; renaming it there is mirrored to the Plejd app too.
-      const deviceId = hass.entities?.[id]?.device_id;
-      jobs.push(deviceId
-        ? hass.callWS({ type: "config/device_registry/update", device_id: deviceId, name_by_user: name })
-        : hass.callWS({ type: "config/entity_registry/update", entity_id: id, name }));
+      if (name && name !== currentName(id)) await attempt(() => hass.callWS({ type: "plejd/lights/rename", entity_id: id, name }));
     }
-    for (const [id, style] of Object.entries(draft.styles)) if (style !== (styles[id] ?? DEFAULT_STYLE)) setStyle(id, style);
-    const failed = (await Promise.allSettled(jobs)).filter((r) => r.status === "rejected") as PromiseRejectedResult[];
+    for (const r of rooms) {
+      const title = draft.roomNames[r.room_id]?.trim();
+      if (title && title !== r.name) await attempt(() => hass.callService("plejd", "update_room", { room_id: r.room_id, title }));
+    }
     setBusy(false);
-    if (failed.length) setSaveError(fmt(t.edit_save_failed, { error: failed.map((f) => errMsg(f.reason)).join("; ") }));
+    if (errors.length) setSaveError(fmt(t.edit_save_failed, { error: errors.join("; ") }));
     else setDraft(null);
   };
   const patch = (p: Partial<Draft>) => setDraft((d) => (d ? { ...d, ...p } : d));

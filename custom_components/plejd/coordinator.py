@@ -829,27 +829,42 @@ class PlejdCoordinator:
         self._notify_outputs()
 
     @staticmethod
-    def _output_parse_id(devices: list[PlejdCloudDevice], device_id: str) -> str | None:
-        # The title lives on the output; rename targets the primary output's Parse id.
+    def _output_parse_id(
+        devices: list[PlejdCloudDevice], device_id: str, output_index: int | None = None
+    ) -> str | None:
+        # The title lives on the output; a device rename targets the primary output's Parse id.
         # Primary = lowest output_index (consistent with the unique_id base convention).
         matching = sorted(
-            (d for d in devices if d.device_id == device_id and d.object_id),
+            (
+                d
+                for d in devices
+                if d.device_id == device_id and d.object_id and (output_index is None or d.output_index == output_index)
+            ),
             key=lambda d: d.output_index,
         )
         return matching[0].object_id if matching else None
 
-    async def async_rename_device(self, device_id: str, title: str) -> None:
-        """Mirror an HA device rename to the Plejd cloud (so the Plejd app shows it too)."""
+    async def async_rename_device(self, device_id: str, title: str, output_index: int | None = None) -> None:
+        """Rename a device's output in the Plejd cloud (so the Plejd app shows it too).
+
+        With no output_index this mirrors an HA device rename onto the primary output and skips
+        quietly when that can't be done; naming one output explicitly (the dashboard) raises instead.
+        """
+        explicit = output_index is not None
         if not self._email or not self._password:
+            if explicit:
+                raise HomeAssistantError("Plejd has no cloud credentials to rename with")
             return
         session = async_get_clientsession(self.hass)
         token = await async_login(session, self._email, self._password)
-        parse_id = self._output_parse_id(self.devices, device_id)
+        parse_id = self._output_parse_id(self.devices, device_id, output_index)
         if parse_id is None:
             # Entries cached before object_id existed lack it — resolve from a fresh site fetch.
             site = await async_get_site(session, token, self.site_id)
-            parse_id = self._output_parse_id(site.devices, device_id)
+            parse_id = self._output_parse_id(site.devices, device_id, output_index)
         if parse_id is None:
+            if explicit:
+                raise HomeAssistantError(f"Plejd has no cloud object for output {output_index} of device {device_id}")
             _LOGGER.debug("Plejd rename skipped: no Parse id for device %s", device_id)
             return
         if not await async_set_device_title(session, token, self.site_id, device_id, parse_id, title):
