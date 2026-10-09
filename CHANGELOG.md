@@ -14,6 +14,11 @@ All notable changes to this project are documented here. The format follows
   **Settings** tab: holiday mode, the gateway/Bluetooth communication choice and the
   **Add a device** wizard. Schedules are managed on the **Automations** tab. The
   **Configure** dialog now only shows or hides the dashboard.
+- Lights on the dashboard are grouped into one card per Plejd room. The card's switch
+  and slider drive the room's own group light (one mesh command, like the app); each
+  light is a tile drawn as a 3D lamp (three.js) that lights up with its brightness.
+  Pick each light's lamp type (bulb, pendant, spotlight, ceiling, LED strip, table,
+  floor, wall) with the ✎ button; it is saved in Home Assistant.
 
 ## [0.12.0] - 2026-07-25
 

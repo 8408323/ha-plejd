@@ -8,10 +8,19 @@
 import "/src/main.tsx";
 const p = document.getElementById("p");
 const ent = (id, state, attributes = {}, device_id) => ({ id, state: { entity_id: id, state, attributes: { attribution: "Plejd", ...attributes } }, reg: { entity_id: id, platform: "plejd", device_id } });
+const dim = { supported_color_modes: ["brightness"] };
 const all = [
-  ent("light.kitchen", "on", { friendly_name: "Kitchen", brightness: 128, supported_color_modes: ["brightness"] }, "d1"),
+  ent("light.kok", "on", { friendly_name: "Kök", brightness: 140, ...dim }),
+  ent("light.kitchen", "on", { friendly_name: "Taklampa", brightness: 128, ...dim }, "d1"),
+  ent("light.kok_spot", "on", { friendly_name: "Spottar köksbänk", brightness: 255, ...dim }),
+  ent("light.kok_o", "off", { friendly_name: "Köksö", brightness: 90, ...dim }),
+  ent("light.kok_strip", "on", { friendly_name: "Bänklist", brightness: 60, ...dim }),
+  ent("light.vardagsrum", "off", { friendly_name: "Vardagsrum", ...dim }),
+  ent("light.golv", "off", { friendly_name: "Golvlampa", ...dim }),
+  ent("light.bord", "off", { friendly_name: "Bordslampa", ...dim }),
+  ent("light.vagg", "off", { friendly_name: "Vägglampa", ...dim }),
   ent("light.hall", "off", { friendly_name: "Hall", supported_color_modes: ["onoff"] }, "d2"),
-  ent("light.porch", "unavailable", { friendly_name: "Porch", supported_color_modes: ["brightness"] }, "d3"),
+  ent("light.porch", "unavailable", { friendly_name: "Porch", ...dim }, "d3"),
   ent("scene.evening", "unknown", { friendly_name: "Evening" }),
   ent("climate.bath", "heat", { friendly_name: "Bathroom floor", temperature: 22, min_temp: 5, max_temp: 35, target_temp_step: 0.5 }),
   ent("cover.blind", "open", { friendly_name: "Blind", supported_features: 15 }),
@@ -22,7 +31,14 @@ const all = [
 let schedules = [{ id: 0, slot: 0, name: "Morning", days: [0, 1, 2, 3, 4], time: "06:30:00", scene: 1, fade: 5 }];
 let bindings = [];
 let settings = { transport: "auto", has_gateway: true, holiday_lights: [], holiday_window_start: "18:00", holiday_window_end: "23:00" };
+let styles = { "light.kok_spot": "spot", "light.kok_o": "pendant", "light.kok_strip": "strip", "light.golv": "floor", "light.bord": "table", "light.vagg": "wall", "light.kitchen": "ceiling" };
 const ws = {
+  "plejd/rooms": () => ({ rooms: [
+    { room_id: "r1", name: "Kök", entity_id: "light.kok", lights: ["light.kitchen", "light.kok_spot", "light.kok_o", "light.kok_strip"] },
+    { room_id: "r2", name: "Vardagsrum", entity_id: "light.vardagsrum", lights: ["light.golv", "light.bord", "light.vagg"] },
+  ] }),
+  "plejd/light_styles/get": () => ({ styles }),
+  "plejd/light_styles/set": (m) => (m.style ? styles[m.entity_id] = m.style : delete styles[m.entity_id], { styles }),
   "plejd/schedules/list": () => ({ schedules, scenes: [{ index: 1, name: "Evening" }] }),
   "plejd/schedules/add": (m) => (schedules = [...schedules, { ...m, id: schedules.length, time: m.time + ":00" }], { schedules }),
   "plejd/schedules/delete": (m) => (schedules = schedules.filter((s) => s.id !== m.schedule_id), { schedules }),
