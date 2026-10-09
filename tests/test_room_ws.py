@@ -68,19 +68,20 @@ async def test_rooms_maps_each_plejd_room_to_its_group_light_and_members():
         ],
     )
     conn = _Conn()
-    await room_ws.ws_rooms(_hass(coordinator, room_names={"r1": "Old name", "r3": "Garage"}), conn, {"id": 1})
+    await room_ws.ws_rooms(_hass(coordinator, room_names={"r1": "Kök (renamed)", "r3": "Garage"}), conn, {"id": 1})
     assert conn.result == (
         1,
         {
             "rooms": [
+                # stored room_names win over the cached group room's name
                 {
                     "room_id": "r1",
-                    "name": "Kök",
+                    "name": "Kök (renamed)",
                     "entity_id": "light.kok",
                     "lights": ["light.kok_tak", "light.kok_spot"],
                 },
-                {"room_id": "r3", "name": "Garage", "entity_id": None, "lights": ["light.garage"]},
                 {"room_id": "r2", "name": "Tomt", "entity_id": "light.tom", "lights": []},
+                {"room_id": "r3", "name": "Garage", "entity_id": None, "lights": ["light.garage"]},
             ]
         },
     )

@@ -971,6 +971,13 @@ class PlejdCoordinator:
                 if need_device_addresses:
                     self._device_addresses = dict(site.device_addresses)
                 data_updates: dict = {}
+                # Like the daily poll: never persist a snapshot the cloud sent malformed. Leaving
+                # the keys unset keeps this backfill retrying on the next poll.
+                if site.malformed:
+                    _LOGGER.debug(
+                        "Plejd fault poll: malformed site (%s), not backfilling rooms", sorted(site.malformed)
+                    )
+                    need_rooms = need_room_names = False
                 if need_rooms:
                     self.rooms = site.rooms
                     self._rooms_from_legacy_entry = False

@@ -97,10 +97,12 @@ function Lights({ hass }: Ctx) {
       .then((r: any) => { setRooms(r.rooms); setError(""); })
       .catch((e: any) => { setError(errMsg(e)); timer = window.setTimeout(load, 5000); });
     load();
-    // Lamp styles are cosmetic: if they can't load, every lamp just keeps the default look.
-    hass.callWS({ type: "plejd/light_styles/get" }).then((r: any) => setStyles(r.styles || {}))
-      .catch((e: any) => console.warn("Plejd panel: could not load lamp types", e));
-    return () => clearTimeout(timer);
+    // Lamp styles are cosmetic and load on their own: until they do, every lamp keeps the default look.
+    let styleTimer = 0;
+    const loadStyles = () => hass.callWS({ type: "plejd/light_styles/get" }).then((r: any) => setStyles(r.styles || {}))
+      .catch((e: any) => { console.warn("Plejd panel: could not load lamp types, retrying", e); styleTimer = window.setTimeout(loadStyles, 5000); });
+    loadStyles();
+    return () => { clearTimeout(timer); clearTimeout(styleTimer); };
   }, []);
   const setStyle = (entity_id: string, style: LampStyle) => {
     setStyles((cur) => ({ ...cur, [entity_id]: style }));

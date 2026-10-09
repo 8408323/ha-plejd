@@ -20749,7 +20749,13 @@ function Wl({ hass: e }) {
 		}).catch((e) => {
 			o(Pl(e)), t = window.setTimeout(r, 5e3);
 		});
-		return r(), e.callWS({ type: "plejd/light_styles/get" }).then((e) => i(e.styles || {})).catch((e) => console.warn("Plejd panel: could not load lamp types", e)), () => clearTimeout(t);
+		r();
+		let a = 0, s = () => e.callWS({ type: "plejd/light_styles/get" }).then((e) => i(e.styles || {})).catch((e) => {
+			console.warn("Plejd panel: could not load lamp types, retrying", e), a = window.setTimeout(s, 5e3);
+		});
+		return s(), () => {
+			clearTimeout(t), clearTimeout(a);
+		};
 	}, []);
 	let s = (t, n) => {
 		i((e) => ({

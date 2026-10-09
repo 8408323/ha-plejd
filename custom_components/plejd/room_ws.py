@@ -39,9 +39,10 @@ async def ws_rooms(hass: HomeAssistant, connection, msg) -> None:
     # Every room, not just coordinator.rooms: that list leaves out rooms whose group would also
     # switch a non-light output, and their lights still belong in their own room card. Such rooms
     # get no entity_id, so the panel switches their lights individually instead of by group.
+    # Stored names come from the latest full-site fetch; the cached group rooms' names are a fallback.
     names: dict[str, str] = {
-        **(entry.data.get(CONF_ROOM_NAMES) or {}),
         **{r.room_id: r.name for r in coordinator.rooms},
+        **(entry.data.get(CONF_ROOM_NAMES) or {}),
     }
     rooms = {
         room_id: {
