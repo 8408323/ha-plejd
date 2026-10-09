@@ -261,3 +261,18 @@ async def test_area_event_sync_queued_behind_a_reset_does_not_recreate_the_store
     await async_reset_areas(hass, _entry())  # option turned off / entry removed
     await handler(types.SimpleNamespace(data={}))  # stale event delivered afterwards
     assert ("store", f"{area_sync.STORE_KEY}.e1") not in hass.data
+
+
+async def test_hand_picked_area_survives_its_matching_area_disappearing_for_a_while():
+    areas_before = list(AREAS)
+    try:
+        hass = _hass([_device("d1", "TEKNIK", "vardagsrum")])
+        await async_sync_areas(hass, _entry())
+        hass.device_registry.devices["d1"].area_id = "hall"  # moved by hand
+        AREAS[:] = [a for a in AREAS if a.id != "garage"]  # matching area deleted
+        await async_sync_areas(hass, _entry())
+        AREAS[:] = areas_before  # and created again
+        await async_sync_areas(hass, _entry())
+        assert hass.device_registry.devices["d1"].area_id == "hall"
+    finally:
+        AREAS[:] = areas_before

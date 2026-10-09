@@ -94,10 +94,12 @@ async def async_sync_areas(hass: HomeAssistant, entry: ConfigEntry, *, generatio
             room_key = f"{room_id}:{room_names[room_id]}" if room_id in room_names else None
             device = devices.async_get_device(identifiers={(DOMAIN, plejd_id)})
             area = match_area(room_names[room_id], areas) if room_key else None
+            previous = synced.get(plejd_id) or {}
             if device is None or area is None:
+                if device is not None and previous.get("room", "").split(":", 1)[0] == room_id:
+                    resolved[plejd_id] = previous  # same room, no area right now: keep its history
                 continue
             resolved[plejd_id] = {"room": room_key, "area": area.id}
-            previous = synced.get(plejd_id) or {}
             room_changed = previous.get("room") != room_key
             match_changed = previous.get("area") != area.id and device.area_id == previous.get("area")
             if (room_changed or match_changed) and device.area_id != area.id:
