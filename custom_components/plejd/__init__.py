@@ -12,11 +12,12 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry
 
-from . import dim_binding_ws, panel, remote_profile_ws, room_ws, schedule_ws
+from . import area_sync, dim_binding_ws, panel, remote_profile_ws, room_ws, schedule_ws
 from .add_device import async_add_device
 from .bindings import PlejdDimBindings
 from .const import (
     CONF_SHOW_PANEL,
+    CONF_SYNC_AREAS,
     DOMAIN,
     ROOM_CATEGORIES,
     SCHEDULE_ASTRO_EVENTS,
@@ -379,6 +380,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await coordinator.async_shutdown()
         raise
     entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
+    # Follow Plejd room moves into HA areas (opt-in; the daily cloud poll reloads on change).
+    if entry.options.get(CONF_SYNC_AREAS, False):
+        try:
+            await area_sync.async_sync_areas(hass, entry)
+        except Exception:  # noqa: BLE001 - optional; a registry/storage error must not fail setup
+            _LOGGER.warning("Plejd: could not sync device areas with Plejd rooms", exc_info=True)
     # Mirror HA device renames back to the Plejd app (cloud title update).
     entry.async_on_unload(
         hass.bus.async_listen(

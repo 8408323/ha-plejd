@@ -886,7 +886,7 @@ function Bindings({ hass, reg }: RegCtx) {
 
 // ── settings ────────────────────────────────────────────────────────────────
 
-type SettingsData = { transport: string; has_gateway: boolean; holiday_lights: string[]; holiday_window_start: string; holiday_window_end: string };
+type SettingsData = { transport: string; has_gateway: boolean; holiday_lights: string[]; holiday_window_start: string; holiday_window_end: string; sync_areas: boolean };
 
 function Settings({ hass }: Ctx) {
   const t = useT();
@@ -917,8 +917,8 @@ function Settings({ hass }: Ctx) {
   const save = async () => {
     setBusy(true); setError(""); setNotice("");
     try {
-      const { transport, holiday_lights, holiday_window_start, holiday_window_end } = draft;
-      const r = await hass.callWS({ type: "plejd/settings/set", transport, holiday_lights, holiday_window_start, holiday_window_end });
+      const { transport, holiday_lights, holiday_window_start, holiday_window_end, sync_areas } = draft;
+      const r = await hass.callWS({ type: "plejd/settings/set", transport, holiday_lights, holiday_window_start, holiday_window_end, sync_areas });
       setNotice(r.reload_failed || t.saved);
       load();
     } catch (e) {
@@ -945,6 +945,11 @@ function Settings({ hass }: Ctx) {
           <div className="form" />
         </>
       )}
+      <h3>{t.areas}</h3>
+      <p className="lead">{t.areas_lead}</p>
+      <div className="checks col">
+        <label><input type="checkbox" checked={draft.sync_areas} onChange={(e) => set({ sync_areas: e.target.checked })} />{t.sync_areas}</label>
+      </div>
       <h3>{t.holiday}</h3>
       <p className="lead">{t.holiday_lead}</p>
       <div className="fields">

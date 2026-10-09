@@ -1554,3 +1554,32 @@ async def test_remove_entry_clears_the_persistent_repair_issue():
 
     assert f"malformed_cloud_site_{entry.entry_id}" not in hass.created_issues
     assert entry.entry_id not in hass.data[DATA_LAST_SELF_HEAL]
+
+
+async def test_setup_syncs_areas_only_when_enabled(monkeypatch):
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    calls = []
+
+    async def _sync(hass, entry):
+        calls.append(entry.entry_id)
+
+    monkeypatch.setattr(plejd.area_sync, "async_sync_areas", _sync)
+    hass, entry = _hass(), _entry()
+    await async_setup_entry(hass, entry)
+    assert calls == []
+
+    entry.options = {"sync_areas": True}
+    await async_setup_entry(_hass(), entry)
+    assert calls == ["e1"]
+
+
+async def test_setup_survives_area_sync_failure(monkeypatch):
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+
+    async def _boom(hass, entry):
+        raise RuntimeError("registry unavailable")
+
+    monkeypatch.setattr(plejd.area_sync, "async_sync_areas", _boom)
+    entry = _entry()
+    entry.options = {"sync_areas": True}
+    assert await async_setup_entry(_hass(), entry) is True

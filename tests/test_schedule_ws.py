@@ -578,6 +578,7 @@ async def test_settings_get_returns_defaults():
             "holiday_lights": [],
             "holiday_window_start": "18:00",
             "holiday_window_end": "23:00",
+            "sync_areas": False,
         },
     )
 
@@ -588,7 +589,7 @@ async def test_settings_get_errors_when_not_loaded():
     assert conn.error == (1, "not_loaded", "Plejd is not loaded")
 
 
-async def test_settings_set_persists_holiday_and_transport_then_reloads():
+async def test_settings_set_persists_holiday_transport_and_area_sync_then_reloads():
     entry = _gateway_entry(options={"schedules": [_SCHEDULE], "transport": "auto"})
     hass = _hass(entry)
     conn = _Conn()
@@ -601,6 +602,7 @@ async def test_settings_set_persists_holiday_and_transport_then_reloads():
             "holiday_lights": ["light.hall"],
             "holiday_window_start": "19:30:00",
             "holiday_window_end": "01:00",
+            "sync_areas": True,
         },
     )
     assert conn.result == (2, {})
@@ -610,6 +612,7 @@ async def test_settings_set_persists_holiday_and_transport_then_reloads():
         "holiday_lights": ["light.hall"],
         "holiday_window_start": "19:30",
         "holiday_window_end": "01:00",
+        "sync_areas": True,
     }
     assert hass.config_entries.reloaded == "e1"
 

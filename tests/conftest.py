@@ -514,6 +514,14 @@ except ImportError:
     _dr.async_get = _dr_async_get  # type: ignore[attr-defined]
     sys.modules.setdefault("homeassistant.helpers.device_registry", _dr)
 
+    _ar = types.ModuleType("homeassistant.helpers.area_registry")
+
+    def _ar_async_get(hass):
+        return getattr(hass, "area_registry", None)
+
+    _ar.async_get = _ar_async_get  # type: ignore[attr-defined]
+    sys.modules.setdefault("homeassistant.helpers.area_registry", _ar)
+
     _er = types.ModuleType("homeassistant.helpers.entity_registry")
 
     class _EntityRegistry:
