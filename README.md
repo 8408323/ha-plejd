@@ -69,9 +69,11 @@ schedules are added as entities (see below).
 A **Plejd** entry in the sidebar (admins only) has three tabs:
 
 - **Devices** — one card per Plejd room: switch or dim the whole room, or tap a lamp
-  to toggle it and drag to dim. ✎ picks how each lamp is drawn (bulb, pendant, spot,
-  ceiling, LED strip, table, floor, wall). Then scenes, thermostats, covers, motion
-  sensors and device health.
+  to toggle it and drag to dim. **✎ Edit** renames rooms and lights (also in the
+  Plejd app), picks how each lamp is drawn (bulb, pendant, spot, ceiling, downlight,
+  chandelier, LED strip, table, floor, wall, outdoor lantern, ground light, post
+  light), and reorders/resizes the cards; nothing changes until **Save**. Then scenes,
+  thermostats, covers, motion sensors and device health.
 - **Automations** — on-device weekly schedules and remote → light dim bindings.
 - **Settings** — holiday mode (lights + active window), the communication path on
   sites with a gateway, and adding a new device.

@@ -5,6 +5,7 @@ from __future__ import annotations
 import types
 
 import pytest
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
 from plejd import room_ws
 from plejd.cloud import PlejdCloudRoom
@@ -151,4 +152,168 @@ async def test_styles_are_empty_when_plejd_is_not_loaded():
 def test_async_register_registers_all_commands():
     hass = types.SimpleNamespace(data={})
     room_ws.async_register(hass)
-    assert {room_ws.ws_rooms, room_ws.ws_styles_get, room_ws.ws_styles_set} <= set(hass.data["ws_commands"])
+    assert {
+        room_ws.ws_rooms,
+        room_ws.ws_styles_get,
+        room_ws.ws_styles_set,
+        room_ws.ws_layout_get,
+        room_ws.ws_layout_set,
+        room_ws.ws_rename_light,
+    } <= set(hass.data["ws_commands"])
+
+
+async def test_layout_defaults_to_empty_then_round_trips():
+    hass = _hass()
+    conn = _Conn()
+    await room_ws.ws_layout_get(hass, conn, {"id": 1})
+    assert conn.result == (1, {"order": [], "sizes": {}})
+    await room_ws.ws_layout_set(hass, conn, {"id": 2, "order": ["r2", "", "r1"], "sizes": {"r1": 3, "": 1}})
+    await room_ws.ws_layout_get(hass, conn, {"id": 3})
+    assert conn.result == (3, {"order": ["r2", "", "r1"], "sizes": {"r1": 3, "": 1}})
+
+
+# ── lights/rename ────────────────────────────────────────────────────────────
+
+
+class _Registry(er.EntityRegistry):
+    def __init__(self, entities):
+        super().__init__(entities)
+        self.entity_names = {}
+
+    def async_update_entity(self, entity_id, *, name):
+        self.entity_names[entity_id] = name
+
+
+class _Devices:
+    def __init__(self):
+        self.names = {}
+
+    def async_update_device(self, device_id, *, name_by_user):
+        self.names[device_id] = name_by_user
+
+
+def _rename_hass(rename_error=None):
+    def light(uid, entity_id, device_id):
+        return types.SimpleNamespace(
+            unique_id=uid, entity_id=entity_id, device_id=device_id, config_entry_id="e1", name=None
+        )
+
+    renamed = []
+    skipped = []
+
+    async def _rename(device_id, name, output_index=None):
+        if rename_error:
+            raise rename_error
+        renamed.append((device_id, name, output_index))
+
+    coordinator = types.SimpleNamespace(
+        devices=[
+            _device("d1", "r1"),
+            _device("d2", "r1"),
+            _device("d2", "r1", output_index=1),
+            _device("d2", "r1", output_index=2, category="relay"),
+            _device("d3", "r1"),
+            _device("d3", "r1", output_index=1, category="relay"),
+        ],
+        async_rename_device=_rename,
+        skip_next_mirror=lambda device_id, name: skipped.append((device_id, name)),
+    )
+    reauth = []
+    entry = types.SimpleNamespace(
+        entry_id="e1", runtime_data=coordinator, data={}, async_start_reauth=lambda h: reauth.append(h)
+    )
+    registry = _Registry(
+        {
+            e.entity_id: e
+            for e in [
+                light("d1", "light.single", "dev1"),
+                light("d2", "light.dual_a", "dev2"),
+                light("d2_1", "light.dual_b", "dev2"),
+                light("x", "switch.other", "devx"),
+                light("d3", "light.mixed", "dev3"),
+            ]
+        }
+    )
+    hass = types.SimpleNamespace(data={DATA_ENTRY: entry}, entity_registry=registry, device_registry=_Devices())
+    hass.skipped = skipped
+    return hass, renamed, reauth
+
+
+async def test_rename_single_output_light_renames_the_device_after_plejd_accepts():
+    hass, renamed, _ = _rename_hass()
+    conn = _Conn()
+    await room_ws.ws_rename_light(hass, conn, {"id": 1, "entity_id": "light.single", "name": " Taklampa "})
+    assert renamed == [("d1", "Taklampa", 0)]
+    assert hass.device_registry.names == {"dev1": "Taklampa"}
+    assert conn.result == (1, {"name": "Taklampa"})
+    assert hass.skipped == [("d1", "Taklampa")]  # the registry update mustn't mirror it to Plejd again
+
+
+async def test_rename_clears_an_entity_name_override_that_would_hide_the_new_device_name():
+    hass, _, _ = _rename_hass()
+    hass.entity_registry.async_get("light.single").name = "Old override"
+    conn = _Conn()
+    await room_ws.ws_rename_light(hass, conn, {"id": 1, "entity_id": "light.single", "name": "Taklampa"})
+    assert hass.device_registry.names == {"dev1": "Taklampa"}
+    assert hass.entity_registry.entity_names == {"light.single": None}
+
+
+async def test_rename_light_sharing_a_device_with_a_relay_names_only_the_entity():
+    hass, renamed, _ = _rename_hass()
+    conn = _Conn()
+    await room_ws.ws_rename_light(hass, conn, {"id": 1, "entity_id": "light.mixed", "name": "Spot"})
+    assert renamed == [("d3", "Spot", 0)]
+    assert hass.device_registry.names == {} and hass.skipped == []
+    assert hass.entity_registry.entity_names == {"light.mixed": "Spot"}
+
+
+async def test_rename_one_output_of_a_shared_device_names_only_that_entity():
+    # two lights share device d2 (the relay output doesn't count): renaming the device would rename both
+    hass, renamed, _ = _rename_hass()
+    conn = _Conn()
+    await room_ws.ws_rename_light(hass, conn, {"id": 1, "entity_id": "light.dual_b", "name": "Spot"})
+    assert renamed == [("d2", "Spot", 1)]
+    assert hass.device_registry.names == {}
+    assert hass.entity_registry.entity_names == {"light.dual_b": "Spot"}
+
+
+@pytest.mark.parametrize(
+    ("error", "code"),
+    [(HomeAssistantError("cloud said no"), "rename_failed"), (RuntimeError("boom"), "rename_failed")],
+)
+async def test_rename_reports_a_cloud_failure_and_leaves_ha_untouched(error, code):
+    hass, _, _ = _rename_hass(rename_error=error)
+    conn = _Conn()
+    await room_ws.ws_rename_light(hass, conn, {"id": 1, "entity_id": "light.single", "name": "X"})
+    assert conn.error[1] == code
+    assert hass.device_registry.names == {} and hass.entity_registry.entity_names == {}
+
+
+async def test_rename_rejected_credentials_start_reauth():
+    from plejd.cloud import PlejdAuthError
+
+    hass, _, reauth = _rename_hass(rename_error=PlejdAuthError("bad"))
+    conn = _Conn()
+    await room_ws.ws_rename_light(hass, conn, {"id": 1, "entity_id": "light.single", "name": "X"})
+    assert conn.error[1] == "auth_failed" and reauth == [hass]
+
+
+@pytest.mark.parametrize(
+    ("msg", "code"),
+    [
+        ({"entity_id": "light.single", "name": "  "}, "name_required"),
+        ({"entity_id": "switch.other", "name": "X"}, "not_found"),
+        ({"entity_id": "light.nope", "name": "X"}, "not_found"),
+    ],
+)
+async def test_rename_rejects_bad_input(msg, code):
+    hass, renamed, _ = _rename_hass()
+    conn = _Conn()
+    await room_ws.ws_rename_light(hass, conn, {"id": 1, **msg})
+    assert conn.error[1] == code and renamed == []
+
+
+async def test_rename_errors_when_not_loaded():
+    conn = _Conn()
+    await room_ws.ws_rename_light(types.SimpleNamespace(data={}), conn, {"id": 1, "entity_id": "light.x", "name": "X"})
+    assert conn.error == (1, "not_loaded", "Plejd is not loaded")

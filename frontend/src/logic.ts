@@ -43,6 +43,19 @@ export function triggerLabel(tr: Trigger, t: T): string {
   return `${typeLabel} · ${subLabel}`;
 }
 
+// Card ids in their saved order; ids the saved order doesn't know yet keep their natural order at the end.
+export function orderIds(ids: string[], saved: string[]): string[] {
+  const rank = (id: string) => (saved.includes(id) ? saved.indexOf(id) : saved.length + ids.indexOf(id));
+  return [...ids].sort((a, b) => rank(a) - rank(b));
+}
+
+// The order with `id` moved to position `to` (clamped to the list).
+export function moveId(order: string[], id: string, to: number): string[] {
+  const rest = order.filter((x) => x !== id);
+  rest.splice(Math.max(0, Math.min(to, rest.length)), 0, id);
+  return rest;
+}
+
 const pick = (triggers: Trigger[], index: string) => (index === "" ? null : triggers[Number(index)] || null);
 
 // Form -> binding payload, mirroring the backend's validation so obvious mistakes are caught

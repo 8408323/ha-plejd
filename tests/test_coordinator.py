@@ -3134,6 +3134,69 @@ async def test_rename_device_skips_without_credentials(monkeypatch):
     await c.async_rename_device("d1", "X")
 
 
+async def test_device_rename_already_done_by_the_dashboard_is_not_mirrored_again(monkeypatch):
+    from plejd.const import DOMAIN
+
+    c = PlejdCoordinator(_hass(), _cloud_entry())
+    device = types.SimpleNamespace(identifiers={(DOMAIN, "d1")}, name_by_user="Kitchen")
+    c.hass.device_registry = types.SimpleNamespace(async_get=lambda device_id: device)
+    calls = []
+
+    async def _rename(device_id, title, output_index=None):
+        calls.append(title)
+
+    monkeypatch.setattr(c, "async_rename_device", _rename)
+    event = types.SimpleNamespace(data={"action": "update", "device_id": "dev", "changes": {"name_by_user": "old"}})
+    c.skip_next_mirror("d1", "Kitchen")
+    await c.async_handle_device_registry_update(event)
+    assert calls == []  # skipped once...
+    await c.async_handle_device_registry_update(event)
+    assert calls == ["Kitchen"]  # ...and only once: a later user rename in HA still mirrors
+
+
+async def test_rename_named_output_targets_that_output(monkeypatch):
+    # the dashboard renames one light of a multi-output device: its own Parse object, not the primary's
+    import dataclasses
+
+    c = PlejdCoordinator(_hass(), _cloud_entry())
+    c.devices[0].object_id = "p0"
+    c.devices.append(dataclasses.replace(c.devices[0], output_index=1, object_id="p1"))
+    captured = {}
+
+    async def _login(*a):
+        return "tok"
+
+    async def _set(session, token, site_id, device_id, parse_id, title):
+        captured.update(parse_id=parse_id, title=title)
+        return True
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _login)
+    monkeypatch.setattr(coordinator_mod, "async_set_device_title", _set)
+    await c.async_rename_device("d1", "Second", output_index=1)
+    assert captured == {"parse_id": "p1", "title": "Second"}
+
+
+async def test_rename_named_output_raises_instead_of_skipping(monkeypatch):
+    from homeassistant.exceptions import HomeAssistantError
+
+    no_creds = PlejdCoordinator(_hass(), _entry())
+    with pytest.raises(HomeAssistantError):
+        await no_creds.async_rename_device("d1", "X", output_index=0)
+
+    c = PlejdCoordinator(_hass(), _cloud_entry())  # _DEV has no object_id, and the cloud lookup finds none
+
+    async def _login(*a):
+        return "tok"
+
+    async def _get_site(*a):
+        return types.SimpleNamespace(devices=[])
+
+    monkeypatch.setattr(coordinator_mod, "async_login", _login)
+    monkeypatch.setattr(coordinator_mod, "async_get_site", _get_site)
+    with pytest.raises(HomeAssistantError, match="no cloud object"):
+        await c.async_rename_device("d1", "X", output_index=0)
+
+
 async def test_rename_device_raises_when_cloud_rejects(monkeypatch):
     from homeassistant.exceptions import HomeAssistantError
 

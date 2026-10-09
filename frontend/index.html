@@ -39,14 +39,30 @@ let schedules = [{ id: 0, slot: 0, name: "Morning", days: [0, 1, 2, 3, 4], time:
 let bindings = [];
 let settings = { transport: "auto", has_gateway: true, holiday_lights: [], holiday_window_start: "18:00", holiday_window_end: "23:00" };
 let stylesFail = Number(new URLSearchParams(location.search).get("stylesfail") || 0);
+let rooms = [
+  { room_id: "r1", name: "Kök", entity_id: "light.kok", lights: ["light.kitchen", "light.kok_spot", "light.kok_o", "light.kok_strip"] },
+  { room_id: "r2", name: "Vardagsrum", entity_id: "light.vardagsrum", lights: ["light.golv", "light.bord", "light.vagg"] },
+];
+let layout = { order: [], sizes: {} };
+const rename = (match, name) => {
+  for (const e of all.filter(match)) e.state.attributes = { ...e.state.attributes, friendly_name: name };
+  p.hass = window.mockHass = { ...window.mockHass, states: Object.fromEntries(all.map((e) => [e.id, e.state])) };
+  return {};
+};
+let layoutFail = Number(new URLSearchParams(location.search).get("layoutfail") || 0);
 let roomsFail = Number(new URLSearchParams(location.search).get("roomsfail") || 0);
 let styles = { "light.kok_spot": "spot", "light.kok_o": "pendant", "light.kok_strip": "strip", "light.golv": "floor", "light.bord": "table", "light.vagg": "wall", "light.kitchen": "ceiling" };
 const ws = {
   // ?roomsfail=N: the first N calls fail, like Plejd still starting up
-  "plejd/rooms": () => { if (roomsFail-- > 0) throw new Error("Unknown command."); return { rooms: [
-    { room_id: "r1", name: "Kök", entity_id: "light.kok", lights: ["light.kitchen", "light.kok_spot", "light.kok_o", "light.kok_strip"] },
-    { room_id: "r2", name: "Vardagsrum", entity_id: "light.vardagsrum", lights: ["light.golv", "light.bord", "light.vagg"] },
-  ] }; },
+  "plejd/rooms": () => { if (roomsFail-- > 0) throw new Error("Unknown command."); return { rooms: rooms.map((r) => ({ ...r })) }; },
+  // ?layoutfail=N: the first N layout reads fail (Edit must stay disabled until one succeeds)
+  "plejd/room_layout/get": () => { if (layoutFail-- > 0) throw new Error("storage error"); return layout; },
+  "plejd/room_layout/set": (m) => (layout = { order: m.order, sizes: m.sizes }),
+  // renames: update the mock's states the way HA would, and hand the panel a fresh hass
+  // ?renamefail: Plejd rejects light renames (the draft must stay open with an error)
+  "plejd/lights/rename": (m) => location.search.includes("renamefail")
+    ? Promise.reject(new Error("Plejd rejected the rename"))
+    : new Promise((res) => setTimeout(() => res(rename((e) => e.id === m.entity_id, m.name)), 200)),
   // ?stylesfail=N: the first N lamp-style reads fail (the lights must still show, and the styles arrive on retry)
   // ?slowget[=ms]: reads answer after 400 ms (or ms) with the snapshot taken when they were sent
   "plejd/light_styles/get": () => {
@@ -76,10 +92,16 @@ const hass = {
   devices: { d1: { id: "d1", name: "Kitchen dimmer" }, d4: { id: "d4", name: "Hallway" }, r1: { id: "r1", name: "Hall remote" } },
   areas: { living: { area_id: "living", name: "Living room" } },
   // window.calls counts calls per type, for console checks
-  callWS: async (m) => { console.log("ws", m); (window.calls ??= {})[m.type] = (window.calls[m.type] || 0) + 1; return ws[m.type](m); },
+  callWS: async (m) => { console.log("ws", m); (window.calls ??= {})[m.type] = (window.calls[m.type] || 0) + 1; (window.log ??= []).push(m.type); return ws[m.type](m); },
   // window.fireEvent("plejd_rooms_changed") plays an event to the panel's subscriptions
   connection: { subscribeEvents: async (cb, type) => { (window.subs ??= {})[type] = cb; return () => delete window.subs[type]; } },
-  callService: async (...a) => console.log("service", ...a),
+  callService: async (...a) => {
+    console.log("service", ...a);
+    (window.services ??= []).push(a);
+    (window.log ??= []).push(`${a[0]}.${a[1]}`);
+    // plejd.update_room renames the room in Plejd and reloads the entry, which tells the panel
+    if (a[0] === "plejd" && a[1] === "update_room") { rooms = rooms.map((r) => r.room_id === a[2].room_id ? { ...r, name: a[2].title } : r); setTimeout(() => window.fireEvent("plejd_rooms_changed"), 50); }
+  },
 };
 // ?halang=sv: Home Assistant's own language (the panel follows it unless one is picked in Settings)
 hass.language = new URLSearchParams(location.search).get("halang") || "en";
