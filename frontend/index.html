@@ -1,0 +1,46 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Plejd preview</title>
+<style>body{margin:0;background:#111;--primary-background-color:#111;--card-background-color:#1c1c1c;--primary-text-color:#e1e1e1;--secondary-text-color:#9b9b9b;--primary-color:#03a9f4;--secondary-background-color:#262626;color-scheme:dark}</style>
+</head><body><plejd-panel id="p"></plejd-panel>
+<script type="module">
+// `npm run dev`: the panel against a fake hass (no Home Assistant needed).
+import "/src/main.tsx";
+const p = document.getElementById("p");
+const ent = (id, state, attributes = {}, device_id) => ({ id, state: { entity_id: id, state, attributes: { attribution: "Plejd", ...attributes } }, reg: { entity_id: id, platform: "plejd", device_id } });
+const all = [
+  ent("light.kitchen", "on", { friendly_name: "Kitchen", brightness: 128, supported_color_modes: ["brightness"] }, "d1"),
+  ent("light.hall", "off", { friendly_name: "Hall", supported_color_modes: ["onoff"] }, "d2"),
+  ent("light.porch", "unavailable", { friendly_name: "Porch", supported_color_modes: ["brightness"] }, "d3"),
+  ent("scene.evening", "unknown", { friendly_name: "Evening" }),
+  ent("climate.bath", "heat", { friendly_name: "Bathroom floor", temperature: 22, min_temp: 5, max_temp: 35, target_temp_step: 0.5 }),
+  ent("cover.blind", "open", { friendly_name: "Blind", supported_features: 15 }),
+  ent("binary_sensor.hall_motion", "on", { friendly_name: "Hall Motion", device_class: "motion" }, "d4"),
+  ent("sensor.hall_lux", "42", { device_class: "illuminance" }, "d4"),
+  ent("binary_sensor.kitchen_fault", "on", { device_class: "problem", active_faults: ["over_temperature"] }, "d1"),
+];
+let schedules = [{ id: 0, slot: 0, name: "Morning", days: [0, 1, 2, 3, 4], time: "06:30:00", scene: 1, fade: 5 }];
+let bindings = [];
+let settings = { transport: "auto", has_gateway: true, holiday_lights: [], holiday_window_start: "18:00", holiday_window_end: "23:00" };
+const ws = {
+  "plejd/schedules/list": () => ({ schedules, scenes: [{ index: 1, name: "Evening" }] }),
+  "plejd/schedules/add": (m) => (schedules = [...schedules, { ...m, id: schedules.length, time: m.time + ":00" }], { schedules }),
+  "plejd/schedules/delete": (m) => (schedules = schedules.filter((s) => s.id !== m.schedule_id), { schedules }),
+  "plejd/dim_bindings/list": () => ({ bindings }),
+  "plejd/dim_bindings/save": (m) => (bindings = m.bindings.map((b, i) => ({ id: i, ...b })), { bindings }),
+  "plejd/device_triggers": (m) => ({ device_kind: "remote", triggers: ["dim_up", "dim_down", "release", "press"].map((type) => ({ device_id: m.device_id, type })) }),
+  "plejd/settings/get": () => settings,
+  "plejd/settings/set": ({ type, id, ...m }) => (settings = { ...settings, ...m }, {}),
+  "plejd/devices/scan": () => ({ bluetooth: true, devices: [{ address: "AA:BB:CC:DD:EE:01", name: "", rssi: -61, hardware_id: "36", model: "DIM-01", firmware_build_time: 0 }], room_categories: ["LivingRoom", "Kitchen", "Other"] }),
+};
+const hass = {
+  states: Object.fromEntries(all.map((e) => [e.id, e.state])),
+  entities: Object.fromEntries(all.map((e) => [e.id, e.reg])),
+  devices: { d1: { id: "d1", name: "Kitchen dimmer" }, d4: { id: "d4", name: "Hallway" }, r1: { id: "r1", name: "Hall remote" } },
+  areas: { living: { area_id: "living", name: "Living room" } },
+  callWS: async (m) => { console.log("ws", m); return ws[m.type](m); },
+  callService: async (...a) => console.log("service", ...a),
+};
+p.narrow = innerWidth < 600;
+p.hass = hass;
+</script></body></html>

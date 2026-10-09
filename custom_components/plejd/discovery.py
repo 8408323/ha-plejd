@@ -1,6 +1,6 @@
 """Discover unprovisioned Plejd devices from BLE advertisements.
 
-Shared by the scan_new_devices/add_device services and the config/options flow
+Shared by the scan_new_devices/add_device services and the dashboard's
 "Add a device" wizard, so there's one place that knows how to decode a Plejd
 advertisement's provisioning state.
 """

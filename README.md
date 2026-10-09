@@ -64,14 +64,25 @@ Or manually:
 Devices, scenes, buttons and sensors appear automatically. Per-device tuning and
 schedules are added as entities (see below).
 
+### The Plejd dashboard
+
+A **Plejd** entry in the sidebar (admins only) has three tabs:
+
+- **Devices** — lights (tap to toggle, drag to dim), scenes, thermostats, covers,
+  motion sensors and device health.
+- **Automations** — on-device weekly schedules and remote → light dim bindings.
+- **Settings** — holiday mode (lights + active window), the communication path on
+  sites with a gateway, and adding a new device.
+
+The integration's own **Configure** dialog only shows or hides the dashboard.
+
 ### Adding a new Plejd device
 
-Go to **Settings → Devices & Services → Plejd → Configure → Add a device**. This
-wizard lives on the integration entry itself, not on any specific device (not the
-gateway, not a light) — so it works the same whether your site has a GWY-01 or not.
+Open the **Plejd** dashboard → **Settings** → **Add a device**. It works the same
+whether your site has a GWY-01 or not.
 
-1. Power up the new device; it broadcasts as unprovisioned over Bluetooth.
-2. Pick it from the list (address, model, signal strength).
+1. Power up the new device; it broadcasts as unprovisioned over Bluetooth. Press **Scan**.
+2. Pick it from the list (model, address, signal strength).
 3. Give it a name (and optionally a new room). It's commissioned directly from Home
    Assistant — DH key exchange, mesh access address, node index — no need to open
    the Plejd app at all.
@@ -102,8 +113,8 @@ Per-output **device settings** (config entities):
 own clock, so they keep firing even when Home Assistant is offline:
 
 - A **Sync clock** button (and automatic sync on connect + daily) keeps device clocks correct.
-- Add **weekly schedules** (day + time → scene) under the integration's **Configure**
-  dialog; each becomes a `switch` you can enable/disable. Prefer HA automations? Just
+- Add **weekly schedules** (day + time → scene) on the dashboard's **Automations**
+  tab; each becomes a `switch` you can enable/disable. Prefer HA automations? Just
   don't add any — the choice is yours.
 
 > Astro (sunrise/sunset) schedules and firmware OTA are intentionally out of scope —
@@ -121,7 +132,16 @@ The integration is pure Python with no Home Assistant import needed to run the t
 ```bash
 uv sync --dev
 uv run pytest tests/ -v --cov=custom_components/plejd --cov-fail-under=100
+node --test tests/test_panel_logic.mjs
 uv run ruff check custom_components/ tests/ tools/
+```
+
+The dashboard is a React + Vite app in `frontend/`, built into
+`custom_components/plejd/www/panel.js` (committed, so HACS installs need no build step).
+After changing it, rebuild and commit the output:
+
+```bash
+cd frontend && npm install && npm run build
 ```
 
 How the protocol was reverse-engineered (BLE GATT, crypto, mesh commands, cloud) is documented in [docs/reverse_engineering.md](docs/reverse_engineering.md). Contributions welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).

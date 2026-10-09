@@ -225,7 +225,7 @@ async def test_add_returns_persisted_schedules_when_reload_raises():
     assert msg_id == 1
     assert payload["schedules"][0]["name"] == "X"
     assert entry.options["schedules"] == payload["schedules"]
-    assert payload["reload_failed"] == "Schedule saved, but Plejd failed to reload; try again"
+    assert payload["reload_failed"] == "Saved, but Plejd failed to reload; try again"
 
 
 async def test_add_returns_error_when_the_save_itself_fails():
@@ -236,7 +236,7 @@ async def test_add_returns_error_when_the_save_itself_fails():
     hass.config_entries.update_fails = True
     conn = _Conn()
     await schedule_ws.ws_add(hass, conn, {"id": 1, "name": "X", "days": [0], "time": "06:00", "scene": 3, "fade": 0})
-    assert conn.error == (1, "save_failed", "Could not save schedules")
+    assert conn.error == (1, "save_failed", "Could not save")
     assert conn.result is None
     assert not schedule_ws.async_get_reload_lock(hass, entry.entry_id).locked()
 
@@ -255,7 +255,7 @@ async def test_add_returns_persisted_schedules_when_reload_reports_failure():
     assert msg_id == 1
     assert payload["schedules"][0]["name"] == "X"
     assert entry.options["schedules"] == payload["schedules"]
-    assert payload["reload_failed"] == "Schedule saved, but Plejd failed to reload; try again"
+    assert payload["reload_failed"] == "Saved, but Plejd failed to reload; try again"
     assert not schedule_ws.async_get_reload_lock(hass, entry.entry_id).locked()
 
 
@@ -441,7 +441,7 @@ async def test_delete_returns_persisted_schedules_when_reload_raises():
     assert conn.error is None
     assert conn.result == (
         2,
-        {"schedules": [], "reload_failed": "Schedule saved, but Plejd failed to reload; try again"},
+        {"schedules": [], "reload_failed": "Saved, but Plejd failed to reload; try again"},
     )
 
 
@@ -455,7 +455,7 @@ async def test_delete_returns_persisted_schedules_when_reload_reports_failure():
     assert conn.error is None
     assert conn.result == (
         2,
-        {"schedules": [], "reload_failed": "Schedule saved, but Plejd failed to reload; try again"},
+        {"schedules": [], "reload_failed": "Saved, but Plejd failed to reload; try again"},
     )
     assert entry.options["schedules"] == []
 
@@ -501,6 +501,9 @@ def test_async_register_registers_all_commands():
     assert schedule_ws.ws_list in registered
     assert schedule_ws.ws_add in registered
     assert schedule_ws.ws_delete in registered
+    assert schedule_ws.ws_settings_get in registered
+    assert schedule_ws.ws_settings_set in registered
+    assert schedule_ws.ws_devices_scan in registered
 
 
 # ── #125: payloads are built under the lock, not from a pre-lock snapshot ─────
@@ -553,3 +556,103 @@ async def test_delete_does_not_resurrect_a_schedule_added_while_it_waited_for_th
     await asyncio.gather(delete)
 
     assert entry.options["schedules"] == [keep_me]  # target removed, the new one survives
+
+
+# ── settings ─────────────────────────────────────────────────────────────────
+
+
+def _gateway_entry(options=None):
+    entry = _entry(options=options)
+    entry.data.update(gateways=[{"deviceId": "gw"}], resource_set_id="rs")
+    return entry
+
+
+async def test_settings_get_returns_defaults():
+    conn = _Conn()
+    await schedule_ws.ws_settings_get(_hass(_entry()), conn, {"id": 1})
+    assert conn.result == (
+        1,
+        {
+            "transport": "auto",
+            "has_gateway": False,
+            "holiday_lights": [],
+            "holiday_window_start": "18:00",
+            "holiday_window_end": "23:00",
+        },
+    )
+
+
+async def test_settings_get_errors_when_not_loaded():
+    conn = _Conn()
+    await schedule_ws.ws_settings_get(_hass(), conn, {"id": 1})
+    assert conn.error == (1, "not_loaded", "Plejd is not loaded")
+
+
+async def test_settings_set_persists_holiday_and_transport_then_reloads():
+    entry = _gateway_entry(options={"schedules": [_SCHEDULE], "transport": "auto"})
+    hass = _hass(entry)
+    conn = _Conn()
+    await schedule_ws.ws_settings_set(
+        hass,
+        conn,
+        {
+            "id": 2,
+            "transport": "ble",
+            "holiday_lights": ["light.hall"],
+            "holiday_window_start": "19:30:00",
+            "holiday_window_end": "01:00",
+        },
+    )
+    assert conn.result == (2, {})
+    assert entry.options == {
+        "schedules": [_SCHEDULE],
+        "transport": "ble",
+        "holiday_lights": ["light.hall"],
+        "holiday_window_start": "19:30",
+        "holiday_window_end": "01:00",
+    }
+    assert hass.config_entries.reloaded == "e1"
+
+
+async def test_settings_set_forces_auto_transport_without_gateway():
+    entry = _entry(options={})
+    conn = _Conn()
+    await schedule_ws.ws_settings_set(_hass(entry), conn, {"id": 3, "transport": "gateway"})
+    assert entry.options["transport"] == "auto"
+
+
+async def test_settings_set_rejects_invalid_time_without_saving():
+    entry = _entry(options={})
+    hass = _hass(entry)
+    conn = _Conn()
+    await schedule_ws.ws_settings_set(hass, conn, {"id": 4, "holiday_window_end": "25:00"})
+    assert conn.error == (4, "invalid_time", "Invalid time")
+    assert hass.config_entries.updated is None
+
+
+async def test_settings_set_errors_when_not_loaded():
+    conn = _Conn()
+    await schedule_ws.ws_settings_set(_hass(), conn, {"id": 5})
+    assert conn.error == (5, "not_loaded", "Plejd is not loaded")
+
+
+# ── device scan ──────────────────────────────────────────────────────────────
+
+
+async def test_devices_scan_lists_unprovisioned(monkeypatch):
+    found = [{"address": "AA", "model": "DIM-01", "rssi": -60}]
+    monkeypatch.setattr(schedule_ws, "async_bluetooth_available", lambda hass: True)
+    monkeypatch.setattr(schedule_ws, "async_scan_unprovisioned", lambda hass: found)
+    conn = _Conn()
+    await schedule_ws.ws_devices_scan(_hass(), conn, {"id": 6})
+    assert conn.result[1]["bluetooth"] is True
+    assert conn.result[1]["devices"] == found
+    assert "Kitchen" in conn.result[1]["room_categories"]
+
+
+async def test_devices_scan_without_bluetooth_returns_nothing(monkeypatch):
+    monkeypatch.setattr(schedule_ws, "async_bluetooth_available", lambda hass: False)
+    conn = _Conn()
+    await schedule_ws.ws_devices_scan(_hass(), conn, {"id": 7})
+    assert conn.result[1]["bluetooth"] is False
+    assert conn.result[1]["devices"] == []

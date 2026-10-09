@@ -3,7 +3,7 @@
 The HA-facing orchestration around commission.py's transport-independent BLE
 commissioning: resolves the device via HA's Bluetooth integration, registers +
 commissions it, then refreshes and reloads the config entry. Shared by the
-add_device service and the "Add a device" options-flow wizard.
+add_device service and the "Add a device" dashboard wizard (which calls that service).
 """
 
 from __future__ import annotations

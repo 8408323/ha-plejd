@@ -6,6 +6,15 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- The dashboard is rebuilt in React + Vite (`frontend/`, built to `www/panel.js`) and
+  split into **Devices**, **Automations** and **Settings** tabs.
+- Setup moved from the integration's **Configure** dialog into the dashboard's
+  **Settings** tab: holiday mode, the gateway/Bluetooth communication choice and the
+  **Add a device** wizard. Schedules are managed on the **Automations** tab. The
+  **Configure** dialog now only shows or hides the dashboard.
+
 ## [0.12.0] - 2026-07-25
 
 Manage much of your Plejd site from Home Assistant: rooms, scenes, schedules

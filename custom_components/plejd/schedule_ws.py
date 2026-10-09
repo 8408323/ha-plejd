@@ -1,10 +1,10 @@
-"""WebSocket API for the dashboard's schedule editor.
+"""WebSocket API for the dashboard's schedule editor and settings.
 
-Admin-only commands to list/add/delete on-device weekly time-event schedules — the same
-data the config-flow "Configure -> Schedules" step manages — so the panel can offer this
-without the native-HA-form dialog. Schedules live in the config entry's options; adding
-or deleting one persists there and reloads the entry so the schedule's `switch` entity
-(switch.py) is (re)created, which is what actually programs/clears the on-device event.
+Admin-only commands to list/add/delete on-device weekly time-event schedules, read/write
+the entry's other options (transport, holiday mode), and list unprovisioned devices for
+the dashboard's "Add a device" wizard. Options persist on the config entry and reload it
+so e.g. a schedule's `switch` entity (switch.py) is (re)created, which is what actually
+programs/clears the on-device event.
 """
 
 from __future__ import annotations
@@ -25,6 +25,9 @@ from .const import (
     CONF_DEVICE_ADDRESSES,
     CONF_DEVICES,
     CONF_GATEWAYS,
+    CONF_HOLIDAY_LIGHTS,
+    CONF_HOLIDAY_WINDOW_END,
+    CONF_HOLIDAY_WINDOW_START,
     CONF_INPUTS,
     CONF_MOTION,
     CONF_RESOURCE_SET_ID,
@@ -33,9 +36,15 @@ from .const import (
     CONF_SCHEDULES,
     CONF_TRANSPORT,
     DOMAIN,
+    HOLIDAY_WINDOW_END_DEFAULT,
+    HOLIDAY_WINDOW_START_DEFAULT,
+    ROOM_CATEGORIES,
     TIME_EVENT_SLOTS,
     TRANSPORT_AUTO,
+    TRANSPORT_BLE,
+    TRANSPORT_GATEWAY,
 )
+from .discovery import async_bluetooth_available, async_scan_unprovisioned
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -234,10 +243,13 @@ def _parse_time(value: str) -> tuple[int, int, int] | None:
     return hour, minute, second
 
 
+def _has_gateway(entry) -> bool:
+    return bool(entry.data.get(CONF_GATEWAYS) and entry.data.get(CONF_RESOURCE_SET_ID))
+
+
 def _current_transport(entry) -> str:
     """Mirror the config-flow schedules step: drop a gateway-only preference once there's no usable gateway."""
-    has_gateway = bool(entry.data.get(CONF_GATEWAYS) and entry.data.get(CONF_RESOURCE_SET_ID))
-    return entry.options.get(CONF_TRANSPORT, TRANSPORT_AUTO) if has_gateway else TRANSPORT_AUTO
+    return entry.options.get(CONF_TRANSPORT, TRANSPORT_AUTO) if _has_gateway(entry) else TRANSPORT_AUTO
 
 
 @websocket_api.require_admin
@@ -356,6 +368,84 @@ async def ws_delete(hass: HomeAssistant, connection, msg) -> None:
     await _async_persist(hass, connection, msg, entry, _build)
 
 
+def _settings(entry: ConfigEntry) -> dict:
+    options = entry.options
+    return {
+        "transport": _current_transport(entry),
+        "has_gateway": _has_gateway(entry),
+        "holiday_lights": options.get(CONF_HOLIDAY_LIGHTS, []),
+        "holiday_window_start": options.get(CONF_HOLIDAY_WINDOW_START, HOLIDAY_WINDOW_START_DEFAULT),
+        "holiday_window_end": options.get(CONF_HOLIDAY_WINDOW_END, HOLIDAY_WINDOW_END_DEFAULT),
+    }
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): "plejd/settings/get"})
+@websocket_api.async_response
+async def ws_settings_get(hass: HomeAssistant, connection, msg) -> None:
+    entry = hass.data.get(DATA_ENTRY)
+    if entry is None:
+        connection.send_error(msg["id"], "not_loaded", "Plejd is not loaded")
+        return
+    connection.send_result(msg["id"], _settings(entry))
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "plejd/settings/set",
+        vol.Optional("transport"): vol.In([TRANSPORT_AUTO, TRANSPORT_GATEWAY, TRANSPORT_BLE]),
+        vol.Optional("holiday_lights"): [str],
+        vol.Optional("holiday_window_start"): str,
+        vol.Optional("holiday_window_end"): str,
+    }
+)
+@websocket_api.async_response
+async def ws_settings_set(hass: HomeAssistant, connection, msg) -> None:
+    entry = hass.data.get(DATA_ENTRY)
+    if entry is None:
+        connection.send_error(msg["id"], "not_loaded", "Plejd is not loaded")
+        return
+    updates: dict = {}
+    for key, conf in (
+        ("holiday_window_start", CONF_HOLIDAY_WINDOW_START),
+        ("holiday_window_end", CONF_HOLIDAY_WINDOW_END),
+    ):
+        if key in msg:
+            parsed = _parse_time(msg[key])
+            if parsed is None:
+                connection.send_error(msg["id"], "invalid_time", "Invalid time")
+                return
+            updates[conf] = f"{parsed[0]:02d}:{parsed[1]:02d}"
+    if "holiday_lights" in msg:
+        updates[CONF_HOLIDAY_LIGHTS] = msg["holiday_lights"]
+    if "transport" in msg:
+        updates[CONF_TRANSPORT] = msg["transport"]
+
+    def _build(current_entry: ConfigEntry) -> tuple[dict, dict]:
+        options = {**current_entry.options, **updates}
+        if not _has_gateway(current_entry):
+            options[CONF_TRANSPORT] = TRANSPORT_AUTO  # a gateway-only preference is meaningless without one
+        return options, {}
+
+    await _async_persist(hass, connection, msg, entry, _build)
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): "plejd/devices/scan"})
+@websocket_api.async_response
+async def ws_devices_scan(hass: HomeAssistant, connection, msg) -> None:
+    bluetooth = async_bluetooth_available(hass)
+    connection.send_result(
+        msg["id"],
+        {
+            "bluetooth": bluetooth,
+            "devices": async_scan_unprovisioned(hass) if bluetooth else [],
+            "room_categories": list(ROOM_CATEGORIES),
+        },
+    )
+
+
 class _NothingToPersist(Exception):
     """Raised by a persist builder to abort the write; it has sent its own WS error."""
 
@@ -385,14 +475,14 @@ async def _async_persist(
             try:
                 hass.config_entries.async_update_entry(entry, options=options)
             except Exception:  # noqa: BLE001 - nothing was persisted; a genuine save failure
-                _LOGGER.exception("Plejd: failed to save schedules")
+                _LOGGER.exception("Plejd: failed to save options")
                 save_failed = True
             else:
                 save_failed = False
                 try:
                     reloaded = await hass.config_entries.async_reload(entry.entry_id)
                 except Exception:  # noqa: BLE001 - options are already persisted; treat like a failed reload below
-                    _LOGGER.exception("Plejd: failed to reload after saving schedules")
+                    _LOGGER.exception("Plejd: failed to reload after saving options")
                     reloaded = False
         finally:
             hass.data.pop(_DATA_EXPECTING_SELF_RELOAD, None)
@@ -412,15 +502,13 @@ async def _async_persist(
                 _LOGGER.warning("Plejd: follow-up reload for a concurrent option change failed; leaving it pending")
                 async_mark_reload_pending(hass, entry.entry_id)
     if save_failed:
-        connection.send_error(msg["id"], "save_failed", "Could not save schedules")
+        connection.send_error(msg["id"], "save_failed", "Could not save")
         return
     if reloaded is False:
         # Send a result, not an error: `options` are already persisted above, and an error with
         # no data would leave the dashboard showing its old list, where a "try again" click adds
         # a second, duplicate schedule instead of seeing the one that already saved.
-        connection.send_result(
-            msg["id"], {**result, "reload_failed": "Schedule saved, but Plejd failed to reload; try again"}
-        )
+        connection.send_result(msg["id"], {**result, "reload_failed": "Saved, but Plejd failed to reload; try again"})
         return
     connection.send_result(msg["id"], result)
 
@@ -429,3 +517,6 @@ def async_register(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_list)
     websocket_api.async_register_command(hass, ws_add)
     websocket_api.async_register_command(hass, ws_delete)
+    websocket_api.async_register_command(hass, ws_settings_get)
+    websocket_api.async_register_command(hass, ws_settings_set)
+    websocket_api.async_register_command(hass, ws_devices_scan)

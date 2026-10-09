@@ -11,17 +11,12 @@ import voluptuous as vol
 from aiohttp import ClientError
 from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlow
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
-from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.selector import (
-    EntitySelector,
-    EntitySelectorConfig,
     SelectSelector,
     SelectSelectorConfig,
-    TimeSelector,
 )
 
-from .add_device import async_add_device
 from .cloud import (
     PlejdAuthError,
     PlejdCloudError,
@@ -35,31 +30,17 @@ from .const import (
     CONF_DEVICES,
     CONF_DISCOVERED_ADDRESS,
     CONF_GATEWAYS,
-    CONF_HOLIDAY_LIGHTS,
-    CONF_HOLIDAY_WINDOW_END,
-    CONF_HOLIDAY_WINDOW_START,
     CONF_INPUTS,
     CONF_INSTALLATION_ID,
     CONF_MOTION,
     CONF_RESOURCE_SET_ID,
     CONF_ROOMS,
     CONF_SCENES,
-    CONF_SCHEDULES,
     CONF_SHOW_PANEL,
     CONF_SITE_ID,
-    CONF_TRANSPORT,
     DOMAIN,
-    HOLIDAY_WINDOW_END_DEFAULT,
-    HOLIDAY_WINDOW_START_DEFAULT,
-    ROOM_CATEGORIES,
-    TIME_EVENT_SLOTS,
-    TRANSPORT_AUTO,
-    TRANSPORT_BLE,
-    TRANSPORT_GATEWAY,
-    WEEKDAYS,
 )
 from .coordinator import async_clear_malformed_site_issue, async_reset_self_heal_cooldown
-from .discovery import async_bluetooth_available, async_scan_unprovisioned
 
 if TYPE_CHECKING:
     from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
@@ -72,18 +53,6 @@ STEP_USER_SCHEMA = vol.Schema(
         vol.Required(CONF_PASSWORD): str,
     }
 )
-
-
-def _parse_time(value: str) -> tuple[int, int, int] | None:
-    """Parse 'HH:MM' or 'HH:MM:SS' into (hour, minute, second), or None if invalid."""
-    parts = value.split(":")
-    if len(parts) not in (2, 3) or not all(p.isdigit() for p in parts):
-        return None
-    hour, minute = int(parts[0]), int(parts[1])
-    second = int(parts[2]) if len(parts) == 3 else 0
-    if hour > 23 or minute > 59 or second > 59:
-        return None
-    return hour, minute, second
 
 
 def _site_id(item: dict) -> str:
@@ -103,7 +72,7 @@ class PlejdConfigFlow(ConfigFlow, domain=DOMAIN):
 
     @staticmethod
     def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
-        """Return the options flow: manage schedules, or add a new device."""
+        """Return the options flow: show or hide the dashboard."""
         return PlejdOptionsFlow(config_entry)
 
     def __init__(self) -> None:
@@ -276,199 +245,17 @@ class PlejdConfigFlow(ConfigFlow, domain=DOMAIN):
 
 
 class PlejdOptionsFlow(OptionsFlow):
-    """Configure Plejd: manage on-device schedules, or add a new device to the mesh."""
+    """Show or hide the Plejd dashboard; everything else is configured in the dashboard itself."""
 
     def __init__(self, config_entry: ConfigEntry) -> None:
         self._entry = config_entry
-        self._new_device_address: str | None = None
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        """Entry point: a menu, not tied to any particular device (works with or without a gateway)."""
-        return self.async_show_menu(
-            step_id="init", menu_options=["schedules", "dashboard", "holiday_mode", "add_device"]
-        )
-
-    async def async_step_dashboard(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        """Show or hide the Plejd dashboard in the sidebar."""
         if user_input is not None:
             return self.async_create_entry(
                 title="", data={**self._entry.options, CONF_SHOW_PANEL: user_input[CONF_SHOW_PANEL]}
             )
         show = self._entry.options.get(CONF_SHOW_PANEL, True)
         return self.async_show_form(
-            step_id="dashboard", data_schema=vol.Schema({vol.Required(CONF_SHOW_PANEL, default=show): bool})
-        )
-
-    async def async_step_holiday_mode(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        """Configure holiday mode (presence simulation): target lights + active window."""
-        if user_input is not None:
-            return self.async_create_entry(
-                title="",
-                data={
-                    **self._entry.options,
-                    CONF_HOLIDAY_LIGHTS: user_input.get("lights", []),
-                    CONF_HOLIDAY_WINDOW_START: user_input["window_start"],
-                    CONF_HOLIDAY_WINDOW_END: user_input["window_end"],
-                },
-            )
-        options = self._entry.options
-        schema = vol.Schema(
-            {
-                vol.Optional("lights", default=options.get(CONF_HOLIDAY_LIGHTS, [])): EntitySelector(
-                    EntitySelectorConfig(domain="light", multiple=True)
-                ),
-                vol.Optional(
-                    "window_start", default=options.get(CONF_HOLIDAY_WINDOW_START, HOLIDAY_WINDOW_START_DEFAULT)
-                ): TimeSelector(),
-                vol.Optional(
-                    "window_end", default=options.get(CONF_HOLIDAY_WINDOW_END, HOLIDAY_WINDOW_END_DEFAULT)
-                ): TimeSelector(),
-            }
-        )
-        return self.async_show_form(step_id="holiday_mode", data_schema=schema)
-
-    async def async_step_schedules(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        schedules: list[dict] = list(self._entry.options.get(CONF_SCHEDULES, []))
-        next_id: int = self._entry.options.get("next_schedule_id", 0)
-        transport: str = self._entry.options.get(CONF_TRANSPORT, TRANSPORT_AUTO)
-        # A usable gateway needs both a device and a resource set (matches the coordinator).
-        has_gateway = bool(self._entry.data.get(CONF_GATEWAYS) and self._entry.data.get(CONF_RESOURCE_SET_ID))
-        errors: dict[str, str] = {}
-        if user_input is not None:
-            to_delete = set(user_input.get("delete", []))
-            kept = [s for s in schedules if str(s["slot"]) not in to_delete]
-            removed = [s for s in schedules if str(s["slot"]) in to_delete]
-            new_schedule: dict | None = None
-            name = (user_input.get("name") or "").strip()
-            if name:
-                parsed = _parse_time(user_input.get("time", ""))
-                used = {s["slot"] for s in kept}
-                slot = next((i for i in range(TIME_EVENT_SLOTS) if i not in used), None)
-                if user_input.get("scene") is None:
-                    errors["base"] = "scene_required"
-                elif not user_input.get("days"):
-                    errors["base"] = "days_required"
-                elif parsed is None:
-                    errors["time"] = "invalid_time"
-                elif slot is None:
-                    errors["base"] = "no_free_slots"
-                else:
-                    hour, minute, second = parsed
-                    new_schedule = {
-                        "id": next_id,
-                        "slot": slot,
-                        "name": name,
-                        "days": [WEEKDAYS.index(d) for d in user_input.get("days", [])],
-                        "time": f"{hour:02d}:{minute:02d}:{second:02d}",
-                        "scene": int(user_input["scene"]),
-                        "fade": int(user_input.get("fade", 0)),
-                    }
-            if not errors:
-                # Only once the save is certain: clear deleted device events, then persist.
-                await self._clear_deleted(removed)
-                if new_schedule is not None:
-                    kept.append(new_schedule)
-                    next_id += 1
-                return self.async_create_entry(
-                    title="",
-                    data={
-                        **self._entry.options,  # preserve other options (e.g. show_panel)
-                        CONF_SCHEDULES: kept,
-                        "next_schedule_id": next_id,
-                        # Reset a stale gateway-only preference to auto when there's no usable gateway.
-                        CONF_TRANSPORT: user_input.get("transport", transport) if has_gateway else TRANSPORT_AUTO,
-                    },
-                )
-
-        scene_options = [{"value": str(s["index"]), "label": s["name"]} for s in self._entry.data.get(CONF_SCENES, [])]
-        day_options = [{"value": d, "label": d} for d in WEEKDAYS]
-        fields: dict[Any, Any] = {}
-        if schedules:
-            existing = [{"value": str(s["slot"]), "label": s["name"]} for s in schedules]
-            fields[vol.Optional("delete", default=[])] = SelectSelector(
-                SelectSelectorConfig(options=existing, multiple=True)
-            )
-        fields[vol.Optional("name", default="")] = str
-        fields[vol.Optional("days", default=[])] = SelectSelector(
-            SelectSelectorConfig(options=day_options, multiple=True)
-        )
-        fields[vol.Optional("time", default="07:00")] = str
-        fields[vol.Optional("scene")] = SelectSelector(SelectSelectorConfig(options=scene_options))
-        fields[vol.Optional("fade", default=0)] = int
-        if has_gateway:
-            # Force a comms interface (only meaningful when the site has a gateway).
-            transport_options = [
-                {"value": TRANSPORT_AUTO, "label": "Automatic (gateway first, Bluetooth fallback)"},
-                {"value": TRANSPORT_GATEWAY, "label": "Gateway only (remote/cloud)"},
-                {"value": TRANSPORT_BLE, "label": "Bluetooth only (local)"},
-            ]
-            fields[vol.Optional("transport", default=transport)] = SelectSelector(
-                SelectSelectorConfig(options=transport_options)
-            )
-        return self.async_show_form(step_id="schedules", data_schema=vol.Schema(fields), errors=errors)
-
-    async def _clear_deleted(self, removed: list[dict]) -> None:
-        """Delete the device-side event for each removed schedule (best-effort)."""
-        coordinator = getattr(self._entry, "runtime_data", None)
-        for schedule in removed:
-            try:
-                await coordinator.async_remove_time_event(schedule["slot"])
-            except Exception:  # noqa: BLE001 - best-effort; persist the deletion whatever the mesh does
-                _LOGGER.warning("Could not clear Plejd schedule slot %s from the mesh", schedule["slot"])
-
-    async def async_step_add_device(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        """Pick an unprovisioned device from what's currently visible over Bluetooth."""
-        if not async_bluetooth_available(self.hass):
-            return self.async_show_form(step_id="add_device", data_schema=None, errors={"base": "no_bluetooth"})
-        devices = async_scan_unprovisioned(self.hass)
-        if not devices:
-            return self.async_show_form(step_id="add_device", data_schema=None, errors={"base": "no_devices_found"})
-        if user_input is not None and (address := user_input.get("device_address")):
-            self._new_device_address = address
-            return await self.async_step_add_device_details()
-        options = [
-            {"value": d["address"], "label": f"{d['address']} — {d['model']} (RSSI {d['rssi']})"} for d in devices
-        ]
-        schema = vol.Schema({vol.Required("device_address"): SelectSelector(SelectSelectorConfig(options=options))})
-        return self.async_show_form(step_id="add_device", data_schema=schema)
-
-    async def async_step_add_device_details(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        """Name the device (and optionally its room), then commission it."""
-        errors: dict[str, str] = {}
-        description_placeholders = {"address": self._new_device_address or ""}
-        if user_input is not None:
-            name = (user_input.get("name") or "").strip()
-            room_title = (user_input.get("room_title") or "").strip() or None
-            room_category = (user_input.get("room_category") or "").strip() or None
-            if not name:
-                errors["name"] = "name_required"
-            else:
-                try:
-                    await async_add_device(
-                        self.hass,
-                        self._entry,
-                        address=self._new_device_address,
-                        name=name,
-                        room_title=room_title,
-                        room_category=room_category,
-                    )
-                except HomeAssistantError as err:
-                    errors["base"] = "add_device_failed"
-                    description_placeholders["error"] = str(err)
-                else:
-                    return self.async_create_entry(title="", data=dict(self._entry.options))
-        schema = vol.Schema(
-            {
-                vol.Required("name"): str,
-                vol.Optional("room_title", default=""): str,
-                vol.Optional("room_category", default=""): SelectSelector(
-                    SelectSelectorConfig(options=["", *ROOM_CATEGORIES])
-                ),
-            }
-        )
-        return self.async_show_form(
-            step_id="add_device_details",
-            data_schema=schema,
-            errors=errors,
-            description_placeholders=description_placeholders,
+            step_id="init", data_schema=vol.Schema({vol.Required(CONF_SHOW_PANEL, default=show): bool})
         )
