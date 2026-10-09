@@ -105,9 +105,15 @@ def async_register(hass: HomeAssistant) -> None:
 
 
 def _entity_ids(hass: HomeAssistant, entry) -> dict[str, str]:
-    """This entry's entities, unique_id -> current entity_id."""
+    """This entry's light entities, unique_id -> current entity_id."""
     registry = er.async_get(hass)
-    return {e.unique_id: e.entity_id for e in er.async_entries_for_config_entry(registry, entry.entry_id)}
+    # Lights only: an output reconfigured light -> relay -> light leaves a switch.* entry with the
+    # same unique_id behind, which must not shadow the light.
+    return {
+        e.unique_id: e.entity_id
+        for e in er.async_entries_for_config_entry(registry, entry.entry_id)
+        if e.entity_id.startswith("light.")
+    }
 
 
 def _by_entity_id(hass: HomeAssistant, stored: dict[str, str]) -> dict[str, str]:

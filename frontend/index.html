@@ -56,7 +56,8 @@ const ws = {
     return slow != null ? new Promise((res) => setTimeout(() => res(snapshot), Number(slow) || 400)) : snapshot;
   },
   // ?setfail: saving a lamp type fails (the tile must go back to the stored type)
-  "plejd/light_styles/set": (m) => location.search.includes("setfail") ? new Promise((_, rej) => setTimeout(() => rej(new Error("storage write failed")), 300)) : (m.style ? styles[m.entity_id] = m.style : delete styles[m.entity_id], { styles }),
+  // ?slowset=ms: saves answer after ms (the write itself lands at the end)
+  "plejd/light_styles/set": (m) => new URLSearchParams(location.search).get("slowset") ? new Promise((res) => setTimeout(() => res((m.style ? styles[m.entity_id] = m.style : delete styles[m.entity_id], { styles })), Number(new URLSearchParams(location.search).get("slowset")))) : location.search.includes("setfail") ? new Promise((_, rej) => setTimeout(() => rej(new Error("storage write failed")), 300)) : (m.style ? styles[m.entity_id] = m.style : delete styles[m.entity_id], { styles }),
   "plejd/schedules/list": () => ({ schedules, scenes: [{ index: 1, name: "Evening" }] }),
   "plejd/schedules/add": (m) => (schedules = [...schedules, { ...m, id: schedules.length, time: m.time + ":00" }], { schedules }),
   "plejd/schedules/delete": (m) => (schedules = schedules.filter((s) => s.id !== m.schedule_id), { schedules }),

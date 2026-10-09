@@ -43,6 +43,7 @@ def _hass(coordinator=None, room_names=None, entry=True):
                 _reg("d3", "light.hall"),
                 _reg("d6", "light.garage"),
                 _reg("room_r2", "light.tom"),
+                _reg("d1", "switch.kok_tak"),  # stale relay entry for the same output: ignored
             ]
         }
     )

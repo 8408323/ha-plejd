@@ -101,6 +101,8 @@ function Lights({ hass }: Ctx) {
   const saveSeq = useRef<Record<string, number>>({});
   // Bumped on every lamp-type edit: a style read that started before an edit is stale once it lands.
   const edits = useRef(0);
+  // Saves still in flight: a read started or answered meanwhile may not include them yet.
+  const pendingSaves = useRef(0);
   // Plejd may still be starting or reloading (the panel registers before its commands do): keep
   // retrying instead of treating a failure as "no rooms", which would lump every light together.
   // Reloaded whenever HA's entity registry changes (hass.entities is replaced only then), so a
@@ -115,12 +117,16 @@ function Lights({ hass }: Ctx) {
     // Lamp styles are cosmetic and load on their own: until they do, every lamp keeps the default look.
     const loadStyles = () => {
       const startedAt = edits.current;
+      const startedDuringSave = pendingSaves.current > 0;
       return hass.callWS({ type: "plejd/light_styles/get" })
         .then((r: any) => {
           if (cancelled) return;
-          // An edit landed while this read was in flight, so it may predate that edit: read again
-          // instead (the rollback of a failed edit needs a confirmed baseline to fall back to).
-          if (edits.current !== startedAt) { styleTimer = window.setTimeout(loadStyles, 1000); return; }
+          // An edit or save overlapped this read, so it may predate that write: read again once things
+          // settle instead (the rollback of a failed edit needs a confirmed baseline to fall back to).
+          if (edits.current !== startedAt || startedDuringSave || pendingSaves.current > 0) {
+            styleTimer = window.setTimeout(loadStyles, 1000);
+            return;
+          }
           confirmed.current = r.styles || {};
           setStyles(confirmed.current);
         })
@@ -136,6 +142,7 @@ function Lights({ hass }: Ctx) {
   }, [hass.entities, roomsVersion]);
   const setStyle = (entity_id: string, style: LampStyle) => {
     edits.current++;
+    pendingSaves.current++;
     const seq = (saveSeq.current[entity_id] = (saveSeq.current[entity_id] || 0) + 1);
     const latest = () => saveSeq.current[entity_id] === seq;
     setStyles((cur) => ({ ...cur, [entity_id]: style }));
@@ -156,7 +163,8 @@ function Lights({ hass }: Ctx) {
           return next;
         });
         setSaveError(`Could not save the lamp type: ${errMsg(e)}`);
-      });
+      })
+      .finally(() => { pendingSaves.current--; });
   };
 
   const lights = plejdStates(hass, "light");
