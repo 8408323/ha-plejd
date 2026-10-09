@@ -17,7 +17,9 @@
   font: 14px/1.45 var(--paper-font-body1_-_font-family, Inter, Roboto, system-ui, sans-serif); background: var(--pl-bg);
 }
 .page.narrow { padding: 10px 10px 40px; }
-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 18px; }
+header { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin: -20px -28px 18px;
+  padding: 20px 28px 12px; position: sticky; top: 0; z-index: 2; background: var(--pl-bg); }
+.narrow header { margin: -10px -10px 14px; padding: 10px 10px 8px; }
 h1 { font-size: 26px; font-weight: 600; letter-spacing: -0.02em; margin: 0; }
 h2 { font-size: 15px; font-weight: 600; margin: 0; }
 h3 { font-size: 13.5px; font-weight: 600; margin: 0 0 10px; }
@@ -34,6 +36,9 @@ h3 { font-size: 13.5px; font-weight: 600; margin: 0 0 10px; }
 .card { background: var(--pl-card); border-radius: var(--pl-radius); padding: 18px; border: 1px solid var(--pl-line);
   box-shadow: 0 1px 2px rgba(0,0,0,.04), 0 8px 24px -12px rgba(0,0,0,.12); min-width: 0; }
 .card.wide { grid-column: 1 / -1; }
+/* A big site has dozens of lights: flow them into columns instead of one very tall card. */
+.cols { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); column-gap: 24px; }
+.cols .row:last-child { border-bottom: 1px solid var(--pl-line); }
 .card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
 .count, .muted { color: var(--pl-muted); }
 .muted { font-size: 12.5px; }

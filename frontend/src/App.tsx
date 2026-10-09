@@ -73,8 +73,8 @@ const Empty = ({ text }: { text: string }) => <p className="muted">{text}</p>;
 function Lights({ hass }: Ctx) {
   const lights = plejdStates(hass, "light");
   return (
-    <Card title="Lights" count={lights.length}>
-      {lights.map((s) => <LightRow key={s.entity_id} hass={hass} s={s} />)}
+    <Card title="Lights" count={lights.length} wide={lights.length > 8}>
+      <div className="cols">{lights.map((s) => <LightRow key={s.entity_id} hass={hass} s={s} />)}</div>
       {!lights.length && <Empty text="No Plejd lights found." />}
     </Card>
   );
