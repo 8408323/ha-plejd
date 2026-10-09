@@ -93,10 +93,12 @@ function LightRow({ hass, s }: Ctx & { s: St }) {
   // Bumped per command so a failure only rolls back if nothing newer superseded it.
   const token = useRef(0);
   // One brightness send in flight at a time (sends can land out of order), keeping only the latest queued.
-  const send = useRef({ sending: false, queued: null as number | null, last: 0, timer: 0 });
+  const send = useRef({ sending: false, queued: null as number | null, last: 0, timer: 0, pending: null as number | null });
   useEffect(() => { if (onOverride === realOn) setOnOverride(null); }, [realOn, onOverride]);
   useEffect(() => { if (pctOverride === realPct) setPctOverride(null); }, [realPct, pctOverride]);
-  useEffect(() => () => clearTimeout(send.current.timer), []);
+  // Leaving mid-drag (tab switch, navigation) must still send the last value the throttle was holding back.
+  const flush = useRef<() => void>(() => {});
+  useEffect(() => () => flush.current(), []);
 
   const on = onOverride ?? realOn;
   const pct = pctOverride ?? realPct;
@@ -135,9 +137,14 @@ function LightRow({ hass, s }: Ctx & { s: St }) {
     setPctOverride(p);
     clearTimeout(st.timer);
     const wait = DRAG_SEND_INTERVAL_MS - (Date.now() - st.last);
-    const fire = () => { st.last = Date.now(); sendPct(p); };
+    st.pending = p;
+    const fire = () => { st.last = Date.now(); st.pending = null; sendPct(p); };
     if (wait <= 0) fire();
     else st.timer = window.setTimeout(fire, wait);
+  };
+  flush.current = () => {
+    clearTimeout(send.current.timer);
+    if (send.current.pending !== null) sendPct(send.current.pending);
   };
 
   return (
@@ -614,7 +621,8 @@ function Settings({ hass }: Ctx) {
       setBusy(false);
     }
   };
-  const lights = plejdStates(hass, "light");
+  // Holiday mode can drive any HA light, not just Plejd ones; none picked = every Plejd light.
+  const lights = (Object.values(hass.states) as St[]).filter((s) => s.entity_id.startsWith("light.")).sort((a, b) => nameOf(a).localeCompare(nameOf(b)));
   const toggleLight = (id: string, on: boolean) =>
     set({ holiday_lights: on ? [...draft.holiday_lights, id] : draft.holiday_lights.filter((l) => l !== id) });
 

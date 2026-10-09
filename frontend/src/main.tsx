@@ -24,4 +24,8 @@ class PlejdPanel extends HTMLElement {
   private render() { if (this.root && this._hass) this.root.render(<App hass={this._hass} narrow={this._narrow} />); }
 }
 
-if (!customElements.get("plejd-panel")) customElements.define("plejd-panel", PlejdPanel);
+// A module only runs once per URL, so finding the element already defined means a newer build was just
+// loaded into a page still running the old one (panel.py versions the URL); custom elements can't be
+// redefined, so reload to actually run it.
+if (customElements.get("plejd-panel")) location.reload();
+else customElements.define("plejd-panel", PlejdPanel);

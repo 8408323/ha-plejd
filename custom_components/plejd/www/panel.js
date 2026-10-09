@@ -9226,20 +9226,23 @@ function ue({ hass: e, s: t }) {
 		sending: !1,
 		queued: null,
 		last: 0,
-		timer: 0
+		timer: 0,
+		pending: null
 	});
 	(0, l.useEffect)(() => {
 		s === a && c(null);
 	}, [a, s]), (0, l.useEffect)(() => {
 		u === o && d(null);
-	}, [o, u]), (0, l.useEffect)(() => () => clearTimeout(p.current.timer), []);
-	let m = s ?? a, h = u ?? o, g = Array.isArray(t.attributes.supported_color_modes) ? t.attributes.supported_color_modes.includes("brightness") : i != null, _ = r ? "unavailable" : m && i != null ? `${h}%` : m ? "on" : "off", y = () => {
+	}, [o, u]);
+	let m = (0, l.useRef)(() => {});
+	(0, l.useEffect)(() => () => m.current(), []);
+	let h = s ?? a, g = u ?? o, _ = Array.isArray(t.attributes.supported_color_modes) ? t.attributes.supported_color_modes.includes("brightness") : i != null, y = r ? "unavailable" : h && i != null ? `${g}%` : h ? "on" : "off", b = () => {
 		if (r) return;
 		let t = ++f.current;
-		c(!m), e.callService("light", m ? "turn_off" : "turn_on", { entity_id: n }).catch((e) => {
+		c(!h), e.callService("light", h ? "turn_off" : "turn_on", { entity_id: n }).catch((e) => {
 			console.warn("Plejd panel: failed to toggle light", n, e), f.current === t && c(null);
 		});
-	}, b = (t) => {
+	}, x = (t) => {
 		let r = p.current, i = ++f.current;
 		c(!0), d(t), r.sending ? r.queued = t : (r.sending = !0, e.callService("light", "turn_on", {
 			entity_id: n,
@@ -9249,18 +9252,22 @@ function ue({ hass: e, s: t }) {
 		}).finally(() => {
 			if (r.sending = !1, r.queued !== null) {
 				let e = r.queued;
-				r.queued = null, b(e);
+				r.queued = null, x(e);
 			}
 		}));
-	}, x = (e) => {
+	}, te = (e) => {
 		let t = p.current;
 		d(e), clearTimeout(t.timer);
-		let n = ee - (Date.now() - t.last), r = () => {
-			t.last = Date.now(), b(e);
+		let n = ee - (Date.now() - t.last);
+		t.pending = e;
+		let r = () => {
+			t.last = Date.now(), t.pending = null, x(e);
 		};
 		n <= 0 ? r() : t.timer = window.setTimeout(r, n);
 	};
-	return /* @__PURE__ */ (0, v.jsxs)("div", {
+	return m.current = () => {
+		clearTimeout(p.current.timer), p.current.pending !== null && x(p.current.pending);
+	}, /* @__PURE__ */ (0, v.jsxs)("div", {
 		className: "row",
 		children: [/* @__PURE__ */ (0, v.jsxs)("div", {
 			className: "line",
@@ -9268,30 +9275,30 @@ function ue({ hass: e, s: t }) {
 				/* @__PURE__ */ (0, v.jsx)("button", {
 					type: "button",
 					role: "switch",
-					"aria-checked": m,
-					"aria-label": `${m ? "Turn off" : "Turn on"} ${w(t)}`,
-					className: `switch ${m ? "on" : ""}`,
+					"aria-checked": h,
+					"aria-label": `${h ? "Turn off" : "Turn on"} ${w(t)}`,
+					className: `switch ${h ? "on" : ""}`,
 					disabled: r,
-					onClick: y
+					onClick: b
 				}),
 				/* @__PURE__ */ (0, v.jsx)("span", {
 					className: `grow ${r ? "off" : "click"}`,
-					onClick: y,
+					onClick: b,
 					children: w(t)
 				}),
 				/* @__PURE__ */ (0, v.jsx)("span", {
 					className: "count",
-					children: _
+					children: y
 				})
 			]
-		}), g && /* @__PURE__ */ (0, v.jsx)("input", {
+		}), _ && /* @__PURE__ */ (0, v.jsx)("input", {
 			type: "range",
 			min: 1,
 			max: 100,
-			value: h,
+			value: g,
 			disabled: r,
 			"aria-label": `Brightness ${w(t)}`,
-			onChange: (e) => x(Number(e.target.value))
+			onChange: (e) => te(Number(e.target.value))
 		})]
 	});
 }
@@ -10068,7 +10075,7 @@ function D({ hass: e }) {
 		} finally {
 			c(!1);
 		}
-	}, y = ae(e, "light"), b = (e, t) => h({ holiday_lights: t ? [...r.holiday_lights, e] : r.holiday_lights.filter((t) => t !== e) });
+	}, y = Object.values(e.states).filter((e) => e.entity_id.startsWith("light.")).sort((e, t) => w(e).localeCompare(w(t))), b = (e, t) => h({ holiday_lights: t ? [...r.holiday_lights, e] : r.holiday_lights.filter((t) => t !== e) });
 	return /* @__PURE__ */ (0, v.jsxs)(T, {
 		title: "Settings",
 		children: [
@@ -10291,5 +10298,5 @@ var we = ":host{--pl-bg:var(--primary-background-color,#f4f6f9);--pl-card:var(--
 		}));
 	}
 };
-customElements.get("plejd-panel") || customElements.define("plejd-panel", Te);
+customElements.get("plejd-panel") ? location.reload() : customElements.define("plejd-panel", Te);
 //#endregion
