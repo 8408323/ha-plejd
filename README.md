@@ -76,6 +76,10 @@ A **Plejd** entry in the sidebar (admins only) has three tabs:
 - **Settings** — holiday mode (lights + active window), the communication path on
   sites with a gateway, and adding a new device.
 
+The dashboard follows your Home Assistant language (English, Svenska, Norsk, Dansk,
+Suomi or Íslenska; anything else falls back to English). **Settings → Language** picks
+another one for the current browser.
+
 The integration's own **Configure** dialog only shows or hides the dashboard.
 
 ### Adding a new Plejd device

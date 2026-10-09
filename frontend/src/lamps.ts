@@ -8,10 +8,6 @@ import {
 export const LAMP_STYLES = ["bulb", "pendant", "spot", "ceiling", "strip", "table", "floor", "wall"] as const;
 export type LampStyle = (typeof LAMP_STYLES)[number];
 export const DEFAULT_STYLE: LampStyle = "bulb";
-export const LAMP_LABELS: Record<LampStyle, string> = {
-  bulb: "Bulb", pendant: "Pendant", spot: "Spotlight", ceiling: "Ceiling light", strip: "LED strip",
-  table: "Table lamp", floor: "Floor lamp", wall: "Wall lamp",
-};
 
 const SIZE = 192; // css px per lamp image; rendered at 2x
 const WARM = 0xffc46b;

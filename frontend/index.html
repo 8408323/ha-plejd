@@ -81,6 +81,8 @@ const hass = {
   connection: { subscribeEvents: async (cb, type) => { (window.subs ??= {})[type] = cb; return () => delete window.subs[type]; } },
   callService: async (...a) => console.log("service", ...a),
 };
+// ?halang=sv: Home Assistant's own language (the panel follows it unless one is picked in Settings)
+hass.language = new URLSearchParams(location.search).get("halang") || "en";
 p.narrow = innerWidth < 600;
 window.fireEvent = (type) => window.subs?.[type]?.({ event_type: type });
 p.hass = window.mockHass = hass;
