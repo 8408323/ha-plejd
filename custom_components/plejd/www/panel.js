@@ -9149,14 +9149,27 @@ var _ = /* @__PURE__ */ e(((e) => {
 	["auto", "Automatic (gateway first, Bluetooth fallback)"],
 	["gateway", "Gateway only (remote/cloud)"],
 	["ble", "Bluetooth only (local)"]
-], C = (e) => e?.message || String(e), w = (e) => e.attributes.friendly_name || e.entity_id, re = (e, t) => e.name.localeCompare(t.name), ie = (e, t) => e.entities?.[t.entity_id]?.platform === "plejd" || t.attributes.attribution === "Plejd", ae = (e, t, n = () => !0) => Object.values(e.states).filter((r) => r.entity_id.startsWith(`${t}.`) && ie(e, r) && n(r)).sort((e, t) => w(e).localeCompare(w(t))), oe = (e, t) => e.devices?.[t]?.name_by_user || e.devices?.[t]?.name || t, se = (e, t) => {
-	let n = e.entities?.[t.entity_id]?.device_id;
-	return n ? oe(e, n) : w(t);
+], C = (e) => e?.message || String(e), w = (e) => e.attributes.friendly_name || e.entity_id, re = (e, t) => e.name.localeCompare(t.name), ie = (e, t) => e.entities?.[t.entity_id]?.platform === "plejd" || t.attributes.attribution === "Plejd", ae = (e, t, n = () => !0) => Object.values(e.states).filter((r) => r.entity_id.startsWith(`${t}.`) && ie(e, r) && n(r)).sort((e, t) => w(e).localeCompare(w(t))), oe = (e, t) => e.devices[t]?.name_by_user || e.devices[t]?.name || t, se = (e, t, n) => {
+	let r = e.entities?.[n.entity_id]?.device_id;
+	return r ? oe(t, r) : w(n);
 };
 function ce({ hass: e, narrow: t }) {
 	let [n, r] = (0, l.useState)(() => localStorage.getItem("plejd_tab") || "devices"), i = (e) => {
 		r(e), localStorage.setItem("plejd_tab", e);
-	}, a = { hass: e };
+	}, [a, o] = (0, l.useState)(null);
+	(0, l.useEffect)(() => {
+		Promise.all([e.callWS({ type: "config/area_registry/list" }), e.callWS({ type: "config/device_registry/list" })]).then(([e, t]) => o({
+			areas: Object.fromEntries(e.map((e) => [e.area_id, e])),
+			devices: Object.fromEntries(t.map((e) => [e.id, e]))
+		})).catch((e) => console.warn("Plejd panel: failed to load area/device registries", e));
+	}, []);
+	let s = {
+		hass: e,
+		reg: a ?? {
+			areas: e.areas || {},
+			devices: e.devices || {}
+		}
+	};
 	return /* @__PURE__ */ (0, v.jsxs)("div", {
 		className: `page ${t ? "narrow" : ""}`,
 		children: [
@@ -9171,21 +9184,21 @@ function ce({ hass: e, narrow: t }) {
 			n === "devices" && /* @__PURE__ */ (0, v.jsxs)("div", {
 				className: "grid",
 				children: [
-					/* @__PURE__ */ (0, v.jsx)(le, { ...a }),
-					/* @__PURE__ */ (0, v.jsx)(he, { ...a }),
-					/* @__PURE__ */ (0, v.jsx)(de, { ...a }),
-					/* @__PURE__ */ (0, v.jsx)(pe, { ...a }),
-					/* @__PURE__ */ (0, v.jsx)(ge, { ...a }),
-					/* @__PURE__ */ (0, v.jsx)(_e, { ...a })
+					/* @__PURE__ */ (0, v.jsx)(le, { ...s }),
+					/* @__PURE__ */ (0, v.jsx)(he, { ...s }),
+					/* @__PURE__ */ (0, v.jsx)(de, { ...s }),
+					/* @__PURE__ */ (0, v.jsx)(pe, { ...s }),
+					/* @__PURE__ */ (0, v.jsx)(ge, { ...s }),
+					/* @__PURE__ */ (0, v.jsx)(_e, { ...s })
 				]
 			}),
 			n === "automations" && /* @__PURE__ */ (0, v.jsxs)("div", {
 				className: "grid",
-				children: [/* @__PURE__ */ (0, v.jsx)(ye, { ...a }), /* @__PURE__ */ (0, v.jsx)(Ce, { ...a })]
+				children: [/* @__PURE__ */ (0, v.jsx)(ye, { ...s }), /* @__PURE__ */ (0, v.jsx)(Ce, { ...s })]
 			}),
 			n === "settings" && /* @__PURE__ */ (0, v.jsxs)("div", {
 				className: "grid",
-				children: [/* @__PURE__ */ (0, v.jsx)(D, { ...a }), /* @__PURE__ */ (0, v.jsx)(O, { ...a })]
+				children: [/* @__PURE__ */ (0, v.jsx)(D, { ...s }), /* @__PURE__ */ (0, v.jsx)(O, { ...s })]
 			})
 		]
 	});
@@ -9457,40 +9470,40 @@ function he({ hass: e }) {
 		]
 	});
 }
-function ge({ hass: e }) {
-	let t = ae(e, "binary_sensor", (e) => e.attributes.device_class === "motion"), n = (t) => {
+function ge({ hass: e, reg: t }) {
+	let n = ae(e, "binary_sensor", (e) => e.attributes.device_class === "motion"), r = (t) => {
 		let n = e.entities?.[t.entity_id]?.device_id, r = n && Object.values(e.states).find((t) => t.entity_id.startsWith("sensor.") && t.attributes.device_class === "illuminance" && e.entities?.[t.entity_id]?.device_id === n);
 		return r && !["unavailable", "unknown"].includes(r.state) ? ` · ${r.state} lx` : "";
 	};
 	return /* @__PURE__ */ (0, v.jsxs)(T, {
 		title: "Motion & illuminance",
-		count: t.length,
-		children: [t.map((t) => /* @__PURE__ */ (0, v.jsxs)("div", {
+		count: n.length,
+		children: [n.map((n) => /* @__PURE__ */ (0, v.jsxs)("div", {
 			className: "row line",
 			children: [
-				/* @__PURE__ */ (0, v.jsx)("span", { className: `dot ${t.state === "on" ? "on" : ""}` }),
+				/* @__PURE__ */ (0, v.jsx)("span", { className: `dot ${n.state === "on" ? "on" : ""}` }),
 				/* @__PURE__ */ (0, v.jsx)("span", {
 					className: "grow",
-					children: se(e, t)
+					children: se(e, t, n)
 				}),
 				/* @__PURE__ */ (0, v.jsxs)("span", {
 					className: "count",
-					children: [["unavailable", "unknown"].includes(t.state) ? "Unavailable" : t.state === "on" ? "Detected" : "Clear", n(t)]
+					children: [["unavailable", "unknown"].includes(n.state) ? "Unavailable" : n.state === "on" ? "Detected" : "Clear", r(n)]
 				})
 			]
-		}, t.entity_id)), !t.length && /* @__PURE__ */ (0, v.jsx)(E, { text: "No motion sensors found." })]
+		}, n.entity_id)), !n.length && /* @__PURE__ */ (0, v.jsx)(E, { text: "No motion sensors found." })]
 	});
 }
-function _e({ hass: e }) {
-	let t = ae(e, "binary_sensor", (e) => e.attributes.device_class === "problem" && e.state === "on").map((t) => ({
-		id: t.entity_id,
-		name: se(e, t),
-		flags: (t.attributes.active_faults || []).map((e) => e.replace(/_/g, " ")).join(", ")
+function _e({ hass: e, reg: t }) {
+	let n = ae(e, "binary_sensor", (e) => e.attributes.device_class === "problem" && e.state === "on").map((n) => ({
+		id: n.entity_id,
+		name: se(e, t, n),
+		flags: (n.attributes.active_faults || []).map((e) => e.replace(/_/g, " ")).join(", ")
 	})).sort(re);
 	return /* @__PURE__ */ (0, v.jsxs)(T, {
 		title: "Device health",
-		count: t.length,
-		children: [t.map((e) => /* @__PURE__ */ (0, v.jsxs)("div", {
+		count: n.length,
+		children: [n.map((e) => /* @__PURE__ */ (0, v.jsxs)("div", {
 			className: "row line",
 			children: [
 				/* @__PURE__ */ (0, v.jsx)("span", { className: "dot bad" }),
@@ -9503,7 +9516,7 @@ function _e({ hass: e }) {
 					children: e.flags
 				})
 			]
-		}, e.id)), !t.length && /* @__PURE__ */ (0, v.jsx)(E, { text: "All devices healthy." })]
+		}, e.id)), !n.length && /* @__PURE__ */ (0, v.jsx)(E, { text: "All devices healthy." })]
 	});
 }
 var ve = {
@@ -9689,38 +9702,28 @@ var be = {
 	let t = (e.type || "trigger").replace(/_/g, " ");
 	return e.subtype ? `${t} · ${e.subtype}` : t;
 };
-function Ce({ hass: e }) {
-	let [t, n] = (0, l.useState)(null), [r, i] = (0, l.useState)(""), [a, o] = (0, l.useState)({}), [s, c] = (0, l.useState)(be), [u, f] = (0, l.useState)(!1), [p, m] = (0, l.useState)(""), [g, _] = (0, l.useState)(""), y = () => {
-		i(""), e.callWS({ type: "plejd/dim_bindings/list" }).then((e) => n(e.bindings || [])).catch((e) => i(`Could not load bindings: ${C(e)}`));
+function Ce({ hass: e, reg: t }) {
+	let [n, r] = (0, l.useState)(null), [i, a] = (0, l.useState)(""), [o, s] = (0, l.useState)({}), [c, u] = (0, l.useState)(be), [f, p] = (0, l.useState)(!1), [m, g] = (0, l.useState)(""), [_, y] = (0, l.useState)(""), b = () => {
+		a(""), e.callWS({ type: "plejd/dim_bindings/list" }).then((e) => r(e.bindings || [])).catch((e) => a(`Could not load bindings: ${C(e)}`));
 	};
-	(0, l.useEffect)(y, []);
-	let [b, ee] = (0, l.useState)(null);
-	(0, l.useEffect)(() => {
-		Promise.all([e.callWS({ type: "config/area_registry/list" }), e.callWS({ type: "config/device_registry/list" })]).then(([e, t]) => ee({
-			areas: Object.fromEntries(e.map((e) => [e.area_id, e])),
-			devices: Object.fromEntries(t.map((e) => [e.id, e]))
-		})).catch((e) => console.warn("Plejd panel: failed to load area/device registries", e));
-	}, []);
-	let x = b ?? {
-		areas: e.areas || {},
-		devices: e.devices || {}
-	}, te = (e) => x.devices[e]?.name_by_user || x.devices[e]?.name || e, S = async (t) => {
-		if (c({
-			...s,
+	(0, l.useEffect)(b, []);
+	let ee = async (t) => {
+		if (u({
+			...c,
 			device: t,
 			up: "",
 			down: "",
 			stop: "",
-			presses: s.presses.map((e) => ({
+			presses: c.presses.map((e) => ({
 				...e,
 				trigger: ""
 			}))
-		}), m(""), _(""), t && !a[t]) try {
+		}), g(""), y(""), t && !o[t]) try {
 			let n = await e.callWS({
 				type: "plejd/device_triggers",
 				device_id: t
 			});
-			o((e) => ({
+			s((e) => ({
 				...e,
 				[t]: {
 					triggers: n.triggers || [],
@@ -9728,64 +9731,64 @@ function Ce({ hass: e }) {
 				}
 			}));
 		} catch (e) {
-			m(`Could not load triggers: ${C(e)}`);
+			g(`Could not load triggers: ${C(e)}`);
 		}
-	}, ie = async (t, r) => {
-		f(!0), m(""), _("");
+	}, x = async (t, n) => {
+		p(!0), g(""), y("");
 		try {
 			let i = await e.callWS({
 				type: "plejd/dim_bindings/save",
 				bindings: t
 			});
-			n(i.bindings || []), _("Saved."), r && c(be);
+			r(i.bindings || []), y("Saved."), n && u(be);
 		} catch (e) {
-			m(C(e));
+			g(C(e));
 		} finally {
-			f(!1);
+			p(!1);
 		}
-	}, ae = () => {
+	}, te = () => {
 		try {
-			ie([...t, h(s, a[s.device]?.triggers || [])], !0);
+			x([...n, h(c, o[c.device]?.triggers || [])], !0);
 		} catch (e) {
-			m(C(e)), _("");
+			g(C(e)), y("");
 		}
-	}, oe = (e) => x.areas[e]?.name || e, se = (t) => e.states[t]?.attributes.friendly_name || t, ce = (e) => {
-		let t = e.targets || {}, n = [
-			...[].concat(t.entity_id || []).map(se),
-			...[].concat(t.area_id || []).map(oe),
-			...[].concat(t.device_id || []).map((e) => te(e))
+	}, S = (e) => t.areas[e]?.name || e, ie = (t) => e.states[t]?.attributes.friendly_name || t, ae = (e) => {
+		let n = e.targets || {}, r = [
+			...[].concat(n.entity_id || []).map(ie),
+			...[].concat(n.area_id || []).map(S),
+			...[].concat(n.device_id || []).map((e) => oe(t, e))
 		];
-		return n.length ? n.join(", ") : "—";
-	}, le = (e) => {
-		let t = [[
+		return r.length ? r.join(", ") : "—";
+	}, se = (e) => {
+		let n = [[
 			"up",
 			"down",
 			"stop"
-		].filter((t) => e[t]).join(" / ")].filter(Boolean), n = (e.presses || []).length;
-		n && t.push(`${n} press action${n === 1 ? "" : "s"}`);
-		let r = (e.up || e.down || e.stop || e.presses?.[0]?.trigger)?.device_id;
-		return `${r ? te(r) : "—"} · ${t.join(", ") || "—"}`;
-	}, ue = Object.values(e.states).filter((e) => e.entity_id.startsWith("light.")).map((e) => ({
+		].filter((t) => e[t]).join(" / ")].filter(Boolean), r = (e.presses || []).length;
+		r && n.push(`${r} press action${r === 1 ? "" : "s"}`);
+		let i = (e.up || e.down || e.stop || e.presses?.[0]?.trigger)?.device_id;
+		return `${i ? oe(t, i) : "—"} · ${n.join(", ") || "—"}`;
+	}, ce = Object.values(e.states).filter((e) => e.entity_id.startsWith("light.")).map((e) => ({
 		id: e.entity_id,
 		name: w(e)
-	})).sort(re), de = Object.values(x.areas).map((e) => ({
+	})).sort(re), le = Object.values(t.areas).map((e) => ({
 		id: e.area_id,
 		name: e.name || e.area_id
-	})).sort(re), fe = Object.values(x.devices).map((e) => ({
+	})).sort(re), ue = Object.values(t.devices).map((e) => ({
 		id: e.id,
 		name: e.name_by_user || e.name
-	})).filter((e) => e.name).sort(re), pe = Object.values(e.states).filter((e) => e.entity_id.startsWith("scene.")).map((e) => ({
+	})).filter((e) => e.name).sort(re), de = Object.values(e.states).filter((e) => e.entity_id.startsWith("scene.")).map((e) => ({
 		id: e.entity_id,
 		name: w(e)
-	})).sort(re), me = a[s.device], he = me?.kind || "remote", ge = /* @__PURE__ */ (0, v.jsxs)(v.Fragment, { children: [/* @__PURE__ */ (0, v.jsx)("option", {
+	})).sort(re), fe = o[c.device], pe = fe?.kind || "remote", me = /* @__PURE__ */ (0, v.jsxs)(v.Fragment, { children: [/* @__PURE__ */ (0, v.jsx)("option", {
 		value: "",
 		children: "(none)"
-	}), (me?.triggers || []).map((e, t) => /* @__PURE__ */ (0, v.jsx)("option", {
+	}), (fe?.triggers || []).map((e, t) => /* @__PURE__ */ (0, v.jsx)("option", {
 		value: t,
 		children: Se(e)
-	}, t))] }), _e = (e, t) => c({
-		...s,
-		presses: s.presses.map((n, r) => r === e ? {
+	}, t))] }), he = (e, t) => u({
+		...c,
+		presses: c.presses.map((n, r) => r === e ? {
 			...n,
 			...t
 		} : n)
@@ -9796,33 +9799,33 @@ function Ce({ hass: e }) {
 		children: [/* @__PURE__ */ (0, v.jsx)("p", {
 			className: "lead",
 			children: "Bind a dimmer remote's hold/release to smooth dimming of a light or a whole room, and/or map any of its other triggers to an instant press action."
-		}), t === null ? r ? /* @__PURE__ */ (0, v.jsxs)(v.Fragment, { children: [/* @__PURE__ */ (0, v.jsx)("p", {
+		}), n === null ? i ? /* @__PURE__ */ (0, v.jsxs)(v.Fragment, { children: [/* @__PURE__ */ (0, v.jsx)("p", {
 			className: "error",
-			children: r
+			children: i
 		}), /* @__PURE__ */ (0, v.jsx)("div", {
 			className: "actions",
 			children: /* @__PURE__ */ (0, v.jsx)("button", {
 				className: "btn",
-				onClick: y,
+				onClick: b,
 				children: "Retry"
 			})
 		})] }) : /* @__PURE__ */ (0, v.jsx)(E, { text: "Loading…" }) : /* @__PURE__ */ (0, v.jsxs)(v.Fragment, { children: [
-			t.map((e) => /* @__PURE__ */ (0, v.jsxs)("div", {
+			n.map((e) => /* @__PURE__ */ (0, v.jsxs)("div", {
 				className: "row line",
 				children: [/* @__PURE__ */ (0, v.jsxs)("div", {
 					className: "grow",
-					children: [/* @__PURE__ */ (0, v.jsx)("div", { children: ce(e) }), /* @__PURE__ */ (0, v.jsx)("div", {
+					children: [/* @__PURE__ */ (0, v.jsx)("div", { children: ae(e) }), /* @__PURE__ */ (0, v.jsx)("div", {
 						className: "muted",
-						children: le(e)
+						children: se(e)
 					})]
 				}), /* @__PURE__ */ (0, v.jsx)("button", {
 					className: "btn danger",
-					disabled: u,
-					onClick: () => ie(t.filter((t) => String(t.id) !== String(e.id)), !1),
+					disabled: f,
+					onClick: () => x(n.filter((t) => String(t.id) !== String(e.id)), !1),
 					children: "Delete"
 				})]
 			}, e.id)),
-			!t.length && /* @__PURE__ */ (0, v.jsx)(E, { text: "No bindings yet." }),
+			!n.length && /* @__PURE__ */ (0, v.jsx)(E, { text: "No bindings yet." }),
 			/* @__PURE__ */ (0, v.jsxs)("div", {
 				className: "form",
 				children: [
@@ -9832,9 +9835,9 @@ function Ce({ hass: e }) {
 						children: [/* @__PURE__ */ (0, v.jsxs)("label", {
 							className: "f",
 							children: [/* @__PURE__ */ (0, v.jsx)("span", { children: "Light or room" }), /* @__PURE__ */ (0, v.jsxs)("select", {
-								value: s.target,
-								onChange: (e) => c({
-									...s,
+								value: c.target,
+								onChange: (e) => u({
+									...c,
 									target: e.target.value
 								}),
 								children: [
@@ -9844,14 +9847,14 @@ function Ce({ hass: e }) {
 									}),
 									/* @__PURE__ */ (0, v.jsx)("optgroup", {
 										label: "Lights",
-										children: ue.map((e) => /* @__PURE__ */ (0, v.jsx)("option", {
+										children: ce.map((e) => /* @__PURE__ */ (0, v.jsx)("option", {
 											value: `light:${e.id}`,
 											children: e.name
 										}, e.id))
 									}),
 									/* @__PURE__ */ (0, v.jsx)("optgroup", {
 										label: "Rooms",
-										children: de.map((e) => /* @__PURE__ */ (0, v.jsx)("option", {
+										children: le.map((e) => /* @__PURE__ */ (0, v.jsx)("option", {
 											value: `area:${e.id}`,
 											children: e.name
 										}, e.id))
@@ -9861,53 +9864,53 @@ function Ce({ hass: e }) {
 						}), /* @__PURE__ */ (0, v.jsxs)("label", {
 							className: "f",
 							children: [/* @__PURE__ */ (0, v.jsx)("span", { children: "Remote" }), /* @__PURE__ */ (0, v.jsxs)("select", {
-								value: s.device,
-								onChange: (e) => S(e.target.value),
+								value: c.device,
+								onChange: (e) => ee(e.target.value),
 								children: [/* @__PURE__ */ (0, v.jsx)("option", {
 									value: "",
 									children: "Select a remote…"
-								}), fe.map((e) => /* @__PURE__ */ (0, v.jsx)("option", {
+								}), ue.map((e) => /* @__PURE__ */ (0, v.jsx)("option", {
 									value: e.id,
 									children: e.name
 								}, e.id))]
 							})]
 						})]
 					}),
-					s.device && /* @__PURE__ */ (0, v.jsxs)(v.Fragment, { children: [
-						he === "remote" ? /* @__PURE__ */ (0, v.jsxs)("div", {
+					c.device && /* @__PURE__ */ (0, v.jsxs)(v.Fragment, { children: [
+						pe === "remote" ? /* @__PURE__ */ (0, v.jsxs)("div", {
 							className: "fields",
 							children: [
 								/* @__PURE__ */ (0, v.jsxs)("label", {
 									className: "f",
 									children: [/* @__PURE__ */ (0, v.jsx)("span", { children: "Dim up (hold)" }), /* @__PURE__ */ (0, v.jsx)("select", {
-										value: s.up,
-										onChange: (e) => c({
-											...s,
+										value: c.up,
+										onChange: (e) => u({
+											...c,
 											up: e.target.value
 										}),
-										children: ge
+										children: me
 									})]
 								}),
 								/* @__PURE__ */ (0, v.jsxs)("label", {
 									className: "f",
 									children: [/* @__PURE__ */ (0, v.jsx)("span", { children: "Dim down (hold)" }), /* @__PURE__ */ (0, v.jsx)("select", {
-										value: s.down,
-										onChange: (e) => c({
-											...s,
+										value: c.down,
+										onChange: (e) => u({
+											...c,
 											down: e.target.value
 										}),
-										children: ge
+										children: me
 									})]
 								}),
 								/* @__PURE__ */ (0, v.jsxs)("label", {
 									className: "f",
 									children: [/* @__PURE__ */ (0, v.jsx)("span", { children: "Release (stop)" }), /* @__PURE__ */ (0, v.jsx)("select", {
-										value: s.stop,
-										onChange: (e) => c({
-											...s,
+										value: c.stop,
+										onChange: (e) => u({
+											...c,
 											stop: e.target.value
 										}),
-										children: ge
+										children: me
 									})]
 								})
 							]
@@ -9915,11 +9918,11 @@ function Ce({ hass: e }) {
 							className: "muted",
 							children: [
 								"This is a ",
-								he === "door_window" ? "door/window" : "motion",
+								pe === "door_window" ? "door/window" : "motion",
 								" sensor, not a dimmer remote — use a press action below to react to it."
 							]
 						}),
-						me && !me.triggers.length && /* @__PURE__ */ (0, v.jsx)("p", {
+						fe && !fe.triggers.length && /* @__PURE__ */ (0, v.jsx)("p", {
 							className: "muted",
 							children: "This device exposes no triggers."
 						}),
@@ -9932,14 +9935,14 @@ function Ce({ hass: e }) {
 								children: "Press actions"
 							}), /* @__PURE__ */ (0, v.jsx)("button", {
 								className: "btn",
-								onClick: () => c({
-									...s,
-									presses: [...s.presses, xe]
+								onClick: () => u({
+									...c,
+									presses: [...c.presses, xe]
 								}),
 								children: "+ Add press action"
 							})]
 						}),
-						s.presses.map((e, t) => /* @__PURE__ */ (0, v.jsxs)("div", {
+						c.presses.map((e, t) => /* @__PURE__ */ (0, v.jsxs)("div", {
 							className: "box",
 							children: [
 								/* @__PURE__ */ (0, v.jsxs)("div", {
@@ -9950,15 +9953,15 @@ function Ce({ hass: e }) {
 											className: "f",
 											children: [/* @__PURE__ */ (0, v.jsx)("span", { children: "Trigger" }), /* @__PURE__ */ (0, v.jsx)("select", {
 												value: e.trigger,
-												onChange: (e) => _e(t, { trigger: e.target.value }),
-												children: ge
+												onChange: (e) => he(t, { trigger: e.target.value }),
+												children: me
 											})]
 										}),
 										/* @__PURE__ */ (0, v.jsxs)("label", {
 											className: "f",
 											children: [/* @__PURE__ */ (0, v.jsx)("span", { children: "Action" }), /* @__PURE__ */ (0, v.jsxs)("select", {
 												value: e.type,
-												onChange: (e) => _e(t, { type: e.target.value }),
+												onChange: (e) => he(t, { type: e.target.value }),
 												children: [/* @__PURE__ */ (0, v.jsx)("option", {
 													value: "",
 													children: "Select an action…"
@@ -9971,9 +9974,9 @@ function Ce({ hass: e }) {
 										/* @__PURE__ */ (0, v.jsx)("button", {
 											className: "btn danger",
 											"aria-label": "Remove press action",
-											onClick: () => c({
-												...s,
-												presses: s.presses.filter((e, n) => n !== t)
+											onClick: () => u({
+												...c,
+												presses: c.presses.filter((e, n) => n !== t)
 											}),
 											children: "✕"
 										})
@@ -9984,11 +9987,11 @@ function Ce({ hass: e }) {
 									style: { marginTop: 8 },
 									children: [/* @__PURE__ */ (0, v.jsx)("span", { children: "Scene" }), /* @__PURE__ */ (0, v.jsxs)("select", {
 										value: e.entity_id,
-										onChange: (e) => _e(t, { entity_id: e.target.value }),
+										onChange: (e) => he(t, { entity_id: e.target.value }),
 										children: [/* @__PURE__ */ (0, v.jsx)("option", {
 											value: "",
 											children: "Select a scene…"
-										}), pe.map((e) => /* @__PURE__ */ (0, v.jsx)("option", {
+										}), de.map((e) => /* @__PURE__ */ (0, v.jsx)("option", {
 											value: e.id,
 											children: e.name
 										}, e.id))]
@@ -10001,14 +10004,14 @@ function Ce({ hass: e }) {
 										children: [/* @__PURE__ */ (0, v.jsx)("span", { children: "Domain" }), /* @__PURE__ */ (0, v.jsx)("input", {
 											value: e.domain,
 											placeholder: "light",
-											onChange: (e) => _e(t, { domain: e.target.value })
+											onChange: (e) => he(t, { domain: e.target.value })
 										})]
 									}), /* @__PURE__ */ (0, v.jsxs)("label", {
 										className: "f",
 										children: [/* @__PURE__ */ (0, v.jsx)("span", { children: "Service" }), /* @__PURE__ */ (0, v.jsx)("input", {
 											value: e.service,
 											placeholder: "turn_on",
-											onChange: (e) => _e(t, { service: e.target.value })
+											onChange: (e) => he(t, { service: e.target.value })
 										})]
 									})]
 								}), /* @__PURE__ */ (0, v.jsxs)("label", {
@@ -10016,30 +10019,30 @@ function Ce({ hass: e }) {
 									style: { marginTop: 8 },
 									children: [/* @__PURE__ */ (0, v.jsx)("span", { children: "Data (JSON, optional)" }), /* @__PURE__ */ (0, v.jsx)("textarea", {
 										value: e.data,
-										onChange: (e) => _e(t, { data: e.target.value })
+										onChange: (e) => he(t, { data: e.target.value })
 									})]
 								})] })
 							]
 						}, t)),
-						!s.presses.length && /* @__PURE__ */ (0, v.jsx)("p", {
+						!c.presses.length && /* @__PURE__ */ (0, v.jsx)("p", {
 							className: "muted",
 							children: "No press actions yet."
 						})
 					] }),
-					p ? /* @__PURE__ */ (0, v.jsx)("p", {
+					m ? /* @__PURE__ */ (0, v.jsx)("p", {
 						className: "error",
-						children: p
-					}) : g && /* @__PURE__ */ (0, v.jsx)("p", {
+						children: m
+					}) : _ && /* @__PURE__ */ (0, v.jsx)("p", {
 						className: "notice",
-						children: g
+						children: _
 					}),
 					/* @__PURE__ */ (0, v.jsx)("div", {
 						className: "actions",
 						children: /* @__PURE__ */ (0, v.jsx)("button", {
 							className: "btn",
-							disabled: u,
-							onClick: ae,
-							children: u ? "Saving…" : "Add binding"
+							disabled: f,
+							onClick: te,
+							children: f ? "Saving…" : "Add binding"
 						})
 					})
 				]

@@ -4,6 +4,9 @@ import { BindingForm, PRESS_ACTIONS, PressRow, Trigger, buildBinding, buildSched
 // Home Assistant's panel host sets `hass` (states, entity/device/area registries, callWS/callService).
 type St = { entity_id: string; state: string; attributes: Record<string, any> };
 type Ctx = { hass: any };
+// Area/device registries, fetched once for the whole panel (hass only carries them on newer HA versions).
+type Reg = { areas: Record<string, any>; devices: Record<string, any> };
+type RegCtx = Ctx & { reg: Reg };
 
 const TABS = ["devices", "automations", "settings"] as const;
 type Tab = (typeof TABS)[number];
@@ -27,17 +30,23 @@ const plejdStates = (hass: any, domain: string, pred: (s: St) => boolean = () =>
   (Object.values(hass.states) as St[])
     .filter((s) => s.entity_id.startsWith(`${domain}.`) && isPlejd(hass, s) && pred(s))
     .sort((a, b) => nameOf(a).localeCompare(nameOf(b)));
-const deviceName = (hass: any, id: string) => hass.devices?.[id]?.name_by_user || hass.devices?.[id]?.name || id;
+const deviceName = (reg: Reg, id: string) => reg.devices[id]?.name_by_user || reg.devices[id]?.name || id;
 // A sensor's physical device name ("Hallway"), not its entity name ("Hallway Motion").
-const ownerName = (hass: any, s: St) => {
+const ownerName = (hass: any, reg: Reg, s: St) => {
   const id = hass.entities?.[s.entity_id]?.device_id;
-  return id ? deviceName(hass, id) : nameOf(s);
+  return id ? deviceName(reg, id) : nameOf(s);
 };
 
 export default function App({ hass, narrow }: { hass: any; narrow: boolean }) {
   const [tab, setTab] = useState<Tab>(() => (localStorage.getItem("plejd_tab") as Tab) || "devices");
   const go = (t: Tab) => { setTab(t); localStorage.setItem("plejd_tab", t); };
-  const ctx = { hass };
+  const [fetched, setFetched] = useState<Reg | null>(null);
+  useEffect(() => {
+    Promise.all([hass.callWS({ type: "config/area_registry/list" }), hass.callWS({ type: "config/device_registry/list" })])
+      .then(([a, d]: any[]) => setFetched({ areas: Object.fromEntries(a.map((x: any) => [x.area_id, x])), devices: Object.fromEntries(d.map((x: any) => [x.id, x])) }))
+      .catch((e: any) => console.warn("Plejd panel: failed to load area/device registries", e));
+  }, []);
+  const ctx = { hass, reg: fetched ?? { areas: hass.areas || {}, devices: hass.devices || {} } };
   return (
     <div className={`page ${narrow ? "narrow" : ""}`}>
       <header>
@@ -278,7 +287,7 @@ function Scenes({ hass }: Ctx) {
   );
 }
 
-function Motion({ hass }: Ctx) {
+function Motion({ hass, reg }: RegCtx) {
   const sensors = plejdStates(hass, "binary_sensor", (s) => s.attributes.device_class === "motion");
   const lux = (s: St) => {
     const deviceId = hass.entities?.[s.entity_id]?.device_id;
@@ -291,7 +300,7 @@ function Motion({ hass }: Ctx) {
       {sensors.map((s) => (
         <div key={s.entity_id} className="row line">
           <span className={`dot ${s.state === "on" ? "on" : ""}`} />
-          <span className="grow">{ownerName(hass, s)}</span>
+          <span className="grow">{ownerName(hass, reg, s)}</span>
           <span className="count">{["unavailable", "unknown"].includes(s.state) ? "Unavailable" : s.state === "on" ? "Detected" : "Clear"}{lux(s)}</span>
         </div>
       ))}
@@ -300,9 +309,9 @@ function Motion({ hass }: Ctx) {
   );
 }
 
-function Health({ hass }: Ctx) {
+function Health({ hass, reg }: RegCtx) {
   const faulted = plejdStates(hass, "binary_sensor", (s) => s.attributes.device_class === "problem" && s.state === "on")
-    .map((s) => ({ id: s.entity_id, name: ownerName(hass, s), flags: (s.attributes.active_faults || []).map((f: string) => f.replace(/_/g, " ")).join(", ") }))
+    .map((s) => ({ id: s.entity_id, name: ownerName(hass, reg, s), flags: (s.attributes.active_faults || []).map((f: string) => f.replace(/_/g, " ")).join(", ") }))
     .sort(byName);
   return (
     <Card title="Device health" count={faulted.length}>
@@ -413,7 +422,7 @@ const triggerLabel = (t: Trigger) => {
   return t.subtype ? `${type} · ${t.subtype}` : type;
 };
 
-function Bindings({ hass }: Ctx) {
+function Bindings({ hass, reg }: RegCtx) {
   // null until loaded. Saving sends the full list as a replacement, so never save from a failed load.
   const [list, setList] = useState<any[] | null>(null);
   const [loadError, setLoadError] = useState("");
@@ -430,15 +439,6 @@ function Bindings({ hass }: Ctx) {
       .catch((e: any) => setLoadError(`Could not load bindings: ${errMsg(e)}`));
   };
   useEffect(load, []);
-  // The full area/device registries (the panel's hass only carries them on newer HA versions).
-  const [fetched, setFetched] = useState<{ areas: Record<string, any>; devices: Record<string, any> } | null>(null);
-  useEffect(() => {
-    Promise.all([hass.callWS({ type: "config/area_registry/list" }), hass.callWS({ type: "config/device_registry/list" })])
-      .then(([a, d]: any[]) => setFetched({ areas: Object.fromEntries(a.map((x: any) => [x.area_id, x])), devices: Object.fromEntries(d.map((x: any) => [x.id, x])) }))
-      .catch((e: any) => console.warn("Plejd panel: failed to load area/device registries", e));
-  }, []);
-  const registries = fetched ?? { areas: hass.areas || {}, devices: hass.devices || {} };
-  const devName = (id: string) => registries.devices[id]?.name_by_user || registries.devices[id]?.name || id;
 
   const pickDevice = async (device: string) => {
     // A trigger index only means something for the previously selected device's list.
@@ -473,14 +473,14 @@ function Bindings({ hass }: Ctx) {
     }
   };
 
-  const areaName = (id: string) => registries.areas[id]?.name || id;
+  const areaName = (id: string) => reg.areas[id]?.name || id;
   const entityName = (id: string) => hass.states[id]?.attributes.friendly_name || id;
   const targetName = (b: any) => {
     const t = b.targets || {};
     const names = [
       ...[].concat(t.entity_id || []).map(entityName),
       ...[].concat(t.area_id || []).map(areaName),
-      ...[].concat(t.device_id || []).map((id: string) => devName(id)),
+      ...[].concat(t.device_id || []).map((id: string) => deviceName(reg, id)),
     ];
     return names.length ? names.join(", ") : "—";
   };
@@ -489,13 +489,13 @@ function Bindings({ hass }: Ctx) {
     const n = (b.presses || []).length;
     if (n) parts.push(`${n} press action${n === 1 ? "" : "s"}`);
     const remote = (b.up || b.down || b.stop || b.presses?.[0]?.trigger)?.device_id;
-    return `${remote ? devName(remote) : "—"} · ${parts.join(", ") || "—"}`;
+    return `${remote ? deviceName(reg, remote) : "—"} · ${parts.join(", ") || "—"}`;
   };
 
   const lights = (Object.values(hass.states) as St[]).filter((s) => s.entity_id.startsWith("light."))
     .map((s) => ({ id: s.entity_id, name: nameOf(s) })).sort(byName);
-  const areas = Object.values(registries.areas).map((a: any) => ({ id: a.area_id, name: a.name || a.area_id })).sort(byName);
-  const devices = Object.values(registries.devices).map((d: any) => ({ id: d.id, name: d.name_by_user || d.name })).filter((d) => d.name).sort(byName);
+  const areas = Object.values(reg.areas).map((a: any) => ({ id: a.area_id, name: a.name || a.area_id })).sort(byName);
+  const devices = Object.values(reg.devices).map((d: any) => ({ id: d.id, name: d.name_by_user || d.name })).filter((d) => d.name).sort(byName);
   const allScenes = (Object.values(hass.states) as St[]).filter((s) => s.entity_id.startsWith("scene."))
     .map((s) => ({ id: s.entity_id, name: nameOf(s) })).sort(byName);
   const dev = triggers[form.device];
