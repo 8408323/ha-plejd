@@ -96,12 +96,15 @@ async def async_sync_areas(hass: HomeAssistant, entry: ConfigEntry, *, generatio
                 if device is not None and previous.get("room", "").split(":", 1)[0] == room_id:
                     resolved[plejd_id] = previous  # same room, no area right now: keep its history
                 continue
-            resolved[plejd_id] = {"room": room_key, "area": area.id}
             room_changed = previous.get("room") != room_key
-            match_changed = previous.get("area") != area.id and device.area_id == previous.get("area")
-            if (room_changed or match_changed) and device.area_id != area.id:
-                _LOGGER.info("Plejd: moving %s to area %s (Plejd room changed)", device.name, area.name)
-                devices.async_update_device(device.id, area_id=area.id)
+            auto_placed = device.area_id == previous.get("area")
+            if room_changed or auto_placed:
+                if device.area_id != area.id:
+                    _LOGGER.info("Plejd: moving %s to area %s (Plejd room changed)", device.name, area.name)
+                    devices.async_update_device(device.id, area_id=area.id)
+                resolved[plejd_id] = {"room": room_key, "area": area.id}
+            else:
+                resolved[plejd_id] = previous  # hand-picked area: keep the marker of what we assigned
         if resolved != synced:
             await store.async_save(resolved)
 

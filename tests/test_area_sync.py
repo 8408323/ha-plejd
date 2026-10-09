@@ -285,3 +285,19 @@ def test_match_area_prefers_a_name_part_over_another_areas_alias_for_the_whole_n
 
 def test_match_area_splits_only_on_the_spaced_separator():
     assert match_area("AC/DC", [_area("ac", "AC")]) is None
+
+
+async def test_hand_picked_area_survives_two_consecutive_match_changes():
+    areas_before = list(AREAS)
+    AREAS[:] = [_area("pantry", "Pantry", aliases=["Garage"]), _area("hall", "Hall")]
+    try:
+        hass = _hass([_device("d1", "TEKNIK", None)])
+        await async_sync_areas(hass, _entry())  # auto-placed in pantry via the alias
+        hass.device_registry.devices["d1"].area_id = "hall"  # hand-picked
+        AREAS[:] = [_area("pantry", "Pantry"), _area("hall", "Hall", aliases=["Garage"])]
+        await async_sync_areas(hass, _entry())  # match changes to the hand-picked area itself
+        AREAS.append(_area("garage", "Garage"))
+        await async_sync_areas(hass, _entry())  # and changes again
+        assert hass.device_registry.devices["d1"].area_id == "hall"
+    finally:
+        AREAS[:] = areas_before
