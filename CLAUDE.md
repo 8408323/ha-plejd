@@ -33,6 +33,8 @@ custom_components/plejd/   # HA integration (the actual product)
   manifest.json            # HA integration manifest (bluetooth discovery, single entry)
   strings.json             # config-flow strings
   translations/en.json     # English translations
+  www/panel.js             # built dashboard (committed); source in frontend/
+frontend/                  # React + Vite dashboard source: `npm run build` → www/panel.js
 tools/                     # Reverse-engineering helpers (standalone, not imported)
   gatt_discover.py         # enumerate Plejd GATT services/characteristics (bleak)
   adb_capture.sh           # stream the Plejd app's logcat over ADB

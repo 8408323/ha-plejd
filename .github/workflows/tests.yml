@@ -34,5 +34,9 @@ jobs:
       - name: Run tests
         run: uv run pytest tests/ -v --tb=short --cov=custom_components/plejd --cov-report=term-missing --cov-fail-under=100
 
-      - name: Run panel JS tests
-        run: node --test tests/test_panel_js.mjs
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22  # 22.18+ runs the panel's .ts logic module without a build step
+
+      - name: Run panel logic tests
+        run: node --test tests/test_panel_logic.mjs
