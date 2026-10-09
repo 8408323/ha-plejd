@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import types
 from unittest.mock import AsyncMock
 
@@ -664,6 +665,19 @@ async def test_all_off_service_survives_entry_unload_cleanup(monkeypatch):
     for unload in unloads:
         unload()
     assert f"plejd.{SERVICE_ALL_OFF}" in hass.services._handlers
+
+
+async def test_unload_callbacks_return_nothing_ha_would_try_to_schedule(monkeypatch):
+    # HA schedules any non-None on_unload return value as a task, so a callback that
+    # returns e.g. the object it popped crashes the unload (and every entry reload).
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    _FakeCoordinator.instances.clear()
+    hass, entry = _hass(), _entry()
+    unloads: list = []
+    entry.async_on_unload = unloads.append
+    await async_setup_entry(hass, entry)
+    results = [unload() for unload in unloads]
+    assert [r for r in results if r is not None and not inspect.iscoroutine(r)] == []
 
 
 async def test_all_off_service_calls_coordinator(monkeypatch):

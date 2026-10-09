@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from functools import partial
 
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
@@ -176,6 +177,12 @@ _UPDATE_SCHEDULE_SCHEMA = vol.Schema(
 )
 
 _REMOVE_SCHEDULE_SCHEMA = vol.Schema({vol.Required("schedule_id"): str})
+
+
+def _drop(hass: HomeAssistant, key: str) -> None:
+    # Returns None on purpose: HA schedules a non-None on_unload return value as a task,
+    # and a bare `lambda: hass.data.pop(...)` returns the popped object, failing the unload.
+    hass.data.pop(key, None)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -393,12 +400,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     except Exception:  # noqa: BLE001 - bindings are optional; continue with an empty manager
         _LOGGER.warning("Plejd: could not load dim bindings; continuing without them", exc_info=True)
     hass.data[dim_binding_ws.DATA_BINDINGS] = dim_bindings
-    entry.async_on_unload(lambda: hass.data.pop(dim_binding_ws.DATA_BINDINGS, None))
+    entry.async_on_unload(partial(_drop, hass, dim_binding_ws.DATA_BINDINGS))
     entry.async_on_unload(dim_bindings.shutdown)
 
     # Schedules (managed from the dashboard via the WebSocket API too, mirroring bindings above).
     hass.data[schedule_ws.DATA_ENTRY] = entry
-    entry.async_on_unload(lambda: hass.data.pop(schedule_ws.DATA_ENTRY, None))
+    entry.async_on_unload(partial(_drop, hass, schedule_ws.DATA_ENTRY))
 
     # Custom remote button-profile overrides (see remote_profiles.py). Same optional,
     # storage-backed pattern as the dim bindings above.
@@ -408,7 +415,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     except Exception:  # noqa: BLE001 - optional; continue with an empty manager
         _LOGGER.warning("Plejd: could not load remote profiles; continuing without them", exc_info=True)
     hass.data[remote_profile_ws.DATA_REMOTE_PROFILES] = remote_profiles
-    entry.async_on_unload(lambda: hass.data.pop(remote_profile_ws.DATA_REMOTE_PROFILES, None))
+    entry.async_on_unload(partial(_drop, hass, remote_profile_ws.DATA_REMOTE_PROFILES))
 
     if not hass.data.get(_WS_REGISTERED):
         dim_binding_ws.async_register(hass)  # hass-global commands; register once
