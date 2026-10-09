@@ -276,3 +276,12 @@ async def test_hand_picked_area_survives_its_matching_area_disappearing_for_a_wh
         assert hass.device_registry.devices["d1"].area_id == "hall"
     finally:
         AREAS[:] = areas_before
+
+
+def test_match_area_prefers_a_name_part_over_another_areas_alias_for_the_whole_name():
+    areas = [_area("allrum", "Allrum", aliases=["Vardagsrum / Allrum"]), _area("vardagsrum", "Vardagsrum")]
+    assert match_area("Vardagsrum / Allrum", areas).id == "vardagsrum"
+
+
+def test_match_area_splits_only_on_the_spaced_separator():
+    assert match_area("AC/DC", [_area("ac", "AC")]) is None

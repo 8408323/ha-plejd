@@ -44,17 +44,14 @@ def _fold(name: str) -> str:
 
 
 def match_area(room_name: str, areas: list[Any]) -> Any | None:
-    """Return the area named like the room, its alias, or one " / " part of it."""
-    by_name: dict[str, Any] = {}
-    for area in areas:
-        by_name.setdefault(_fold(area.name), area)
-    for area in areas:  # aliases only after every canonical name, so an exact name always wins
-        for alias in getattr(area, "aliases", None) or ():
-            by_name.setdefault(_fold(alias), area)
-    for candidate in (room_name, *room_name.split("/")):
-        area = by_name.get(_fold(candidate))
-        if area is not None:
-            return area
+    """Return the area named like the room or one " / " part of it, then the same by alias."""
+    candidates = [_fold(c) for c in (room_name, *room_name.split(" / "))]
+    names = {_fold(area.name): area for area in reversed(areas)}
+    aliases = {_fold(alias): area for area in reversed(areas) for alias in getattr(area, "aliases", None) or ()}
+    for lookup in (names, aliases):  # every canonical candidate before any alias
+        for candidate in candidates:
+            if candidate in lookup:
+                return lookup[candidate]
     return None
 
 
