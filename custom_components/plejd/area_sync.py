@@ -39,6 +39,13 @@ def _store(hass: HomeAssistant, entry: ConfigEntry) -> Store:
     return Store(hass, STORE_VERSION, f"{STORE_KEY}.{entry.entry_id}")
 
 
+def _get_device(devices: Any, plejd_id: str, entry_id: str) -> Any | None:
+    # NOTE: async_get_device is deprecated from HA 2026.10 (breaks in 2027.8); its replacement doesn't exist before.
+    if hasattr(devices, "async_get_device_by_identifier"):
+        return devices.async_get_device_by_identifier((DOMAIN, plejd_id), entry_id)
+    return devices.async_get_device(identifiers={(DOMAIN, plejd_id)})
+
+
 def _fold(name: str) -> str:
     return name.strip().casefold()
 
@@ -70,7 +77,9 @@ def get_device_rooms(entry_data: dict[str, Any]) -> dict[str, str]:
     return rooms
 
 
-async def async_sync_areas(hass: HomeAssistant, entry: ConfigEntry, *, generation: int | None = None) -> None:
+async def async_sync_areas(
+    hass: HomeAssistant, entry: ConfigEntry, *, generation: int | None = None, removed_area: str | None = None
+) -> None:
     """Move devices whose Plejd room changed since the last sync to the matching HA area."""
     # NOTE: record a device only once its room resolved to an area, so later room/area changes re-evaluate it;
     # remembering the area we assigned lets a changed match retarget it without overriding a hand-picked one.
@@ -89,14 +98,18 @@ async def async_sync_areas(hass: HomeAssistant, entry: ConfigEntry, *, generatio
         resolved: dict[str, dict[str, str]] = {}
         for plejd_id, room_id in get_device_rooms(entry.data).items():
             room_key = f"{room_id}:{room_names[room_id]}" if room_id in room_names else None
-            device = devices.async_get_device(identifiers={(DOMAIN, plejd_id)})
+            device = _get_device(devices, plejd_id, entry.entry_id)
             area = match_area(room_names[room_id], areas) if room_key else None
             previous = synced.get(plejd_id) or {}
             if device is None or area is None:
                 if device is not None and previous.get("room", "").split(":", 1)[0] == room_id:
                     resolved[plejd_id] = previous  # same room, no area right now: keep its history
+                    if removed_area and previous.get("area") == removed_area and device.area_id is None:
+                        # HA cleared the area because it was deleted, not the user: restore it once it's back.
+                        resolved[plejd_id] = {**previous, "area": None}
                 continue
-            room_changed = previous.get("room") != room_key
+            # Only a move to another Plejd room overrides a hand-picked area; a rename acts like a match change.
+            room_changed = previous.get("room", "").split(":", 1)[0] != room_id
             auto_placed = device.area_id == previous.get("area")
             if room_changed or auto_placed:
                 if device.area_id != area.id:
@@ -122,9 +135,10 @@ def async_listen_area_changes(hass: HomeAssistant, entry: ConfigEntry) -> Callab
 
     generation = _generation(hass, entry)
 
-    async def _on_area_change(_event: Event) -> None:
+    async def _on_area_change(event: Event) -> None:
         try:
-            await async_sync_areas(hass, entry, generation=generation)
+            removed = event.data.get("area_id") if event.data.get("action") == "remove" else None
+            await async_sync_areas(hass, entry, generation=generation, removed_area=removed)
         except Exception:  # noqa: BLE001 - optional; never let a registry event handler raise
             _LOGGER.warning("Plejd: could not sync device areas after an area change", exc_info=True)
 

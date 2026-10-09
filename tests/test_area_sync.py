@@ -301,3 +301,61 @@ async def test_hand_picked_area_survives_two_consecutive_match_changes():
         assert hass.device_registry.devices["d1"].area_id == "hall"
     finally:
         AREAS[:] = areas_before
+
+
+async def test_uses_the_entry_scoped_device_lookup_when_ha_has_it():
+    class _ScopedDevices(_Devices):
+        def async_get_device(self, identifiers):
+            raise AssertionError("deprecated lookup used")
+
+        def async_get_device_by_identifier(self, identifier, config_entry_id):
+            assert config_entry_id == "e1"
+            return super().async_get_device({identifier})
+
+    hass = _hass([])
+    hass.device_registry = _ScopedDevices([_device("d1", "TEKNIK", "vardagsrum")])
+    await async_sync_areas(hass, _entry())
+    assert hass.device_registry.devices["d1"].area_id == "garage"
+
+
+async def test_renamed_plejd_room_keeps_a_hand_picked_area():
+    hass = _hass([_device("d1", "TEKNIK", "vardagsrum")])
+    await async_sync_areas(hass, _entry())
+    hass.device_registry.devices["d1"].area_id = "vardagsrum"  # hand-picked back
+    renamed = {**ENTRY_DATA, "rooms": [{"room_id": "r-garage", "name": "Hall"}, *ENTRY_DATA["rooms"][:1]]}
+    await async_sync_areas(hass, _entry(renamed))
+    assert hass.device_registry.devices["d1"].area_id == "vardagsrum"
+
+
+async def test_renamed_plejd_room_moves_an_automatically_placed_device():
+    hass = _hass([_device("d1", "TEKNIK", "vardagsrum")])
+    await async_sync_areas(hass, _entry())  # auto-placed in garage
+    renamed = {**ENTRY_DATA, "rooms": [{"room_id": "r-garage", "name": "Hall"}, *ENTRY_DATA["rooms"][:1]]}
+    await async_sync_areas(hass, _entry(renamed))
+    assert hass.device_registry.devices["d1"].area_id == "hall"
+
+
+async def test_deleted_and_recreated_area_restores_an_automatically_placed_device():
+    areas_before = list(AREAS)
+    try:
+        hass = _hass([_device("d1", "TEKNIK", "vardagsrum")])
+        entry = _entry()
+        async_listen_area_changes(hass, entry)
+        [(_, handler)] = hass.bus.listeners
+        await async_sync_areas(hass, entry)  # auto-placed in garage
+        AREAS[:] = [a for a in AREAS if a.id != "garage"]
+        hass.device_registry.devices["d1"].area_id = None  # HA clears it before the event
+        await handler(types.SimpleNamespace(data={"action": "remove", "area_id": "garage"}))
+        AREAS[:] = areas_before
+        await handler(types.SimpleNamespace(data={"action": "create", "area_id": "garage"}))
+        assert hass.device_registry.devices["d1"].area_id == "garage"
+    finally:
+        AREAS[:] = areas_before
+
+
+async def test_area_cleared_by_hand_stays_cleared():
+    hass = _hass([_device("d1", "TEKNIK", "vardagsrum")])
+    await async_sync_areas(hass, _entry())
+    hass.device_registry.devices["d1"].area_id = None
+    await async_sync_areas(hass, _entry())
+    assert hass.device_registry.devices["d1"].area_id is None
