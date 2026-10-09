@@ -2,6 +2,10 @@
 // Every language is typed as T, so a missing key is a build error. "{x}" placeholders are filled by fmt() in logic.ts.
 
 const en = {
+  lang: "en",
+  trigger_types: { press: "Press", release: "Release", short_press: "Short press", long_press: "Long press", double_press: "Double press", triple_press: "Triple press", short_release: "Release after short press", long_release: "Release after long press", initial_press: "First press", repeat: "Repeat", turned_on: "Turned on", turned_off: "Turned off", opened: "Opened", closed: "Closed", motion: "Motion", no_motion: "No motion", dim_up: "Dim up", dim_down: "Dim down" } as Record<string, string>,
+  trigger_subtypes: { turn_on: "On", turn_off: "Off", on: "On", off: "Off", dim_up: "Dim up", dim_down: "Dim down", left: "Left", right: "Right", up: "Up", down: "Down" } as Record<string, string>,
+  trigger_button: "Button {n}",
   tab_devices: "Devices", tab_automations: "Automations", tab_settings: "Settings",
   loading: "Loading…", retry: "Retry", saved: "Saved.", saving: "Saving…", delete: "Delete", save: "Save",
   lights: "Lights", other_lights: "Other lights", waiting: "Waiting for Plejd… ({error})", no_lights: "No Plejd lights found.",
@@ -65,6 +69,10 @@ const en = {
 export type T = typeof en;
 
 const sv: T = {
+  lang: "sv",
+  trigger_types: { press: "Tryck", release: "Släpp", short_press: "Kort tryck", long_press: "Långt tryck", double_press: "Dubbeltryck", triple_press: "Trippeltryck", short_release: "Släpp efter kort tryck", long_release: "Släpp efter långt tryck", initial_press: "Första tryck", repeat: "Upprepning", turned_on: "Påslagen", turned_off: "Avslagen", opened: "Öppnad", closed: "Stängd", motion: "Rörelse", no_motion: "Ingen rörelse", dim_up: "Dimra upp", dim_down: "Dimra ner" } as Record<string, string>,
+  trigger_subtypes: { turn_on: "På", turn_off: "Av", on: "På", off: "Av", dim_up: "Dimra upp", dim_down: "Dimra ner", left: "Vänster", right: "Höger", up: "Upp", down: "Ner" } as Record<string, string>,
+  trigger_button: "Knapp {n}",
   tab_devices: "Enheter", tab_automations: "Automationer", tab_settings: "Inställningar",
   loading: "Laddar…", retry: "Försök igen", saved: "Sparat.", saving: "Sparar…", delete: "Ta bort", save: "Spara",
   lights: "Lampor", other_lights: "Övriga lampor", waiting: "Väntar på Plejd… ({error})", no_lights: "Inga Plejd-lampor hittades.",
@@ -127,6 +135,10 @@ const sv: T = {
 };
 
 const nb: T = {
+  lang: "nb",
+  trigger_types: { press: "Trykk", release: "Slipp", short_press: "Kort trykk", long_press: "Langt trykk", double_press: "Dobbelttrykk", triple_press: "Trippeltrykk", short_release: "Slipp etter kort trykk", long_release: "Slipp etter langt trykk", initial_press: "Første trykk", repeat: "Gjentakelse", turned_on: "Slått på", turned_off: "Slått av", opened: "Åpnet", closed: "Lukket", motion: "Bevegelse", no_motion: "Ingen bevegelse", dim_up: "Dim opp", dim_down: "Dim ned" } as Record<string, string>,
+  trigger_subtypes: { turn_on: "På", turn_off: "Av", on: "På", off: "Av", dim_up: "Dim opp", dim_down: "Dim ned", left: "Venstre", right: "Høyre", up: "Opp", down: "Ned" } as Record<string, string>,
+  trigger_button: "Knapp {n}",
   tab_devices: "Enheter", tab_automations: "Automasjoner", tab_settings: "Innstillinger",
   loading: "Laster…", retry: "Prøv igjen", saved: "Lagret.", saving: "Lagrer…", delete: "Slett", save: "Lagre",
   lights: "Lys", other_lights: "Andre lys", waiting: "Venter på Plejd… ({error})", no_lights: "Fant ingen Plejd-lys.",
@@ -189,6 +201,10 @@ const nb: T = {
 };
 
 const da: T = {
+  lang: "da",
+  trigger_types: { press: "Tryk", release: "Slip", short_press: "Kort tryk", long_press: "Langt tryk", double_press: "Dobbelttryk", triple_press: "Tredobbelt tryk", short_release: "Slip efter kort tryk", long_release: "Slip efter langt tryk", initial_press: "Første tryk", repeat: "Gentagelse", turned_on: "Tændt", turned_off: "Slukket", opened: "Åbnet", closed: "Lukket", motion: "Bevægelse", no_motion: "Ingen bevægelse", dim_up: "Dæmp op", dim_down: "Dæmp ned" } as Record<string, string>,
+  trigger_subtypes: { turn_on: "Til", turn_off: "Fra", on: "Til", off: "Fra", dim_up: "Dæmp op", dim_down: "Dæmp ned", left: "Venstre", right: "Højre", up: "Op", down: "Ned" } as Record<string, string>,
+  trigger_button: "Knap {n}",
   tab_devices: "Enheder", tab_automations: "Automatiseringer", tab_settings: "Indstillinger",
   loading: "Indlæser…", retry: "Prøv igen", saved: "Gemt.", saving: "Gemmer…", delete: "Slet", save: "Gem",
   lights: "Lys", other_lights: "Andre lys", waiting: "Venter på Plejd… ({error})", no_lights: "Ingen Plejd-lys fundet.",
@@ -251,6 +267,10 @@ const da: T = {
 };
 
 const fi: T = {
+  lang: "fi",
+  trigger_types: { press: "Painallus", release: "Vapautus", short_press: "Lyhyt painallus", long_press: "Pitkä painallus", double_press: "Kaksoispainallus", triple_press: "Kolmoispainallus", short_release: "Vapautus lyhyen painalluksen jälkeen", long_release: "Vapautus pitkän painalluksen jälkeen", initial_press: "Ensimmäinen painallus", repeat: "Toisto", turned_on: "Kytketty päälle", turned_off: "Kytketty pois", opened: "Avattu", closed: "Suljettu", motion: "Liikettä", no_motion: "Ei liikettä", dim_up: "Kirkasta", dim_down: "Himmennä" } as Record<string, string>,
+  trigger_subtypes: { turn_on: "Päälle", turn_off: "Pois", on: "Päälle", off: "Pois", dim_up: "Kirkasta", dim_down: "Himmennä", left: "Vasen", right: "Oikea", up: "Ylös", down: "Alas" } as Record<string, string>,
+  trigger_button: "Painike {n}",
   tab_devices: "Laitteet", tab_automations: "Automaatiot", tab_settings: "Asetukset",
   loading: "Ladataan…", retry: "Yritä uudelleen", saved: "Tallennettu.", saving: "Tallennetaan…", delete: "Poista", save: "Tallenna",
   lights: "Valot", other_lights: "Muut valot", waiting: "Odotetaan Plejdiä… ({error})", no_lights: "Plejd-valoja ei löytynyt.",
@@ -313,6 +333,10 @@ const fi: T = {
 };
 
 const is_: T = {
+  lang: "is",
+  trigger_types: { press: "Ýtt", release: "Sleppt", short_press: "Stutt ýting", long_press: "Löng ýting", double_press: "Tvíýting", triple_press: "Þreföld ýting", short_release: "Sleppt eftir stutta ýtingu", long_release: "Sleppt eftir langa ýtingu", initial_press: "Fyrsta ýting", repeat: "Endurtekning", turned_on: "Kveikt", turned_off: "Slökkt", opened: "Opnað", closed: "Lokað", motion: "Hreyfing", no_motion: "Engin hreyfing", dim_up: "Auka birtu", dim_down: "Deyfa" } as Record<string, string>,
+  trigger_subtypes: { turn_on: "Kveikja", turn_off: "Slökkva", on: "Kveikja", off: "Slökkva", dim_up: "Auka birtu", dim_down: "Deyfa", left: "Vinstri", right: "Hægri", up: "Upp", down: "Niður" } as Record<string, string>,
+  trigger_button: "Hnappur {n}",
   tab_devices: "Tæki", tab_automations: "Sjálfvirkni", tab_settings: "Stillingar",
   loading: "Hleð…", retry: "Reyna aftur", saved: "Vistað.", saving: "Vista…", delete: "Eyða", save: "Vista",
   lights: "Ljós", other_lights: "Önnur ljós", waiting: "Bíð eftir Plejd… ({error})", no_lights: "Engin Plejd-ljós fundust.",
@@ -341,7 +365,7 @@ const is_: T = {
   sensor_motion: "Þetta er hreyfiskynjari, ekki deyfifjarstýring – notaðu hnappaaðgerð hér að neðan til að bregðast við honum.",
   no_triggers: "Tækið hefur engar kveikjur.", press_actions: "Hnappaaðgerðir", add_press: "+ Bæta við hnappaaðgerð",
   trigger: "Kveikja", action: "Aðgerð", select_action: "Veldu aðgerð…", remove_press: "Fjarlægja hnappaaðgerð",
-  domain: "Svæði", service: "Þjónusta", data_json: "Gögn (JSON, valfrjálst)", no_presses: "Engar hnappaaðgerðir enn.", add_binding: "Bæta við tengingu",
+  domain: "Lén", service: "Þjónusta", data_json: "Gögn (JSON, valfrjálst)", no_presses: "Engar hnappaaðgerðir enn.", add_binding: "Bæta við tengingu",
   press_count_one: "1 hnappaaðgerð", press_count: "{n} hnappaaðgerðir",
   press_toggle: "Víxla", press_on: "Kveikja", press_off: "Slökkva", press_scene: "Virkja senu", press_service: "Kalla á þjónustu",
   settings: "Stillingar", settings_load_failed: "Ekki tókst að hlaða stillingum: {error}", communication: "Samskipti",

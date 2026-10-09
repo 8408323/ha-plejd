@@ -28,6 +28,19 @@ export function stepTemperature(target: number, direction: 1 | -1, attrs: Record
 // Fills "{x}" placeholders in a translated string.
 export const fmt = (s: string, vars: Record<string, string | number>) => s.replace(/\{(\w+)\}/g, (_, k) => String(vars[k] ?? `{${k}}`));
 
+// A device trigger as a readable label. Triggers come from any integration, so only common types/subtypes
+// are translated ("remote_button_*" shares the plain entries); anything else shows its own id.
+export function triggerLabel(tr: Trigger, t: T): string {
+  const raw = (v: string) => v.replace(/_/g, " ");
+  const type = String(tr.type || "trigger").replace(/^remote_button_/, "");
+  const typeLabel = t.trigger_types[type] ?? raw(type);
+  if (!tr.subtype) return typeLabel;
+  const sub = String(tr.subtype);
+  const button = /^button_?(\d+)$/.exec(sub);
+  const subLabel = button ? fmt(t.trigger_button, { n: button[1] }) : (t.trigger_subtypes[sub] ?? raw(sub));
+  return `${typeLabel} · ${subLabel}`;
+}
+
 const pick = (triggers: Trigger[], index: string) => (index === "" ? null : triggers[Number(index)] || null);
 
 // Form -> binding payload, mirroring the backend's validation so obvious mistakes are caught

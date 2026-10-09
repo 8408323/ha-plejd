@@ -4924,12 +4924,12 @@ var e = (e, t) => () => (t || (e((t = { exports: {} }).exports, t), e = null), t
 		if (i === 5 || i === 6) i = e.stateNode, t ? (n.nodeType === 9 ? n.body : n.nodeName === "HTML" ? n.ownerDocument.body : n).insertBefore(i, t) : (t = n.nodeType === 9 ? n.body : n.nodeName === "HTML" ? n.ownerDocument.body : n, t.appendChild(i), n = n._reactRootContainer, n != null || t.onclick !== null || (t.onclick = un)), yl(e, r), q = !0;
 		else if (i !== 4 && (i === 27 && (yl(e, r), r = null, Sp(e.type) && (n = e.stateNode, t = null)), e = e.child, e !== null)) for (Ol(e, t, n, r), e = e.sibling; e !== null;) Ol(e, t, n, r), e = e.sibling;
 	}
-	function $(e, t, n, r) {
+	function kl(e, t, n, r) {
 		var i = e.tag;
 		if (i === 5 || i === 6) i = e.stateNode, t ? n.insertBefore(i, t) : n.appendChild(i), yl(e, r), q = !0;
-		else if (i !== 4 && (i === 27 && (yl(e, r), r = null, Sp(e.type) && (n = e.stateNode)), e = e.child, e !== null)) for ($(e, t, n, r), e = e.sibling; e !== null;) $(e, t, n, r), e = e.sibling;
+		else if (i !== 4 && (i === 27 && (yl(e, r), r = null, Sp(e.type) && (n = e.stateNode)), e = e.child, e !== null)) for (kl(e, t, n, r), e = e.sibling; e !== null;) kl(e, t, n, r), e = e.sibling;
 	}
-	function kl(e) {
+	function $(e) {
 		var t = e.stateNode, n = e.memoizedProps;
 		try {
 			for (var r = e.type, i = t.attributes; i.length;) t.removeAttributeNode(i[0]);
@@ -5238,7 +5238,7 @@ var e = (e, t) => () => (t || (e((t = { exports: {} }).exports, t), e = null), t
 					}
 				}
 				break;
-			case 27: t === null && r & 4 && kl(n);
+			case 27: t === null && r & 4 && $(n);
 			case 26:
 			case 5:
 				Du(e, n), t === null && r & 4 && wl(n), r & 512 && _l(n, n.return);
@@ -5601,11 +5601,11 @@ var e = (e, t) => () => (t || (e((t = { exports: {} }).exports, t), e = null), t
 				switch (n.tag) {
 					case 27:
 						var c = n.stateNode;
-						$(e, Dl(e), c, o);
+						kl(e, Dl(e), c, o);
 						break;
 					case 5:
 						var l = n.stateNode;
-						n.flags & 32 && (tn(l, ""), n.flags &= -33), $(e, Dl(e), l, o);
+						n.flags & 32 && (tn(l, ""), n.flags &= -33), kl(e, Dl(e), l, o);
 						break;
 					case 3:
 					case 4:
@@ -5752,7 +5752,7 @@ var e = (e, t) => () => (t || (e((t = { exports: {} }).exports, t), e = null), t
 					}
 					s && o & 64 && hl(a), _l(a, a.return);
 					break;
-				case 27: n & 2 && kl(a);
+				case 27: n & 2 && $(a);
 				case 5:
 					a.tag !== 5 && a.tag !== 27 || bl(a), ku(i, a, n), s && r === null && o & 4 && wl(a), _l(a, a.return);
 					break;
@@ -9035,6 +9035,40 @@ var e = (e, t) => () => (t || (e((t = { exports: {} }).exports, t), e = null), t
 	n(), t.exports = s();
 })), l = i(), u = c(), d = {
 	en: [{
+		lang: "en",
+		trigger_types: {
+			press: "Press",
+			release: "Release",
+			short_press: "Short press",
+			long_press: "Long press",
+			double_press: "Double press",
+			triple_press: "Triple press",
+			short_release: "Release after short press",
+			long_release: "Release after long press",
+			initial_press: "First press",
+			repeat: "Repeat",
+			turned_on: "Turned on",
+			turned_off: "Turned off",
+			opened: "Opened",
+			closed: "Closed",
+			motion: "Motion",
+			no_motion: "No motion",
+			dim_up: "Dim up",
+			dim_down: "Dim down"
+		},
+		trigger_subtypes: {
+			turn_on: "On",
+			turn_off: "Off",
+			on: "On",
+			off: "Off",
+			dim_up: "Dim up",
+			dim_down: "Dim down",
+			left: "Left",
+			right: "Right",
+			up: "Up",
+			down: "Down"
+		},
+		trigger_button: "Button {n}",
 		tab_devices: "Devices",
 		tab_automations: "Automations",
 		tab_settings: "Settings",
@@ -9212,6 +9246,40 @@ var e = (e, t) => () => (t || (e((t = { exports: {} }).exports, t), e = null), t
 		err_sched_fade: "Fade must be zero or a whole number of seconds."
 	}, "English"],
 	sv: [{
+		lang: "sv",
+		trigger_types: {
+			press: "Tryck",
+			release: "Släpp",
+			short_press: "Kort tryck",
+			long_press: "Långt tryck",
+			double_press: "Dubbeltryck",
+			triple_press: "Trippeltryck",
+			short_release: "Släpp efter kort tryck",
+			long_release: "Släpp efter långt tryck",
+			initial_press: "Första tryck",
+			repeat: "Upprepning",
+			turned_on: "Påslagen",
+			turned_off: "Avslagen",
+			opened: "Öppnad",
+			closed: "Stängd",
+			motion: "Rörelse",
+			no_motion: "Ingen rörelse",
+			dim_up: "Dimra upp",
+			dim_down: "Dimra ner"
+		},
+		trigger_subtypes: {
+			turn_on: "På",
+			turn_off: "Av",
+			on: "På",
+			off: "Av",
+			dim_up: "Dimra upp",
+			dim_down: "Dimra ner",
+			left: "Vänster",
+			right: "Höger",
+			up: "Upp",
+			down: "Ner"
+		},
+		trigger_button: "Knapp {n}",
 		tab_devices: "Enheter",
 		tab_automations: "Automationer",
 		tab_settings: "Inställningar",
@@ -9389,6 +9457,40 @@ var e = (e, t) => () => (t || (e((t = { exports: {} }).exports, t), e = null), t
 		err_sched_fade: "Toningstiden måste vara noll eller ett helt antal sekunder."
 	}, "Svenska"],
 	nb: [{
+		lang: "nb",
+		trigger_types: {
+			press: "Trykk",
+			release: "Slipp",
+			short_press: "Kort trykk",
+			long_press: "Langt trykk",
+			double_press: "Dobbelttrykk",
+			triple_press: "Trippeltrykk",
+			short_release: "Slipp etter kort trykk",
+			long_release: "Slipp etter langt trykk",
+			initial_press: "Første trykk",
+			repeat: "Gjentakelse",
+			turned_on: "Slått på",
+			turned_off: "Slått av",
+			opened: "Åpnet",
+			closed: "Lukket",
+			motion: "Bevegelse",
+			no_motion: "Ingen bevegelse",
+			dim_up: "Dim opp",
+			dim_down: "Dim ned"
+		},
+		trigger_subtypes: {
+			turn_on: "På",
+			turn_off: "Av",
+			on: "På",
+			off: "Av",
+			dim_up: "Dim opp",
+			dim_down: "Dim ned",
+			left: "Venstre",
+			right: "Høyre",
+			up: "Opp",
+			down: "Ned"
+		},
+		trigger_button: "Knapp {n}",
 		tab_devices: "Enheter",
 		tab_automations: "Automasjoner",
 		tab_settings: "Innstillinger",
@@ -9566,6 +9668,40 @@ var e = (e, t) => () => (t || (e((t = { exports: {} }).exports, t), e = null), t
 		err_sched_fade: "Overgangen må være null eller et helt antall sekunder."
 	}, "Norsk"],
 	da: [{
+		lang: "da",
+		trigger_types: {
+			press: "Tryk",
+			release: "Slip",
+			short_press: "Kort tryk",
+			long_press: "Langt tryk",
+			double_press: "Dobbelttryk",
+			triple_press: "Tredobbelt tryk",
+			short_release: "Slip efter kort tryk",
+			long_release: "Slip efter langt tryk",
+			initial_press: "Første tryk",
+			repeat: "Gentagelse",
+			turned_on: "Tændt",
+			turned_off: "Slukket",
+			opened: "Åbnet",
+			closed: "Lukket",
+			motion: "Bevægelse",
+			no_motion: "Ingen bevægelse",
+			dim_up: "Dæmp op",
+			dim_down: "Dæmp ned"
+		},
+		trigger_subtypes: {
+			turn_on: "Til",
+			turn_off: "Fra",
+			on: "Til",
+			off: "Fra",
+			dim_up: "Dæmp op",
+			dim_down: "Dæmp ned",
+			left: "Venstre",
+			right: "Højre",
+			up: "Op",
+			down: "Ned"
+		},
+		trigger_button: "Knap {n}",
 		tab_devices: "Enheder",
 		tab_automations: "Automatiseringer",
 		tab_settings: "Indstillinger",
@@ -9743,6 +9879,40 @@ var e = (e, t) => () => (t || (e((t = { exports: {} }).exports, t), e = null), t
 		err_sched_fade: "Overgangen skal være nul eller et helt antal sekunder."
 	}, "Dansk"],
 	fi: [{
+		lang: "fi",
+		trigger_types: {
+			press: "Painallus",
+			release: "Vapautus",
+			short_press: "Lyhyt painallus",
+			long_press: "Pitkä painallus",
+			double_press: "Kaksoispainallus",
+			triple_press: "Kolmoispainallus",
+			short_release: "Vapautus lyhyen painalluksen jälkeen",
+			long_release: "Vapautus pitkän painalluksen jälkeen",
+			initial_press: "Ensimmäinen painallus",
+			repeat: "Toisto",
+			turned_on: "Kytketty päälle",
+			turned_off: "Kytketty pois",
+			opened: "Avattu",
+			closed: "Suljettu",
+			motion: "Liikettä",
+			no_motion: "Ei liikettä",
+			dim_up: "Kirkasta",
+			dim_down: "Himmennä"
+		},
+		trigger_subtypes: {
+			turn_on: "Päälle",
+			turn_off: "Pois",
+			on: "Päälle",
+			off: "Pois",
+			dim_up: "Kirkasta",
+			dim_down: "Himmennä",
+			left: "Vasen",
+			right: "Oikea",
+			up: "Ylös",
+			down: "Alas"
+		},
+		trigger_button: "Painike {n}",
 		tab_devices: "Laitteet",
 		tab_automations: "Automaatiot",
 		tab_settings: "Asetukset",
@@ -9920,6 +10090,40 @@ var e = (e, t) => () => (t || (e((t = { exports: {} }).exports, t), e = null), t
 		err_sched_fade: "Häivytyksen on oltava nolla tai kokonainen määrä sekunteja."
 	}, "Suomi"],
 	is: [{
+		lang: "is",
+		trigger_types: {
+			press: "Ýtt",
+			release: "Sleppt",
+			short_press: "Stutt ýting",
+			long_press: "Löng ýting",
+			double_press: "Tvíýting",
+			triple_press: "Þreföld ýting",
+			short_release: "Sleppt eftir stutta ýtingu",
+			long_release: "Sleppt eftir langa ýtingu",
+			initial_press: "Fyrsta ýting",
+			repeat: "Endurtekning",
+			turned_on: "Kveikt",
+			turned_off: "Slökkt",
+			opened: "Opnað",
+			closed: "Lokað",
+			motion: "Hreyfing",
+			no_motion: "Engin hreyfing",
+			dim_up: "Auka birtu",
+			dim_down: "Deyfa"
+		},
+		trigger_subtypes: {
+			turn_on: "Kveikja",
+			turn_off: "Slökkva",
+			on: "Kveikja",
+			off: "Slökkva",
+			dim_up: "Auka birtu",
+			dim_down: "Deyfa",
+			left: "Vinstri",
+			right: "Hægri",
+			up: "Upp",
+			down: "Niður"
+		},
+		trigger_button: "Hnappur {n}",
 		tab_devices: "Tæki",
 		tab_automations: "Sjálfvirkni",
 		tab_settings: "Stillingar",
@@ -10018,7 +10222,7 @@ var e = (e, t) => () => (t || (e((t = { exports: {} }).exports, t), e = null), t
 		action: "Aðgerð",
 		select_action: "Veldu aðgerð…",
 		remove_press: "Fjarlægja hnappaaðgerð",
-		domain: "Svæði",
+		domain: "Lén",
 		service: "Þjónusta",
 		data_json: "Gögn (JSON, valfrjálst)",
 		no_presses: "Engar hnappaaðgerðir enn.",
@@ -21626,14 +21830,21 @@ function Cl(e, t, n) {
 	let r = Math.round((e + t * (n.target_temp_step || .5)) * 100) / 100;
 	return n.min_temp != null && (r = Math.max(n.min_temp, r)), n.max_temp != null && (r = Math.min(n.max_temp, r)), r;
 }
-var wl = (e, t) => e.replace(/\{(\w+)\}/g, (e, n) => String(t[n] ?? `{${n}}`)), Tl = (e, t) => t === "" ? null : e[Number(t)] || null;
-function El(e, t, n) {
+var wl = (e, t) => e.replace(/\{(\w+)\}/g, (e, n) => String(t[n] ?? `{${n}}`));
+function Tl(e, t) {
+	let n = (e) => e.replace(/_/g, " "), r = String(e.type || "trigger").replace(/^remote_button_/, ""), i = t.trigger_types[r] ?? n(r);
+	if (!e.subtype) return i;
+	let a = String(e.subtype), o = /^button_?(\d+)$/.exec(a);
+	return `${i} · ${o ? wl(t.trigger_button, { n: o[1] }) : t.trigger_subtypes[a] ?? n(a)}`;
+}
+var El = (e, t) => t === "" ? null : e[Number(t)] || null;
+function Dl(e, t, n) {
 	if (!e.device) throw Error(n.err_pick_remote);
-	let r = Tl(t, e.up), i = Tl(t, e.down), a = Tl(t, e.stop);
+	let r = El(t, e.up), i = El(t, e.down), a = El(t, e.stop);
 	if ((r || i) && !a) throw Error(n.err_pick_release);
 	let o = [];
 	if (e.presses.forEach((e, r) => {
-		let i = Tl(t, e.trigger), a = e.type === "scene" ? e.entity_id : e.type === "service" ? e.domain || e.service || e.data.trim() : "";
+		let i = El(t, e.trigger), a = e.type === "scene" ? e.entity_id : e.type === "service" ? e.domain || e.service || e.data.trim() : "";
 		if (!i && !e.type && !a) return;
 		let s = { n: r + 1 };
 		if (!i) throw Error(wl(n.err_press_trigger, s));
@@ -21665,7 +21876,7 @@ function El(e, t, n) {
 	let d = {};
 	return u && (d.targets = u), r && (d.up = r), i && (d.down = i), (r || i) && (d.stop = a), o.length && (d.presses = o), d;
 }
-function Dl(e, t) {
+function Ol(e, t) {
 	let n = e.name.trim();
 	if (!n) throw Error(t.err_sched_name);
 	if (!e.days.length) throw Error(t.err_sched_days);
@@ -21683,7 +21894,7 @@ function Dl(e, t) {
 }
 //#endregion
 //#region node_modules/react/cjs/react-jsx-runtime.production.js
-var Ol = /* @__PURE__ */ e(((e) => {
+var kl = /* @__PURE__ */ e(((e) => {
 	var t = Symbol.for("react.transitional.element"), n = Symbol.for("react.fragment");
 	function r(e, n, r) {
 		var i = null;
@@ -21699,20 +21910,20 @@ var Ol = /* @__PURE__ */ e(((e) => {
 	}
 	e.Fragment = n, e.jsx = r, e.jsxs = r;
 })), $ = (/* @__PURE__ */ e(((e, t) => {
-	t.exports = Ol();
-})))(), kl = [
+	t.exports = kl();
+})))(), Al = [
 	"devices",
 	"automations",
 	"settings"
-], Al = 100, jl = 4, Ml = [
+], jl = 100, Ml = 4, Nl = [
 	"auto",
 	"gateway",
 	"ble"
-], Nl = (0, l.createContext)(d.en[0]), Pl = () => (0, l.useContext)(Nl), Fl = (e) => e?.message || String(e), Il = (e) => e.attributes.friendly_name || e.entity_id, Ll = (e, t) => e.name.localeCompare(t.name), Rl = (e, t) => e.entities?.[t.entity_id]?.platform === "plejd" || t.attributes.attribution === "Plejd", zl = (e, t, n = () => !0) => Object.values(e.states).filter((r) => r.entity_id.startsWith(`${t}.`) && Rl(e, r) && n(r)).sort((e, t) => Il(e).localeCompare(Il(t))), Bl = (e, t) => e.devices[t]?.name_by_user || e.devices[t]?.name || t, Vl = (e, t, n) => {
+], Pl = (0, l.createContext)(d.en[0]), Fl = () => (0, l.useContext)(Pl), Il = (e) => e?.message || String(e), Ll = (e) => e.attributes.friendly_name || e.entity_id, Rl = (e, t) => e.name.localeCompare(t.name), zl = (e, t) => e.entities?.[t.entity_id]?.platform === "plejd" || t.attributes.attribution === "Plejd", Bl = (e, t, n = () => !0) => Object.values(e.states).filter((r) => r.entity_id.startsWith(`${t}.`) && zl(e, r) && n(r)).sort((e, t) => Ll(e).localeCompare(Ll(t))), Vl = (e, t) => e.devices[t]?.name_by_user || e.devices[t]?.name || t, Hl = (e, t, n) => {
 	let r = e.entities?.[n.entity_id]?.device_id;
-	return r ? Bl(t, r) : Il(n);
+	return r ? Vl(t, r) : Ll(n);
 };
-function Hl({ hass: e, narrow: t }) {
+function Ul({ hass: e, narrow: t }) {
 	let [n, r] = (0, l.useState)(() => localStorage.getItem("plejd_tab") || "devices"), i = (e) => {
 		r(e), localStorage.setItem("plejd_tab", e);
 	}, [a, o] = (0, l.useState)(() => localStorage.getItem("plejd_lang")), s = (e) => {
@@ -21735,14 +21946,15 @@ function Hl({ hass: e, narrow: t }) {
 			devices: e.devices || {}
 		}
 	};
-	return /* @__PURE__ */ (0, $.jsx)(Nl.Provider, {
+	return /* @__PURE__ */ (0, $.jsx)(Pl.Provider, {
 		value: c,
 		children: /* @__PURE__ */ (0, $.jsxs)("div", {
 			className: `page ${t ? "narrow" : ""}`,
+			lang: c.lang,
 			children: [
 				/* @__PURE__ */ (0, $.jsxs)("header", { children: [/* @__PURE__ */ (0, $.jsx)("h1", { children: "Plejd" }), /* @__PURE__ */ (0, $.jsx)("nav", {
 					className: "tabs",
-					children: kl.map((e) => /* @__PURE__ */ (0, $.jsx)("button", {
+					children: Al.map((e) => /* @__PURE__ */ (0, $.jsx)("button", {
 						className: n === e ? "on" : "",
 						onClick: () => i(e),
 						children: u[e]
@@ -21753,18 +21965,18 @@ function Hl({ hass: e, narrow: t }) {
 					children: [
 						/* @__PURE__ */ (0, $.jsx)("div", {
 							className: "rooms",
-							children: /* @__PURE__ */ (0, $.jsx)(Gl, { ...m })
+							children: /* @__PURE__ */ (0, $.jsx)(Kl, { ...m })
 						}),
-						/* @__PURE__ */ (0, $.jsx)(tu, { ...m }),
-						/* @__PURE__ */ (0, $.jsx)(Zl, { ...m }),
-						/* @__PURE__ */ (0, $.jsx)($l, { ...m }),
 						/* @__PURE__ */ (0, $.jsx)(nu, { ...m }),
-						/* @__PURE__ */ (0, $.jsx)(ru, { ...m })
+						/* @__PURE__ */ (0, $.jsx)(Ql, { ...m }),
+						/* @__PURE__ */ (0, $.jsx)(eu, { ...m }),
+						/* @__PURE__ */ (0, $.jsx)(ru, { ...m }),
+						/* @__PURE__ */ (0, $.jsx)(iu, { ...m })
 					]
 				}),
 				n === "automations" && /* @__PURE__ */ (0, $.jsxs)("div", {
 					className: "grid",
-					children: [/* @__PURE__ */ (0, $.jsx)(au, { ...m }), /* @__PURE__ */ (0, $.jsx)(lu, { ...m })]
+					children: [/* @__PURE__ */ (0, $.jsx)(ou, { ...m }), /* @__PURE__ */ (0, $.jsx)(lu, { ...m })]
 				}),
 				n === "settings" && /* @__PURE__ */ (0, $.jsxs)("div", {
 					className: "grid",
@@ -21781,7 +21993,7 @@ function Hl({ hass: e, narrow: t }) {
 		})
 	});
 }
-function Ul({ title: e, count: t, wide: n, children: r }) {
+function Wl({ title: e, count: t, wide: n, children: r }) {
 	return /* @__PURE__ */ (0, $.jsxs)("section", {
 		className: `card ${n ? "wide" : ""}`,
 		children: [/* @__PURE__ */ (0, $.jsxs)("div", {
@@ -21793,12 +22005,12 @@ function Ul({ title: e, count: t, wide: n, children: r }) {
 		}), r]
 	});
 }
-var Wl = ({ text: e }) => /* @__PURE__ */ (0, $.jsx)("p", {
+var Gl = ({ text: e }) => /* @__PURE__ */ (0, $.jsx)("p", {
 	className: "muted",
 	children: e
 });
-function Gl({ hass: e }) {
-	let t = Pl(), [n, r] = (0, l.useState)(null), [i, a] = (0, l.useState)({}), [o, s] = (0, l.useState)(""), [c, u] = (0, l.useState)(""), [d, f] = (0, l.useState)(0);
+function Kl({ hass: e }) {
+	let t = Fl(), [n, r] = (0, l.useState)(null), [i, a] = (0, l.useState)({}), [o, s] = (0, l.useState)(""), [c, u] = (0, l.useState)(""), [d, f] = (0, l.useState)(0);
 	(0, l.useEffect)(() => {
 		let t = e.connection.subscribeEvents(() => f((e) => e + 1), "plejd_rooms_changed");
 		return () => {
@@ -21810,7 +22022,7 @@ function Gl({ hass: e }) {
 		let t = !1, n = 0, i = 0, o = () => e.callWS({ type: "plejd/rooms" }).then((e) => {
 			t || (r(e.rooms), s(""));
 		}).catch((e) => {
-			t || (s(Fl(e)), n = window.setTimeout(o, 5e3));
+			t || (s(Il(e)), n = window.setTimeout(o, 5e3));
 		}), c = () => {
 			let n = h.current, r = g.current > 0;
 			return e.callWS({ type: "plejd/light_styles/get" }).then((e) => {
@@ -21842,15 +22054,15 @@ function Gl({ hass: e }) {
 			o() && (a((e) => {
 				let t = { ...e };
 				return p.current[n] ? t[n] = p.current[n] : delete t[n], t;
-			}), u(wl(t.lamp_save_failed, { error: Fl(e) })));
+			}), u(wl(t.lamp_save_failed, { error: Il(e) })));
 		}).finally(() => {
 			g.current--;
 		});
-	}, v = zl(e, "light");
-	if (n === null) return /* @__PURE__ */ (0, $.jsx)(Ul, {
+	}, v = Bl(e, "light");
+	if (n === null) return /* @__PURE__ */ (0, $.jsx)(Wl, {
 		title: t.lights,
 		wide: !0,
-		children: /* @__PURE__ */ (0, $.jsx)(Wl, { text: o ? wl(t.waiting, { error: o }) : t.loading })
+		children: /* @__PURE__ */ (0, $.jsx)(Gl, { text: o ? wl(t.waiting, { error: o }) : t.loading })
 	});
 	let y = new Set(n.map((e) => e.entity_id)), b = new Set(n.flatMap((e) => e.lights)), x = v.filter((e) => !y.has(e.entity_id) && !b.has(e.entity_id)).map((e) => e.entity_id), S = [...n.filter((e) => e.lights.length), ...x.length ? [{
 		room_id: "",
@@ -21859,7 +22071,7 @@ function Gl({ hass: e }) {
 		lights: x
 	}] : []];
 	return /* @__PURE__ */ (0, $.jsxs)($.Fragment, { children: [
-		c && /* @__PURE__ */ (0, $.jsx)(Ul, {
+		c && /* @__PURE__ */ (0, $.jsx)(Wl, {
 			title: t.lights,
 			wide: !0,
 			children: /* @__PURE__ */ (0, $.jsx)("p", {
@@ -21867,21 +22079,21 @@ function Gl({ hass: e }) {
 				children: c
 			})
 		}),
-		S.map((t) => /* @__PURE__ */ (0, $.jsx)(Kl, {
+		S.map((t) => /* @__PURE__ */ (0, $.jsx)(ql, {
 			hass: e,
 			room: t,
 			styles: i,
 			setStyle: _
 		}, t.room_id || "other")),
-		!S.length && /* @__PURE__ */ (0, $.jsx)(Ul, {
+		!S.length && /* @__PURE__ */ (0, $.jsx)(Wl, {
 			title: t.lights,
 			wide: !0,
-			children: /* @__PURE__ */ (0, $.jsx)(Wl, { text: t.no_lights })
+			children: /* @__PURE__ */ (0, $.jsx)(Gl, { text: t.no_lights })
 		})
 	] });
 }
-function Kl({ hass: e, room: t, styles: n, setStyle: r }) {
-	let i = Pl(), [a, o] = (0, l.useState)(!1), s = t.lights.map((t) => e.states[t]).filter(Boolean), c = s.filter((e) => e.state === "on").length, u = t.entity_id ? e.states[t.entity_id] : void 0;
+function ql({ hass: e, room: t, styles: n, setStyle: r }) {
+	let i = Fl(), [a, o] = (0, l.useState)(!1), s = t.lights.map((t) => e.states[t]).filter(Boolean), c = s.filter((e) => e.state === "on").length, u = t.entity_id ? e.states[t.entity_id] : void 0;
 	return /* @__PURE__ */ (0, $.jsxs)("section", {
 		className: `card room ${s.length > 3 ? "big" : ""}`,
 		children: [/* @__PURE__ */ (0, $.jsxs)("div", {
@@ -21904,10 +22116,10 @@ function Kl({ hass: e, room: t, styles: n, setStyle: r }) {
 					onClick: () => o(!a),
 					children: "✎"
 				}),
-				u ? /* @__PURE__ */ (0, $.jsx)(ql, {
+				u ? /* @__PURE__ */ (0, $.jsx)(Jl, {
 					hass: e,
 					s: u
-				}) : /* @__PURE__ */ (0, $.jsx)(Jl, {
+				}) : /* @__PURE__ */ (0, $.jsx)(Yl, {
 					hass: e,
 					members: s,
 					name: t.name
@@ -21915,7 +22127,7 @@ function Kl({ hass: e, room: t, styles: n, setStyle: r }) {
 			]
 		}), /* @__PURE__ */ (0, $.jsx)("div", {
 			className: "tiles",
-			children: s.map((t) => /* @__PURE__ */ (0, $.jsx)(Yl, {
+			children: s.map((t) => /* @__PURE__ */ (0, $.jsx)(Xl, {
 				hass: e,
 				s: t,
 				style: n[t.entity_id] ?? "bulb",
@@ -21925,8 +22137,8 @@ function Kl({ hass: e, room: t, styles: n, setStyle: r }) {
 		})]
 	});
 }
-function ql({ hass: e, s: t }) {
-	let n = Pl(), r = Xl(e, t);
+function Jl({ hass: e, s: t }) {
+	let n = Fl(), r = Zl(e, t);
 	return /* @__PURE__ */ (0, $.jsxs)("div", {
 		className: "room-control",
 		children: [r.dimmable && /* @__PURE__ */ (0, $.jsx)("input", {
@@ -21936,21 +22148,21 @@ function ql({ hass: e, s: t }) {
 			value: r.pct,
 			disabled: r.unavailable,
 			className: r.on ? "" : "idle",
-			"aria-label": wl(n.brightness, { name: Il(t) }),
+			"aria-label": wl(n.brightness, { name: Ll(t) }),
 			onChange: (e) => r.slide(Number(e.target.value))
 		}), /* @__PURE__ */ (0, $.jsx)("button", {
 			type: "button",
 			role: "switch",
 			"aria-checked": r.on,
-			"aria-label": wl(r.on ? n.turn_off : n.turn_on, { name: Il(t) }),
+			"aria-label": wl(r.on ? n.turn_off : n.turn_on, { name: Ll(t) }),
 			className: `switch ${r.on ? "on" : ""}`,
 			disabled: r.unavailable,
 			onClick: r.toggle
 		})]
 	});
 }
-function Jl({ hass: e, members: t, name: n }) {
-	let r = Pl(), i = t.some((e) => e.state === "on");
+function Yl({ hass: e, members: t, name: n }) {
+	let r = Fl(), i = t.some((e) => e.state === "on");
 	return /* @__PURE__ */ (0, $.jsx)("button", {
 		type: "button",
 		role: "switch",
@@ -21960,8 +22172,8 @@ function Jl({ hass: e, members: t, name: n }) {
 		onClick: () => e.callService("light", i ? "turn_off" : "turn_on", { entity_id: t.map((e) => e.entity_id) }).catch((e) => console.warn("Plejd panel: failed to switch", n, e))
 	});
 }
-function Yl({ hass: e, s: t, style: n, editing: r, setStyle: i }) {
-	let a = Pl(), o = Xl(e, t);
+function Xl({ hass: e, s: t, style: n, editing: r, setStyle: i }) {
+	let a = Fl(), o = Zl(e, t);
 	return /* @__PURE__ */ (0, $.jsxs)("div", {
 		className: `tile ${o.on ? "lit" : ""} ${o.unavailable ? "off" : ""}`,
 		children: [
@@ -21969,7 +22181,7 @@ function Yl({ hass: e, s: t, style: n, editing: r, setStyle: i }) {
 				className: "lamp",
 				onClick: o.toggle,
 				disabled: o.unavailable,
-				"aria-label": wl(o.on ? a.turn_off : a.turn_on, { name: Il(t) }),
+				"aria-label": wl(o.on ? a.turn_off : a.turn_on, { name: Ll(t) }),
 				children: /* @__PURE__ */ (0, $.jsx)("img", {
 					src: bl(n, o.on ? o.dimmable ? o.pct / 100 : 1 : 0),
 					alt: "",
@@ -21978,8 +22190,8 @@ function Yl({ hass: e, s: t, style: n, editing: r, setStyle: i }) {
 			}),
 			/* @__PURE__ */ (0, $.jsx)("div", {
 				className: "tile-name",
-				title: Il(t),
-				children: Il(t)
+				title: Ll(t),
+				children: Ll(t)
 			}),
 			/* @__PURE__ */ (0, $.jsx)("div", {
 				className: "muted",
@@ -21987,7 +22199,7 @@ function Yl({ hass: e, s: t, style: n, editing: r, setStyle: i }) {
 			}),
 			r ? /* @__PURE__ */ (0, $.jsx)("select", {
 				value: n,
-				"aria-label": wl(a.lamp_type_for, { name: Il(t) }),
+				"aria-label": wl(a.lamp_type_for, { name: Ll(t) }),
 				onChange: (e) => i(e.target.value),
 				children: il.map((e) => /* @__PURE__ */ (0, $.jsx)("option", {
 					value: e,
@@ -22000,14 +22212,14 @@ function Yl({ hass: e, s: t, style: n, editing: r, setStyle: i }) {
 				value: o.pct,
 				disabled: o.unavailable,
 				className: o.on ? "" : "idle",
-				"aria-label": wl(a.brightness, { name: Il(t) }),
+				"aria-label": wl(a.brightness, { name: Ll(t) }),
 				onChange: (e) => o.slide(Number(e.target.value))
 			})
 		]
 	});
 }
-function Xl(e, t) {
-	let n = Pl(), r = t.entity_id, i = t.state === "unavailable", a = t.attributes.brightness, o = t.state === "on", s = a == null ? 100 : Math.round(a / 255 * 100), [c, u] = (0, l.useState)(null), [d, f] = (0, l.useState)(null), p = (0, l.useRef)(0), m = (0, l.useRef)({
+function Zl(e, t) {
+	let n = Fl(), r = t.entity_id, i = t.state === "unavailable", a = t.attributes.brightness, o = t.state === "on", s = a == null ? 100 : Math.round(a / 255 * 100), [c, u] = (0, l.useState)(null), [d, f] = (0, l.useState)(null), p = (0, l.useRef)(0), m = (0, l.useRef)({
 		sending: !1,
 		queued: null,
 		last: 0,
@@ -22053,7 +22265,7 @@ function Xl(e, t) {
 		slide: (e) => {
 			let t = m.current;
 			f(e), clearTimeout(t.timer);
-			let n = Al - (Date.now() - t.last);
+			let n = jl - (Date.now() - t.last);
 			t.pending = e;
 			let r = () => {
 				t.last = Date.now(), t.pending = null, x(e);
@@ -22062,19 +22274,19 @@ function Xl(e, t) {
 		}
 	};
 }
-function Zl({ hass: e }) {
-	let t = Pl(), n = zl(e, "climate");
-	return /* @__PURE__ */ (0, $.jsxs)(Ul, {
+function Ql({ hass: e }) {
+	let t = Fl(), n = Bl(e, "climate");
+	return /* @__PURE__ */ (0, $.jsxs)(Wl, {
 		title: t.climate,
 		count: n.length,
-		children: [n.map((t) => /* @__PURE__ */ (0, $.jsx)(Ql, {
+		children: [n.map((t) => /* @__PURE__ */ (0, $.jsx)($l, {
 			hass: e,
 			s: t
-		}, t.entity_id)), !n.length && /* @__PURE__ */ (0, $.jsx)(Wl, { text: t.no_climate })]
+		}, t.entity_id)), !n.length && /* @__PURE__ */ (0, $.jsx)(Gl, { text: t.no_climate })]
 	});
 }
-function Ql({ hass: e, s: t }) {
-	let n = Pl(), r = t.attributes.temperature, [i, a] = (0, l.useState)(null);
+function $l({ hass: e, s: t }) {
+	let n = Fl(), r = t.attributes.temperature, [i, a] = (0, l.useState)(null);
 	(0, l.useEffect)(() => {
 		i === r && a(null);
 	}, [r, i]);
@@ -22092,7 +22304,7 @@ function Ql({ hass: e, s: t }) {
 		children: [
 			/* @__PURE__ */ (0, $.jsx)("span", {
 				className: "grow",
-				children: Il(t)
+				children: Ll(t)
 			}),
 			/* @__PURE__ */ (0, $.jsx)("button", {
 				className: "btn small",
@@ -22115,19 +22327,19 @@ function Ql({ hass: e, s: t }) {
 		]
 	});
 }
-function $l({ hass: e }) {
-	let t = Pl(), n = zl(e, "cover");
-	return /* @__PURE__ */ (0, $.jsxs)(Ul, {
+function eu({ hass: e }) {
+	let t = Fl(), n = Bl(e, "cover");
+	return /* @__PURE__ */ (0, $.jsxs)(Wl, {
 		title: t.covers,
 		count: n.length,
-		children: [n.map((t) => /* @__PURE__ */ (0, $.jsx)(eu, {
+		children: [n.map((t) => /* @__PURE__ */ (0, $.jsx)(tu, {
 			hass: e,
 			s: t
-		}, t.entity_id)), !n.length && /* @__PURE__ */ (0, $.jsx)(Wl, { text: t.no_covers })]
+		}, t.entity_id)), !n.length && /* @__PURE__ */ (0, $.jsx)(Gl, { text: t.no_covers })]
 	});
 }
-function eu({ hass: e, s: t }) {
-	let n = Pl(), r = t.entity_id, i = t.state === "unavailable", a = Sl(t.attributes.current_position), [o, s] = (0, l.useState)(null), [c, u] = (0, l.useState)(null), d = (0, l.useRef)(0), f = a ?? o, p = !!((t.attributes.supported_features || 0) & jl), m = (t, n, i) => {
+function tu({ hass: e, s: t }) {
+	let n = Fl(), r = t.entity_id, i = t.state === "unavailable", a = Sl(t.attributes.current_position), [o, s] = (0, l.useState)(null), [c, u] = (0, l.useState)(null), d = (0, l.useRef)(0), f = a ?? o, p = !!((t.attributes.supported_features || 0) & Ml), m = (t, n, i) => {
 		let a = ++d.current;
 		e.callService("cover", t, {
 			entity_id: r,
@@ -22148,7 +22360,7 @@ function eu({ hass: e, s: t }) {
 			className: "line",
 			children: [/* @__PURE__ */ (0, $.jsx)("span", {
 				className: "grow",
-				children: Il(t)
+				children: Ll(t)
 			}), /* @__PURE__ */ (0, $.jsx)("span", {
 				className: "count",
 				children: i ? n.state_unavailable : a == null ? {
@@ -22187,7 +22399,7 @@ function eu({ hass: e, s: t }) {
 					max: 100,
 					value: c ?? f ?? 50,
 					disabled: i,
-					"aria-label": wl(n.position, { name: Il(t) }),
+					"aria-label": wl(n.position, { name: Ll(t) }),
 					onChange: (e) => u(Number(e.target.value)),
 					onPointerCancel: () => u(null)
 				})
@@ -22195,11 +22407,11 @@ function eu({ hass: e, s: t }) {
 		})]
 	});
 }
-function tu({ hass: e }) {
-	let t = Pl(), n = zl(e, "scene"), [r, i] = (0, l.useState)(""), a = (n) => {
-		i(""), e.callService("scene", "turn_on", { entity_id: n }).catch((e) => i(wl(t.scene_failed, { error: Fl(e) })));
+function nu({ hass: e }) {
+	let t = Fl(), n = Bl(e, "scene"), [r, i] = (0, l.useState)(""), a = (n) => {
+		i(""), e.callService("scene", "turn_on", { entity_id: n }).catch((e) => i(wl(t.scene_failed, { error: Il(e) })));
 	};
-	return /* @__PURE__ */ (0, $.jsxs)(Ul, {
+	return /* @__PURE__ */ (0, $.jsxs)(Wl, {
 		title: t.scenes,
 		count: n.length,
 		children: [
@@ -22207,14 +22419,14 @@ function tu({ hass: e }) {
 				className: "row line",
 				children: [/* @__PURE__ */ (0, $.jsx)("span", {
 					className: "grow",
-					children: Il(e)
+					children: Ll(e)
 				}), /* @__PURE__ */ (0, $.jsx)("button", {
 					className: "btn",
 					onClick: () => a(e.entity_id),
 					children: t.activate
 				})]
 			}, e.entity_id)),
-			!n.length && /* @__PURE__ */ (0, $.jsx)(Wl, { text: t.no_scenes }),
+			!n.length && /* @__PURE__ */ (0, $.jsx)(Gl, { text: t.no_scenes }),
 			r && /* @__PURE__ */ (0, $.jsx)("p", {
 				className: "error",
 				children: r
@@ -22222,12 +22434,12 @@ function tu({ hass: e }) {
 		]
 	});
 }
-function nu({ hass: e, reg: t }) {
-	let n = Pl(), r = zl(e, "binary_sensor", (e) => e.attributes.device_class === "motion"), i = (t) => {
+function ru({ hass: e, reg: t }) {
+	let n = Fl(), r = Bl(e, "binary_sensor", (e) => e.attributes.device_class === "motion"), i = (t) => {
 		let n = e.entities?.[t.entity_id]?.device_id, r = n && Object.values(e.states).find((t) => t.entity_id.startsWith("sensor.") && t.attributes.device_class === "illuminance" && e.entities?.[t.entity_id]?.device_id === n);
 		return r && !["unavailable", "unknown"].includes(r.state) ? ` · ${r.state} lx` : "";
 	};
-	return /* @__PURE__ */ (0, $.jsxs)(Ul, {
+	return /* @__PURE__ */ (0, $.jsxs)(Wl, {
 		title: n.motion,
 		count: r.length,
 		children: [r.map((r) => /* @__PURE__ */ (0, $.jsxs)("div", {
@@ -22236,23 +22448,23 @@ function nu({ hass: e, reg: t }) {
 				/* @__PURE__ */ (0, $.jsx)("span", { className: `dot ${r.state === "on" ? "on" : ""}` }),
 				/* @__PURE__ */ (0, $.jsx)("span", {
 					className: "grow",
-					children: Vl(e, t, r)
+					children: Hl(e, t, r)
 				}),
 				/* @__PURE__ */ (0, $.jsxs)("span", {
 					className: "count",
 					children: [["unavailable", "unknown"].includes(r.state) ? n.unavailable : r.state === "on" ? n.detected : n.clear, i(r)]
 				})
 			]
-		}, r.entity_id)), !r.length && /* @__PURE__ */ (0, $.jsx)(Wl, { text: n.no_motion })]
+		}, r.entity_id)), !r.length && /* @__PURE__ */ (0, $.jsx)(Gl, { text: n.no_motion })]
 	});
 }
-function ru({ hass: e, reg: t }) {
-	let n = Pl(), r = zl(e, "binary_sensor", (e) => e.attributes.device_class === "problem" && e.state === "on").map((n) => ({
+function iu({ hass: e, reg: t }) {
+	let n = Fl(), r = Bl(e, "binary_sensor", (e) => e.attributes.device_class === "problem" && e.state === "on").map((n) => ({
 		id: n.entity_id,
-		name: Vl(e, t, n),
+		name: Hl(e, t, n),
 		flags: (n.attributes.active_faults || []).map((e) => e.replace(/_/g, " ")).join(", ")
-	})).sort(Ll);
-	return /* @__PURE__ */ (0, $.jsxs)(Ul, {
+	})).sort(Rl);
+	return /* @__PURE__ */ (0, $.jsxs)(Wl, {
 		title: n.health,
 		count: r.length,
 		children: [r.map((e) => /* @__PURE__ */ (0, $.jsxs)("div", {
@@ -22268,21 +22480,21 @@ function ru({ hass: e, reg: t }) {
 					children: e.flags
 				})
 			]
-		}, e.id)), !r.length && /* @__PURE__ */ (0, $.jsx)(Wl, { text: n.all_healthy })]
+		}, e.id)), !r.length && /* @__PURE__ */ (0, $.jsx)(Gl, { text: n.all_healthy })]
 	});
 }
-var iu = {
+var au = {
 	name: "",
 	days: [],
 	time: "07:00",
 	scene: "",
 	fade: "0"
 };
-function au({ hass: e }) {
-	let t = Pl(), [n, r] = (0, l.useState)(null), [i, a] = (0, l.useState)([]), [o, s] = (0, l.useState)(""), [c, u] = (0, l.useState)(iu), [d, f] = (0, l.useState)(!1), [p, m] = (0, l.useState)(""), [h, g] = (0, l.useState)(""), _ = () => {
+function ou({ hass: e }) {
+	let t = Fl(), [n, r] = (0, l.useState)(null), [i, a] = (0, l.useState)([]), [o, s] = (0, l.useState)(""), [c, u] = (0, l.useState)(au), [d, f] = (0, l.useState)(!1), [p, m] = (0, l.useState)(""), [h, g] = (0, l.useState)(""), _ = () => {
 		s(""), e.callWS({ type: "plejd/schedules/list" }).then((e) => {
 			r(e.schedules || []), a(e.scenes || []);
-		}).catch((e) => s(wl(t.schedules_load_failed, { error: Fl(e) })));
+		}).catch((e) => s(wl(t.schedules_load_failed, { error: Il(e) })));
 	};
 	(0, l.useEffect)(_, []);
 	let v = async (n, i) => {
@@ -22291,27 +22503,27 @@ function au({ hass: e }) {
 			let a = await e.callWS(n);
 			r(a.schedules || []), g(a.reload_failed || (i ? t.saved : "")), i?.();
 		} catch (e) {
-			m(Fl(e));
+			m(Il(e));
 		} finally {
 			f(!1);
 		}
 	}, y = () => {
 		let e;
 		try {
-			e = Dl(c, t);
+			e = Ol(c, t);
 		} catch (e) {
-			m(Fl(e)), g("");
+			m(Il(e)), g("");
 			return;
 		}
 		v({
 			type: "plejd/schedules/add",
 			...e
-		}, () => u(iu));
+		}, () => u(au));
 	}, b = (e) => i.find((t) => t.index === e)?.name || wl(t.scene_n, { n: e }), x = (e) => u({
 		...c,
 		...e
 	});
-	return /* @__PURE__ */ (0, $.jsxs)(Ul, {
+	return /* @__PURE__ */ (0, $.jsxs)(Wl, {
 		title: t.schedules,
 		wide: !0,
 		children: [/* @__PURE__ */ (0, $.jsx)("p", {
@@ -22327,7 +22539,7 @@ function au({ hass: e }) {
 				onClick: _,
 				children: t.retry
 			})
-		})] }) : /* @__PURE__ */ (0, $.jsx)(Wl, { text: t.loading }) : /* @__PURE__ */ (0, $.jsxs)($.Fragment, { children: [
+		})] }) : /* @__PURE__ */ (0, $.jsx)(Gl, { text: t.loading }) : /* @__PURE__ */ (0, $.jsxs)($.Fragment, { children: [
 			n.map((e) => /* @__PURE__ */ (0, $.jsxs)("div", {
 				className: "row line",
 				children: [/* @__PURE__ */ (0, $.jsxs)("div", {
@@ -22353,7 +22565,7 @@ function au({ hass: e }) {
 					children: t.delete
 				})]
 			}, e.id)),
-			!n.length && /* @__PURE__ */ (0, $.jsx)(Wl, { text: t.no_schedules }),
+			!n.length && /* @__PURE__ */ (0, $.jsx)(Gl, { text: t.no_schedules }),
 			/* @__PURE__ */ (0, $.jsxs)("div", {
 				className: "form",
 				children: [
@@ -22436,27 +22648,24 @@ function au({ hass: e }) {
 		] })]
 	});
 }
-var ou = {
+var su = {
 	target: "",
 	device: "",
 	up: "",
 	down: "",
 	stop: "",
 	presses: []
-}, su = {
+}, cu = {
 	trigger: "",
 	type: "",
 	entity_id: "",
 	domain: "",
 	service: "",
 	data: ""
-}, cu = (e) => {
-	let t = (e.type || "trigger").replace(/_/g, " ");
-	return e.subtype ? `${t} · ${e.subtype}` : t;
 };
 function lu({ hass: e, reg: t }) {
-	let n = Pl(), [r, i] = (0, l.useState)(null), [a, o] = (0, l.useState)(""), [s, c] = (0, l.useState)({}), [u, d] = (0, l.useState)(ou), [f, p] = (0, l.useState)(!1), [m, h] = (0, l.useState)(""), [g, _] = (0, l.useState)(""), v = () => {
-		o(""), e.callWS({ type: "plejd/dim_bindings/list" }).then((e) => i(e.bindings || [])).catch((e) => o(wl(n.bindings_load_failed, { error: Fl(e) })));
+	let n = Fl(), [r, i] = (0, l.useState)(null), [a, o] = (0, l.useState)(""), [s, c] = (0, l.useState)({}), [u, d] = (0, l.useState)(su), [f, p] = (0, l.useState)(!1), [m, h] = (0, l.useState)(""), [g, _] = (0, l.useState)(""), v = () => {
+		o(""), e.callWS({ type: "plejd/dim_bindings/list" }).then((e) => i(e.bindings || [])).catch((e) => o(wl(n.bindings_load_failed, { error: Il(e) })));
 	};
 	(0, l.useEffect)(v, []);
 	let y = async (t) => {
@@ -22483,7 +22692,7 @@ function lu({ hass: e, reg: t }) {
 				}
 			}));
 		} catch (e) {
-			h(wl(n.triggers_load_failed, { error: Fl(e) }));
+			h(wl(n.triggers_load_failed, { error: Il(e) }));
 		}
 	}, b = async (t, r) => {
 		p(!0), h(""), _("");
@@ -22492,23 +22701,23 @@ function lu({ hass: e, reg: t }) {
 				type: "plejd/dim_bindings/save",
 				bindings: t
 			});
-			i(a.bindings || []), _(n.saved), r && d(ou);
+			i(a.bindings || []), _(n.saved), r && d(su);
 		} catch (e) {
-			h(Fl(e));
+			h(Il(e));
 		} finally {
 			p(!1);
 		}
 	}, x = () => {
 		try {
-			b([...r, El(u, s[u.device]?.triggers || [], n)], !0);
+			b([...r, Dl(u, s[u.device]?.triggers || [], n)], !0);
 		} catch (e) {
-			h(Fl(e)), _("");
+			h(Il(e)), _("");
 		}
 	}, S = (e) => t.areas[e]?.name || e, C = (t) => e.states[t]?.attributes.friendly_name || t, w = (e) => {
 		let n = e.targets || {}, r = [
 			...[].concat(n.entity_id || []).map(C),
 			...[].concat(n.area_id || []).map(S),
-			...[].concat(n.device_id || []).map((e) => Bl(t, e))
+			...[].concat(n.device_id || []).map((e) => Vl(t, e))
 		];
 		return r.length ? r.join(", ") : "—";
 	}, T = (e) => {
@@ -22519,25 +22728,25 @@ function lu({ hass: e, reg: t }) {
 		].filter((t) => e[t]).join(" / ")].filter(Boolean), i = (e.presses || []).length;
 		i && r.push(i === 1 ? n.press_count_one : wl(n.press_count, { n: i }));
 		let a = (e.up || e.down || e.stop || e.presses?.[0]?.trigger)?.device_id;
-		return `${a ? Bl(t, a) : "—"} · ${r.join(", ") || "—"}`;
+		return `${a ? Vl(t, a) : "—"} · ${r.join(", ") || "—"}`;
 	}, E = Object.values(e.states).filter((e) => e.entity_id.startsWith("light.")).map((e) => ({
 		id: e.entity_id,
-		name: Il(e)
-	})).sort(Ll), D = Object.values(t.areas).map((e) => ({
+		name: Ll(e)
+	})).sort(Rl), D = Object.values(t.areas).map((e) => ({
 		id: e.area_id,
 		name: e.name || e.area_id
-	})).sort(Ll), O = Object.values(t.devices).map((e) => ({
+	})).sort(Rl), O = Object.values(t.devices).map((e) => ({
 		id: e.id,
 		name: e.name_by_user || e.name
-	})).filter((e) => e.name).sort(Ll), k = Object.values(e.states).filter((e) => e.entity_id.startsWith("scene.")).map((e) => ({
+	})).filter((e) => e.name).sort(Rl), k = Object.values(e.states).filter((e) => e.entity_id.startsWith("scene.")).map((e) => ({
 		id: e.entity_id,
-		name: Il(e)
-	})).sort(Ll), A = s[u.device], j = A?.kind || "remote", ee = /* @__PURE__ */ (0, $.jsxs)($.Fragment, { children: [/* @__PURE__ */ (0, $.jsx)("option", {
+		name: Ll(e)
+	})).sort(Rl), A = s[u.device], j = A?.kind || "remote", ee = /* @__PURE__ */ (0, $.jsxs)($.Fragment, { children: [/* @__PURE__ */ (0, $.jsx)("option", {
 		value: "",
 		children: n.none_opt
 	}), (A?.triggers || []).map((e, t) => /* @__PURE__ */ (0, $.jsx)("option", {
 		value: t,
-		children: cu(e)
+		children: Tl(e, n)
 	}, t))] }), M = {
 		toggle: n.press_toggle,
 		on: n.press_on,
@@ -22551,7 +22760,7 @@ function lu({ hass: e, reg: t }) {
 			...t
 		} : n)
 	});
-	return /* @__PURE__ */ (0, $.jsxs)(Ul, {
+	return /* @__PURE__ */ (0, $.jsxs)(Wl, {
 		title: n.bindings,
 		wide: !0,
 		children: [/* @__PURE__ */ (0, $.jsx)("p", {
@@ -22567,7 +22776,7 @@ function lu({ hass: e, reg: t }) {
 				onClick: v,
 				children: n.retry
 			})
-		})] }) : /* @__PURE__ */ (0, $.jsx)(Wl, { text: n.loading }) : /* @__PURE__ */ (0, $.jsxs)($.Fragment, { children: [
+		})] }) : /* @__PURE__ */ (0, $.jsx)(Gl, { text: n.loading }) : /* @__PURE__ */ (0, $.jsxs)($.Fragment, { children: [
 			r.map((e) => /* @__PURE__ */ (0, $.jsxs)("div", {
 				className: "row line",
 				children: [/* @__PURE__ */ (0, $.jsxs)("div", {
@@ -22583,7 +22792,7 @@ function lu({ hass: e, reg: t }) {
 					children: n.delete
 				})]
 			}, e.id)),
-			!r.length && /* @__PURE__ */ (0, $.jsx)(Wl, { text: n.no_bindings }),
+			!r.length && /* @__PURE__ */ (0, $.jsx)(Gl, { text: n.no_bindings }),
 			/* @__PURE__ */ (0, $.jsxs)("div", {
 				className: "form",
 				children: [
@@ -22691,7 +22900,7 @@ function lu({ hass: e, reg: t }) {
 								className: "btn",
 								onClick: () => d({
 									...u,
-									presses: [...u.presses, su]
+									presses: [...u.presses, cu]
 								}),
 								children: n.add_press
 							})]
@@ -22805,12 +23014,12 @@ function lu({ hass: e, reg: t }) {
 	});
 }
 function uu({ hass: e }) {
-	let t = Pl(), [n, r] = (0, l.useState)(null), [i, a] = (0, l.useState)(null), [o, s] = (0, l.useState)(""), [c, u] = (0, l.useState)(!1), [d, f] = (0, l.useState)(""), [p, m] = (0, l.useState)(""), h = () => {
+	let t = Fl(), [n, r] = (0, l.useState)(null), [i, a] = (0, l.useState)(null), [o, s] = (0, l.useState)(""), [c, u] = (0, l.useState)(!1), [d, f] = (0, l.useState)(""), [p, m] = (0, l.useState)(""), h = () => {
 		s(""), e.callWS({ type: "plejd/settings/get" }).then((e) => {
 			r(e), a(e);
-		}).catch((e) => s(wl(t.settings_load_failed, { error: Fl(e) })));
+		}).catch((e) => s(wl(t.settings_load_failed, { error: Il(e) })));
 	};
-	if ((0, l.useEffect)(h, []), !i || !n) return /* @__PURE__ */ (0, $.jsx)(Ul, {
+	if ((0, l.useEffect)(h, []), !i || !n) return /* @__PURE__ */ (0, $.jsx)(Wl, {
 		title: t.settings,
 		children: o ? /* @__PURE__ */ (0, $.jsxs)($.Fragment, { children: [/* @__PURE__ */ (0, $.jsx)("p", {
 			className: "error",
@@ -22822,7 +23031,7 @@ function uu({ hass: e }) {
 				onClick: h,
 				children: t.retry
 			})
-		})] }) : /* @__PURE__ */ (0, $.jsx)(Wl, { text: t.loading })
+		})] }) : /* @__PURE__ */ (0, $.jsx)(Gl, { text: t.loading })
 	});
 	let g = (e) => {
 		a({
@@ -22841,12 +23050,12 @@ function uu({ hass: e }) {
 			});
 			m(s.reload_failed || t.saved), h();
 		} catch (e) {
-			f(Fl(e));
+			f(Il(e));
 		} finally {
 			u(!1);
 		}
-	}, y = Object.values(e.states).filter((e) => e.entity_id.startsWith("light.")).sort((e, t) => Il(e).localeCompare(Il(t))), b = (e, t) => g({ holiday_lights: t ? [...i.holiday_lights, e] : i.holiday_lights.filter((t) => t !== e) });
-	return /* @__PURE__ */ (0, $.jsxs)(Ul, {
+	}, y = Object.values(e.states).filter((e) => e.entity_id.startsWith("light.")).sort((e, t) => Ll(e).localeCompare(Ll(t))), b = (e, t) => g({ holiday_lights: t ? [...i.holiday_lights, e] : i.holiday_lights.filter((t) => t !== e) });
+	return /* @__PURE__ */ (0, $.jsxs)(Wl, {
 		title: t.settings,
 		children: [
 			i.has_gateway && /* @__PURE__ */ (0, $.jsxs)($.Fragment, { children: [
@@ -22856,7 +23065,7 @@ function uu({ hass: e }) {
 					children: [/* @__PURE__ */ (0, $.jsx)("span", { children: t.send_via }), /* @__PURE__ */ (0, $.jsx)("select", {
 						value: i.transport,
 						onChange: (e) => g({ transport: e.target.value }),
-						children: Ml.map((e) => /* @__PURE__ */ (0, $.jsx)("option", {
+						children: Nl.map((e) => /* @__PURE__ */ (0, $.jsx)("option", {
 							value: e,
 							children: t[`transport_${e}`]
 						}, e))
@@ -22898,7 +23107,7 @@ function uu({ hass: e }) {
 					type: "checkbox",
 					checked: i.holiday_lights.includes(e.entity_id),
 					onChange: (t) => b(e.entity_id, t.target.checked)
-				}), Il(e)] }, e.entity_id)), !y.length && /* @__PURE__ */ (0, $.jsx)(Wl, { text: t.no_lights })]
+				}), Ll(e)] }, e.entity_id)), !y.length && /* @__PURE__ */ (0, $.jsx)(Gl, { text: t.no_lights })]
 			}),
 			d ? /* @__PURE__ */ (0, $.jsx)("p", {
 				className: "error",
@@ -22920,8 +23129,8 @@ function uu({ hass: e }) {
 	});
 }
 function du({ hass: e }) {
-	let t = Pl(), [n, r] = (0, l.useState)(null), [i, a] = (0, l.useState)(null), [o, s] = (0, l.useState)(""), [c, u] = (0, l.useState)(""), [d, f] = (0, l.useState)(""), [p, m] = (0, l.useState)(!1), [h, g] = (0, l.useState)(""), [_, v] = (0, l.useState)("");
-	return /* @__PURE__ */ (0, $.jsxs)(Ul, {
+	let t = Fl(), [n, r] = (0, l.useState)(null), [i, a] = (0, l.useState)(null), [o, s] = (0, l.useState)(""), [c, u] = (0, l.useState)(""), [d, f] = (0, l.useState)(""), [p, m] = (0, l.useState)(!1), [h, g] = (0, l.useState)(""), [_, v] = (0, l.useState)("");
+	return /* @__PURE__ */ (0, $.jsxs)(Wl, {
 		title: t.add_device,
 		children: [
 			/* @__PURE__ */ (0, $.jsx)("p", {
@@ -23003,7 +23212,7 @@ function du({ hass: e }) {
 					className: `btn ${i ? "ghost" : ""}`,
 					disabled: p,
 					onClick: () => {
-						g(""), v(""), a(null), e.callWS({ type: "plejd/devices/scan" }).then(r).catch((e) => g(Fl(e)));
+						g(""), v(""), a(null), e.callWS({ type: "plejd/devices/scan" }).then(r).catch((e) => g(Il(e)));
 					},
 					children: n ? t.scan_again : t.scan
 				}), i && /* @__PURE__ */ (0, $.jsx)("button", {
@@ -23024,7 +23233,7 @@ function du({ hass: e }) {
 										...d ? { room_category: d } : {}
 									}), v(wl(t.device_added, { name: o.trim() })), a(null), s(""), u(""), f(""), r(null);
 								} catch (e) {
-									g(wl(t.add_failed, { error: Fl(e) }));
+									g(wl(t.add_failed, { error: Il(e) }));
 								} finally {
 									m(!1);
 								}
@@ -23038,8 +23247,8 @@ function du({ hass: e }) {
 	});
 }
 function fu({ lang: e, setLang: t }) {
-	let n = Pl();
-	return /* @__PURE__ */ (0, $.jsx)(Ul, {
+	let n = Fl();
+	return /* @__PURE__ */ (0, $.jsx)(Wl, {
 		title: n.language,
 		children: /* @__PURE__ */ (0, $.jsxs)("label", {
 			className: "f",
@@ -23082,7 +23291,7 @@ var pu = ":host{--pl-bg:var(--primary-background-color,#f4f6f9);--pl-card:var(--
 		this.root?.unmount(), this.root = void 0;
 	}
 	render() {
-		this.root && this._hass && this.root.render(/* @__PURE__ */ (0, $.jsx)(Hl, {
+		this.root && this._hass && this.root.render(/* @__PURE__ */ (0, $.jsx)(Ul, {
 			hass: this._hass,
 			narrow: this._narrow
 		}));

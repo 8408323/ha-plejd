@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { LANGS } from "../frontend/src/i18n.ts";
-import { buildBinding, buildSchedule, clampPosition, fmt, stepTemperature } from "../frontend/src/logic.ts";
+import { buildBinding, buildSchedule, clampPosition, fmt, stepTemperature, triggerLabel } from "../frontend/src/logic.ts";
 
 const en = LANGS.en[0];
 
@@ -99,4 +99,12 @@ test("every language has every string, with the same placeholders", () => {
 test("fmt fills placeholders and leaves unknown ones visible", () => {
   assert.equal(fmt("{on} of {total} on", { on: 2, total: 5 }), "2 of 5 on");
   assert.equal(fmt("Hi {who}", {}), "Hi {who}");
+});
+
+test("trigger labels are translated where known and fall back to the raw id", () => {
+  const sv = LANGS.sv[0];
+  assert.equal(triggerLabel({ type: "remote_button_short_press", subtype: "button_2" }, sv), "Kort tryck · Knapp 2");
+  assert.equal(triggerLabel({ type: "press", subtype: "turn_on" }, sv), "Tryck · På");
+  assert.equal(triggerLabel({ type: "release" }, en), "Release");
+  assert.equal(triggerLabel({ type: "vendor_thing", subtype: "knob_cw" }, sv), "vendor thing · knob cw");
 });

@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { LANGS, T, pick } from "./i18n";
 import { DEFAULT_STYLE, LAMP_STYLES, LampStyle, lampImage } from "./lamps";
-import { BindingForm, PRESS_ACTIONS, PressRow, Trigger, buildBinding, buildSchedule, clampPosition, fmt, stepTemperature } from "./logic";
+import { BindingForm, PRESS_ACTIONS, PressRow, Trigger, buildBinding, buildSchedule, clampPosition, fmt, stepTemperature, triggerLabel } from "./logic";
 
 // Home Assistant's panel host sets `hass` (states, entity/device/area registries, callWS/callService).
 type St = { entity_id: string; state: string; attributes: Record<string, any> };
@@ -52,7 +52,7 @@ export default function App({ hass, narrow }: { hass: any; narrow: boolean }) {
   const ctx = { hass, reg: fetched ?? { areas: hass.areas || {}, devices: hass.devices || {} } };
   return (
     <TCtx.Provider value={t}>
-    <div className={`page ${narrow ? "narrow" : ""}`}>
+    <div className={`page ${narrow ? "narrow" : ""}`} lang={t.lang}>
       <header>
         <h1>Plejd</h1>
         <nav className="tabs">
@@ -581,10 +581,6 @@ function Schedules({ hass }: Ctx) {
 type DeviceTriggers = { triggers: Trigger[]; kind: string };
 const EMPTY_BINDING: BindingForm = { target: "", device: "", up: "", down: "", stop: "", presses: [] };
 const EMPTY_PRESS: PressRow = { trigger: "", type: "", entity_id: "", domain: "", service: "", data: "" };
-const triggerLabel = (t: Trigger) => {
-  const type = (t.type || "trigger").replace(/_/g, " ");
-  return t.subtype ? `${type} · ${t.subtype}` : type;
-};
 
 function Bindings({ hass, reg }: RegCtx) {
   const t = useT();
@@ -666,7 +662,7 @@ function Bindings({ hass, reg }: RegCtx) {
   const dev = triggers[form.device];
   const kind = dev?.kind || "remote";
   const triggerOptions = (
-    <><option value="">{t.none_opt}</option>{(dev?.triggers || []).map((tr, i) => <option key={i} value={i}>{triggerLabel(tr)}</option>)}</>
+    <><option value="">{t.none_opt}</option>{(dev?.triggers || []).map((tr, i) => <option key={i} value={i}>{triggerLabel(tr, t)}</option>)}</>
   );
   const pressLabels: Record<string, string> = { toggle: t.press_toggle, on: t.press_on, off: t.press_off, scene: t.press_scene, service: t.press_service };
   const setPress = (i: number, patch: Partial<PressRow>) =>
