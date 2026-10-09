@@ -617,6 +617,25 @@ async def test_settings_set_persists_holiday_transport_and_area_sync_then_reload
     assert hass.config_entries.reloaded == "e1"
 
 
+async def test_settings_set_forgets_synced_areas_when_area_sync_is_turned_on():
+    entry = _entry(options={})
+    hass = _hass(entry)
+    key = ("store", "plejd.area_sync.e1")
+    hass.data[key] = {"DEV": "r1:Garage"}
+    await schedule_ws.ws_settings_set(hass, _Conn(), {"id": 6, "sync_areas": True})
+    assert key not in hass.data
+    assert entry.options["sync_areas"] is True
+
+
+async def test_settings_set_keeps_synced_areas_when_area_sync_stays_on():
+    entry = _entry(options={"sync_areas": True})
+    hass = _hass(entry)
+    key = ("store", "plejd.area_sync.e1")
+    hass.data[key] = {"DEV": "r1:Garage"}
+    await schedule_ws.ws_settings_set(hass, _Conn(), {"id": 7, "sync_areas": True})
+    assert hass.data[key] == {"DEV": "r1:Garage"}
+
+
 async def test_settings_set_forces_auto_transport_without_gateway():
     entry = _entry(options={})
     conn = _Conn()

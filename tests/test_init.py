@@ -1569,8 +1569,10 @@ async def test_setup_syncs_areas_only_when_enabled(monkeypatch):
     assert calls == []
 
     entry.options = {"sync_areas": True}
-    await async_setup_entry(_hass(), entry)
+    hass = _hass()
+    await async_setup_entry(hass, entry)
     assert calls == ["e1"]
+    assert "area_registry_updated" in [e for e, _ in hass.bus.listeners]
 
 
 async def test_setup_survives_area_sync_failure(monkeypatch):

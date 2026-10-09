@@ -520,6 +520,7 @@ except ImportError:
         return getattr(hass, "area_registry", None)
 
     _ar.async_get = _ar_async_get  # type: ignore[attr-defined]
+    _ar.EVENT_AREA_REGISTRY_UPDATED = "area_registry_updated"  # type: ignore[attr-defined]
     sys.modules.setdefault("homeassistant.helpers.area_registry", _ar)
 
     _er = types.ModuleType("homeassistant.helpers.entity_registry")
@@ -597,6 +598,9 @@ except ImportError:
 
         async def async_save(self, data):
             self._hass.data[self._key] = data
+
+        async def async_remove(self):
+            self._hass.data.pop(self._key, None)
 
     _storage.Store = _Store  # type: ignore[attr-defined]
     sys.modules.setdefault("homeassistant.helpers.storage", _storage)

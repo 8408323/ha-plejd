@@ -5,7 +5,13 @@ from __future__ import annotations
 import types
 
 from plejd import area_sync
-from plejd.area_sync import async_sync_areas, get_device_rooms, match_area
+from plejd.area_sync import (
+    async_listen_area_changes,
+    async_reset_areas,
+    async_sync_areas,
+    get_device_rooms,
+    match_area,
+)
 
 
 def _area(area_id, name, aliases=()):
@@ -30,9 +36,19 @@ def _device(device_id, plejd_id, area_id):
     return types.SimpleNamespace(id=device_id, name=plejd_id, identifiers={("plejd", plejd_id)}, area_id=area_id)
 
 
+class _Bus:
+    def __init__(self):
+        self.listeners = []
+
+    def async_listen(self, event, handler):
+        self.listeners.append((event, handler))
+        return lambda: None
+
+
 def _hass(devices):
     return types.SimpleNamespace(
         data={},
+        bus=_Bus(),
         device_registry=_Devices(devices),
         area_registry=types.SimpleNamespace(async_list_areas=lambda: AREAS),
     )
@@ -124,3 +140,64 @@ async def test_renamed_plejd_room_is_evaluated_again():
     renamed = {**ENTRY_DATA, "rooms": [{"room_id": "r-ovrigt", "name": "Hall"}]}
     await async_sync_areas(hass, _entry(renamed))
     assert hass.device_registry.devices["d1"].area_id == "hall"
+
+
+def test_match_area_prefers_an_exact_name_over_another_areas_alias():
+    areas = [_area("pantry", "Pantry", aliases=["Kitchen"]), _area("kitchen", "Kitchen")]
+    assert match_area("Kitchen", areas).id == "kitchen"
+
+
+def test_device_rooms_does_not_fall_back_to_a_later_output():
+    data = {
+        "devices": [
+            {"device_id": "DUO", "output_index": 0, "room_id": None},
+            {"device_id": "DUO", "output_index": 1, "room_id": "r-garage"},
+        ]
+    }
+    assert get_device_rooms(data) == {}
+
+
+async def test_room_without_lights_resolves_through_the_full_room_name_catalog():
+    hass = _hass([_device("d1", "PLUG", "vardagsrum")])
+    data = {
+        "devices": [{"device_id": "PLUG", "output_index": 0, "room_id": "r-g"}],
+        "rooms": [],
+        "room_names": {"r-g": "Garage"},
+    }
+    await async_sync_areas(hass, _entry(data))
+    assert hass.device_registry.devices["d1"].area_id == "garage"
+
+
+async def test_reset_makes_the_next_sync_align_a_hand_picked_area_again():
+    hass = _hass([_device("d1", "TEKNIK", "garage")])
+    await async_sync_areas(hass, _entry())
+    hass.device_registry.devices["d1"].area_id = "hall"
+    await async_reset_areas(hass, _entry())
+    await async_sync_areas(hass, _entry())
+    assert hass.device_registry.devices["d1"].area_id == "garage"
+
+
+async def test_area_registry_change_re_runs_the_sync():
+    hass = _hass([_device("d1", "ODD", "kok")])
+    entry = _entry()
+    async_listen_area_changes(hass, entry)
+    [(event, handler)] = hass.bus.listeners
+    AREAS.append(_area("ovrigt", "Övrigt"))
+    try:
+        await handler(types.SimpleNamespace(data={}))
+    finally:
+        AREAS.pop()
+    assert event == "area_registry_updated"
+    assert hass.device_registry.devices["d1"].area_id == "ovrigt"
+
+
+async def test_area_change_handler_swallows_sync_errors(monkeypatch):
+    hass = _hass([])
+
+    async def _boom(hass, entry):
+        raise RuntimeError("registry gone")
+
+    monkeypatch.setattr(area_sync, "async_sync_areas", _boom)
+    async_listen_area_changes(hass, _entry())
+    [(_, handler)] = hass.bus.listeners
+    await handler(types.SimpleNamespace(data={}))  # must not raise

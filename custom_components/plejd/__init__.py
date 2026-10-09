@@ -386,6 +386,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             await area_sync.async_sync_areas(hass, entry)
         except Exception:  # noqa: BLE001 - optional; a registry/storage error must not fail setup
             _LOGGER.warning("Plejd: could not sync device areas with Plejd rooms", exc_info=True)
+        entry.async_on_unload(area_sync.async_listen_area_changes(hass, entry))
     # Mirror HA device renames back to the Plejd app (cloud title update).
     entry.async_on_unload(
         hass.bus.async_listen(
