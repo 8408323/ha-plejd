@@ -22,6 +22,8 @@ from .schedule_ws import DATA_ENTRY
 # Mirrors the lamp models in frontend/src/lamps.ts.
 LIGHT_STYLES = ("bulb", "pendant", "spot", "ceiling", "strip", "table", "floor", "wall")
 
+EVENT_ROOMS_CHANGED = f"{DOMAIN}_rooms_changed"
+
 _STORE_KEY = f"{DOMAIN}.light_styles"
 _DATA_STYLES_LOCK = f"{DOMAIN}_light_styles_lock"
 

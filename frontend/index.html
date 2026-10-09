@@ -50,7 +50,7 @@ const ws = {
   // ?stylesfail=N: the first N lamp-style reads fail (the lights must still show, and the styles arrive on retry)
   "plejd/light_styles/get": () => { if (stylesFail-- > 0) throw new Error("storage error"); return { styles }; },
   // ?setfail: saving a lamp type fails (the tile must go back to the stored type)
-  "plejd/light_styles/set": (m) => location.search.includes("setfail") ? Promise.reject(new Error("storage write failed")) : (m.style ? styles[m.entity_id] = m.style : delete styles[m.entity_id], { styles }),
+  "plejd/light_styles/set": (m) => location.search.includes("setfail") ? new Promise((_, rej) => setTimeout(() => rej(new Error("storage write failed")), 300)) : (m.style ? styles[m.entity_id] = m.style : delete styles[m.entity_id], { styles }),
   "plejd/schedules/list": () => ({ schedules, scenes: [{ index: 1, name: "Evening" }] }),
   "plejd/schedules/add": (m) => (schedules = [...schedules, { ...m, id: schedules.length, time: m.time + ":00" }], { schedules }),
   "plejd/schedules/delete": (m) => (schedules = schedules.filter((s) => s.id !== m.schedule_id), { schedules }),
@@ -70,8 +70,11 @@ const hass = {
   areas: { living: { area_id: "living", name: "Living room" } },
   // window.calls counts calls per type, for console checks
   callWS: async (m) => { console.log("ws", m); (window.calls ??= {})[m.type] = (window.calls[m.type] || 0) + 1; return ws[m.type](m); },
+  // window.fireEvent("plejd_rooms_changed") plays an event to the panel's subscriptions
+  connection: { subscribeEvents: async (cb, type) => { (window.subs ??= {})[type] = cb; return () => delete window.subs[type]; } },
   callService: async (...a) => console.log("service", ...a),
 };
 p.narrow = innerWidth < 600;
+window.fireEvent = (type) => window.subs?.[type]?.({ event_type: type });
 p.hass = window.mockHass = hass;
 </script></body></html>

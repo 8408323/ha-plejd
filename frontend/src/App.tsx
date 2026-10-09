@@ -90,6 +90,15 @@ function Lights({ hass }: Ctx) {
   const [styles, setStyles] = useState<Record<string, LampStyle>>({});
   const [error, setError] = useState("");
   const [saveError, setSaveError] = useState("");
+  // Bumped by plejd_rooms_changed (fired on every Plejd entry setup: room renames/moves, site syncs).
+  const [roomsVersion, setRoomsVersion] = useState(0);
+  useEffect(() => {
+    const sub = hass.connection.subscribeEvents(() => setRoomsVersion((v) => v + 1), "plejd_rooms_changed");
+    return () => { sub.then((unsub: () => void) => unsub()).catch(() => {}); };
+  }, []);
+  // The server's last confirmed styles, and a per-light counter so only the newest save's failure rolls back.
+  const confirmed = useRef<Record<string, LampStyle>>({});
+  const saveSeq = useRef<Record<string, number>>({});
   // Plejd may still be starting or reloading (the panel registers before its commands do): keep
   // retrying instead of treating a failure as "no rooms", which would lump every light together.
   // Reloaded whenever HA's entity registry changes (hass.entities is replaced only then), so a
@@ -103,7 +112,7 @@ function Lights({ hass }: Ctx) {
       .catch((e: any) => { if (!cancelled) { setError(errMsg(e)); timer = window.setTimeout(load, 5000); } });
     // Lamp styles are cosmetic and load on their own: until they do, every lamp keeps the default look.
     const loadStyles = () => hass.callWS({ type: "plejd/light_styles/get" })
-      .then((r: any) => { if (!cancelled) setStyles(r.styles || {}); })
+      .then((r: any) => { if (!cancelled) { confirmed.current = r.styles || {}; setStyles(confirmed.current); } })
       .catch((e: any) => {
         if (cancelled) return;
         console.warn("Plejd panel: could not load lamp types, retrying", e);
@@ -112,17 +121,24 @@ function Lights({ hass }: Ctx) {
     load();
     loadStyles();
     return () => { cancelled = true; clearTimeout(timer); clearTimeout(styleTimer); };
-  }, [hass.entities]);
+  }, [hass.entities, roomsVersion]);
   const setStyle = (entity_id: string, style: LampStyle) => {
-    const previous = styles[entity_id];
+    const seq = (saveSeq.current[entity_id] = (saveSeq.current[entity_id] || 0) + 1);
+    const latest = () => saveSeq.current[entity_id] === seq;
     setStyles((cur) => ({ ...cur, [entity_id]: style }));
     hass.callWS({ type: "plejd/light_styles/set", entity_id, style })
-      .then((r: any) => { setStyles(r.styles); setSaveError(""); })
+      .then((r: any) => {
+        confirmed.current = r.styles;
+        // An older save finishing after a newer pick must not overwrite that pick on screen.
+        setStyles((cur) => (latest() ? r.styles : { ...r.styles, [entity_id]: cur[entity_id] }));
+        setSaveError("");
+      })
       .catch((e: any) => {
-        // Not saved: put the lamp back to what is actually stored.
+        if (!latest()) return; // a newer pick is in flight; it decides what this lamp shows
+        // Not saved: put the lamp back to what the server last confirmed.
         setStyles((cur) => {
           const next = { ...cur };
-          if (previous) next[entity_id] = previous;
+          if (confirmed.current[entity_id]) next[entity_id] = confirmed.current[entity_id];
           else delete next[entity_id];
           return next;
         });

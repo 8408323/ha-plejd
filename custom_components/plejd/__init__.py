@@ -417,6 +417,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         remote_profile_ws.async_register(hass)
         room_ws.async_register(hass)
         hass.data[_WS_REGISTERED] = True
+    # Room renames/moves and site syncs all reload the entry without touching entity ids; tell an
+    # open dashboard to fetch the rooms again.
+    hass.bus.async_fire(room_ws.EVENT_ROOMS_CHANGED, {})
     return True
 
 
