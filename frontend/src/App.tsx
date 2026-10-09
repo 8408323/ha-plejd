@@ -89,9 +89,15 @@ function Lights({ hass }: Ctx) {
   const [rooms, setRooms] = useState<Room[] | null>(null);
   const [styles, setStyles] = useState<Record<string, LampStyle>>({});
   const [error, setError] = useState("");
+  // Plejd may still be starting or reloading (the panel registers before its commands do): keep
+  // retrying instead of treating a failure as "no rooms", which would lump every light together.
   useEffect(() => {
-    hass.callWS({ type: "plejd/rooms" }).then((r: any) => setRooms(r.rooms)).catch((e: any) => { setRooms([]); setError(errMsg(e)); });
-    hass.callWS({ type: "plejd/light_styles/get" }).then((r: any) => setStyles(r.styles || {})).catch(() => {});
+    let timer = 0;
+    const load = () => Promise.all([hass.callWS({ type: "plejd/rooms" }), hass.callWS({ type: "plejd/light_styles/get" })])
+      .then(([r, st]: any[]) => { setRooms(r.rooms); setStyles(st.styles || {}); setError(""); })
+      .catch((e: any) => { setError(errMsg(e)); timer = window.setTimeout(load, 5000); });
+    load();
+    return () => clearTimeout(timer);
   }, []);
   const setStyle = (entity_id: string, style: LampStyle) => {
     setStyles((cur) => ({ ...cur, [entity_id]: style }));
@@ -100,7 +106,7 @@ function Lights({ hass }: Ctx) {
   };
 
   const lights = plejdStates(hass, "light");
-  if (rooms === null) return <Card title="Lights" wide><Empty text="Loading…" /></Card>;
+  if (rooms === null) return <Card title="Lights" wide><Empty text={error ? `Waiting for Plejd… (${error})` : "Loading…"} /></Card>;
   const roomLights = new Set(rooms.map((r) => r.entity_id));
   const grouped = new Set(rooms.flatMap((r) => r.lights));
   const others = lights.filter((s) => !roomLights.has(s.entity_id) && !grouped.has(s.entity_id)).map((s) => s.entity_id);

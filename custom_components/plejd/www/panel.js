@@ -4895,7 +4895,7 @@ var e = (e, t) => () => (t || (e((t = { exports: {} }).exports, t), e = null), t
 			df(e, e.return, t);
 		}
 	}
-	function $(e, t, n) {
+	function Tl(e, t, n) {
 		try {
 			var r = e.stateNode;
 			ip(r, e.type, n, t), r[U] = t;
@@ -4903,13 +4903,13 @@ var e = (e, t) => () => (t || (e((t = { exports: {} }).exports, t), e = null), t
 			df(e, e.return, t);
 		}
 	}
-	function Tl(e) {
+	function El(e) {
 		return e.tag === 5 || e.tag === 3 || e.tag === 26 || e.tag === 27 && Sp(e.type) || e.tag === 4;
 	}
-	function El(e) {
+	function $(e) {
 		a: for (;;) {
 			for (; e.sibling === null;) {
-				if (e.return === null || Tl(e.return)) return null;
+				if (e.return === null || El(e.return)) return null;
 				e = e.return;
 			}
 			for (e.sibling.return = e.return, e = e.sibling; e.tag !== 5 && e.tag !== 6 && e.tag !== 18;) {
@@ -5512,11 +5512,11 @@ var e = (e, t) => () => (t || (e((t = { exports: {} }).exports, t), e = null), t
 								}
 							} else Yl || Km(a, e.type, e.stateNode);
 						} else e.stateNode = Bm(a, n, e.memoizedProps);
-					} else i === n ? n === null && e.stateNode !== null && $(e, e.memoizedProps, r.memoizedProps) : (i === null ? (t = r.stateNode, t === null || Xl || t.parentNode.removeChild(t)) : i.count--, n === null ? Yl || Km(a, e.type, e.stateNode) : Bm(a, n, e.memoizedProps));
+					} else i === n ? n === null && e.stateNode !== null && Tl(e, e.memoizedProps, r.memoizedProps) : (i === null ? (t = r.stateNode, t === null || Xl || t.parentNode.removeChild(t)) : i.count--, n === null ? Yl || Km(a, e.type, e.stateNode) : Bm(a, n, e.memoizedProps));
 				}
 				break;
 			case 27:
-				bu(t, e, n), Cu(e), i & 512 && (Xl || r === null || vl(r, r.return)), r !== null && i & 4 && $(e, e.memoizedProps, r.memoizedProps);
+				bu(t, e, n), Cu(e), i & 512 && (Xl || r === null || vl(r, r.return)), r !== null && i & 4 && Tl(e, e.memoizedProps, r.memoizedProps);
 				break;
 			case 5:
 				if (a = Zl, Zl = !1, bu(t, e, n), Zl = a, Cu(e), i & 512 && (Xl || r === null || vl(r, r.return)), e.flags & 32) {
@@ -5527,7 +5527,7 @@ var e = (e, t) => () => (t || (e((t = { exports: {} }).exports, t), e = null), t
 						df(e, e.return, t);
 					}
 				}
-				i & 4 && e.stateNode != null && (t = e.memoizedProps, $(e, t, r === null ? t : r.memoizedProps)), i & 1024 && (Ql = !0);
+				i & 4 && e.stateNode != null && (t = e.memoizedProps, Tl(e, t, r === null ? t : r.memoizedProps)), i & 1024 && (Ql = !0);
 				break;
 			case 6:
 				if (bu(t, e, n), Cu(e), i & 4) {
@@ -5581,7 +5581,7 @@ var e = (e, t) => () => (t || (e((t = { exports: {} }).exports, t), e = null), t
 		if (t & 2) {
 			try {
 				for (var n, r = e.return; r !== null;) {
-					if (Tl(r)) {
+					if (El(r)) {
 						n = r;
 						break;
 					}
@@ -5601,16 +5601,16 @@ var e = (e, t) => () => (t || (e((t = { exports: {} }).exports, t), e = null), t
 				switch (n.tag) {
 					case 27:
 						var c = n.stateNode;
-						Ol(e, El(e), c, o);
+						Ol(e, $(e), c, o);
 						break;
 					case 5:
 						var l = n.stateNode;
-						n.flags & 32 && (tn(l, ""), n.flags &= -33), Ol(e, El(e), l, o);
+						n.flags & 32 && (tn(l, ""), n.flags &= -33), Ol(e, $(e), l, o);
 						break;
 					case 3:
 					case 4:
 						var u = n.stateNode.containerInfo;
-						Dl(e, El(e), u, o);
+						Dl(e, $(e), u, o);
 						break;
 					default: throw Error(s(161));
 				}
@@ -20278,26 +20278,26 @@ var tl = class {
 	table: "Table lamp",
 	floor: "Floor lamp",
 	wall: "Wall lamp"
-}, il = 192, al = 16761963, ol = null, sl = /* @__PURE__ */ new Map(), cl = new Fi({
+}, il = 192, al = 16761963, ol = null, sl = !1, cl = /* @__PURE__ */ new Map(), ll = (e) => "data:image/svg+xml," + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><circle cx="32" cy="26" r="${12 + 10 * e}" fill="#ffc46b" opacity="${.35 * e}"/><circle cx="32" cy="26" r="12" fill="${e ? "#fff1d0" : "#9a9a9a"}"/><rect x="26" y="38" width="12" height="10" rx="2" fill="#8a8f98"/></svg>`), ul = new Fi({
 	color: 9080728,
 	metalness: .6,
 	roughness: .35
-}), ll = new Fi({
+}), dl = new Fi({
 	color: 4409166,
 	metalness: .3,
 	roughness: .55
-}), ul = new Fi({
+}), fl = new Fi({
 	color: 1776411,
 	roughness: .8
-}), dl = null;
-function fl() {
-	if (dl) return dl;
+}), pl = null;
+function ml() {
+	if (pl) return pl;
 	let e = document.createElement("canvas");
 	e.width = e.height = 128;
 	let t = e.getContext("2d"), n = t.createRadialGradient(64, 64, 0, 64, 64, 64);
-	return n.addColorStop(0, "rgba(255,214,140,1)"), n.addColorStop(.35, "rgba(255,190,100,.45)"), n.addColorStop(1, "rgba(255,170,60,0)"), t.fillStyle = n, t.fillRect(0, 0, 128, 128), dl = new hi(e);
+	return n.addColorStop(0, "rgba(255,214,140,1)"), n.addColorStop(.35, "rgba(255,190,100,.45)"), n.addColorStop(1, "rgba(255,170,60,0)"), t.fillStyle = n, t.fillRect(0, 0, 128, 128), pl = new hi(e);
 }
-var pl = (e, t, [n, r, i] = [
+var hl = (e, t, [n, r, i] = [
 	0,
 	0,
 	0
@@ -20305,7 +20305,7 @@ var pl = (e, t, [n, r, i] = [
 	let a = new oi(e, t);
 	return a.position.set(n, r, i), a;
 };
-function ml(e) {
+function gl(e) {
 	return new Fi({
 		color: e ? 16773584 : 14277081,
 		emissive: al,
@@ -20315,24 +20315,24 @@ function ml(e) {
 		opacity: .95
 	});
 }
-var hl = (e) => new Fi({
+var _l = (e) => new Fi({
 	color: 15328214,
 	emissive: al,
 	emissiveIntensity: e * .55,
 	roughness: .9,
 	side: 2
-}), gl = {
+}), vl = {
 	bulb: (e) => {
 		let t = new hn();
-		return t.add(pl(new Ci(.55, 32, 24), e, [
+		return t.add(hl(new Ci(.55, 32, 24), e, [
 			0,
 			.25,
 			0
-		])), t.add(pl(new bi(.26, .22, .45, 24), cl, [
+		])), t.add(hl(new bi(.26, .22, .45, 24), ul, [
 			0,
 			-.45,
 			0
-		])), t.add(pl(new bi(.12, .08, .15, 16), ll, [
+		])), t.add(hl(new bi(.12, .08, .15, 16), dl, [
 			0,
 			-.73,
 			0
@@ -20344,15 +20344,15 @@ var hl = (e) => new Fi({
 	},
 	pendant: (e) => {
 		let t = new hn();
-		return t.add(pl(new bi(.02, .02, 1.2, 8), ul, [
+		return t.add(hl(new bi(.02, .02, 1.2, 8), fl, [
 			0,
 			.95,
 			0
-		])), t.add(pl(new xi(.85, .75, 40, 1, !0), ll, [
+		])), t.add(hl(new xi(.85, .75, 40, 1, !0), dl, [
 			0,
 			0,
 			0
-		])), t.add(pl(new Ci(.28, 24, 16), e, [
+		])), t.add(hl(new Ci(.28, 24, 16), e, [
 			0,
 			-.3,
 			0
@@ -20364,20 +20364,20 @@ var hl = (e) => new Fi({
 	},
 	spot: (e) => {
 		let t = new hn();
-		t.add(pl(new bi(.75, .75, .08, 40), cl, [
+		t.add(hl(new bi(.75, .75, .08, 40), ul, [
 			0,
 			.45,
 			0
-		])), t.add(pl(new bi(.45, .38, .35, 32), ll, [
+		])), t.add(hl(new bi(.45, .38, .35, 32), dl, [
 			0,
 			.25,
 			0
-		])), t.add(pl(new bi(.3, .3, .04, 32), e, [
+		])), t.add(hl(new bi(.3, .3, .04, 32), e, [
 			0,
 			.06,
 			0
 		]));
-		let n = pl(new xi(.9, 1.4, 32, 1, !0), new Fi({
+		let n = hl(new xi(.9, 1.4, 32, 1, !0), new Fi({
 			color: al,
 			emissive: al,
 			emissiveIntensity: .6,
@@ -20398,12 +20398,12 @@ var hl = (e) => new Fi({
 	},
 	ceiling: (e) => {
 		let t = new hn();
-		t.add(pl(new bi(.95, .95, .08, 48), cl, [
+		t.add(hl(new bi(.95, .95, .08, 48), ul, [
 			0,
 			.5,
 			0
 		]));
-		let n = pl(new Ci(.85, 48, 16, 0, Math.PI * 2, 0, Math.PI / 2), e, [
+		let n = hl(new Ci(.85, 48, 16, 0, Math.PI * 2, 0, Math.PI / 2), e, [
 			0,
 			.46,
 			0
@@ -20416,11 +20416,11 @@ var hl = (e) => new Fi({
 	},
 	strip: (e) => {
 		let t = new hn();
-		return t.add(pl(new yi(2, .12, .3), ll, [
+		return t.add(hl(new yi(2, .12, .3), dl, [
 			0,
 			-.05,
 			0
-		])), t.add(pl(new yi(1.9, .06, .2), e, [
+		])), t.add(hl(new yi(1.9, .06, .2), e, [
 			0,
 			.05,
 			0
@@ -20432,19 +20432,19 @@ var hl = (e) => new Fi({
 	},
 	table: (e, t) => {
 		let n = new hn();
-		return n.add(pl(new bi(.4, .45, .1, 32), cl, [
+		return n.add(hl(new bi(.4, .45, .1, 32), ul, [
 			0,
 			-.85,
 			0
-		])), n.add(pl(new bi(.05, .05, .9, 12), cl, [
+		])), n.add(hl(new bi(.05, .05, .9, 12), ul, [
 			0,
 			-.35,
 			0
-		])), n.add(pl(new Ci(.2, 20, 14), e, [
+		])), n.add(hl(new Ci(.2, 20, 14), e, [
 			0,
 			.15,
 			0
-		])), n.add(pl(new bi(.45, .7, .7, 40, 1, !0), hl(t), [
+		])), n.add(hl(new bi(.45, .7, .7, 40, 1, !0), _l(t), [
 			0,
 			.3,
 			0
@@ -20456,19 +20456,19 @@ var hl = (e) => new Fi({
 	},
 	floor: (e, t) => {
 		let n = new hn();
-		return n.add(pl(new bi(.35, .4, .06, 32), ll, [
+		return n.add(hl(new bi(.35, .4, .06, 32), dl, [
 			0,
 			-1.05,
 			0
-		])), n.add(pl(new bi(.035, .035, 1.6, 12), ll, [
+		])), n.add(hl(new bi(.035, .035, 1.6, 12), dl, [
 			0,
 			-.25,
 			0
-		])), n.add(pl(new Ci(.16, 20, 14), e, [
+		])), n.add(hl(new Ci(.16, 20, 14), e, [
 			0,
 			.6,
 			0
-		])), n.add(pl(new bi(.35, .55, .55, 40, 1, !0), hl(t), [
+		])), n.add(hl(new bi(.35, .55, .55, 40, 1, !0), _l(t), [
 			0,
 			.75,
 			0
@@ -20480,19 +20480,19 @@ var hl = (e) => new Fi({
 	},
 	wall: (e) => {
 		let t = new hn();
-		return t.add(pl(new yi(.5, .9, .08), cl, [
+		return t.add(hl(new yi(.5, .9, .08), ul, [
 			0,
 			0,
 			-.45
-		])), t.add(pl(new bi(.05, .05, .4, 12), cl, [
+		])), t.add(hl(new bi(.05, .05, .4, 12), ul, [
 			0,
 			0,
 			-.25
-		]).rotateX(Math.PI / 2)), t.add(pl(new wi(.32, .05, 12, 32), cl, [
+		]).rotateX(Math.PI / 2)), t.add(hl(new wi(.32, .05, 12, 32), ul, [
 			0,
 			0,
 			0
-		]).rotateX(Math.PI / 2)), t.add(pl(new Ci(.3, 24, 16), e, [
+		]).rotateX(Math.PI / 2)), t.add(hl(new Ci(.3, 24, 16), e, [
 			0,
 			.05,
 			0
@@ -20503,24 +20503,32 @@ var hl = (e) => new Fi({
 		]];
 	}
 };
-function _l(e, t) {
-	let n = Math.round(Math.max(0, Math.min(1, t)) * 10) / 10, r = `${e}:${n}`, i = sl.get(r);
+function yl(e, t) {
+	let n = Math.round(Math.max(0, Math.min(1, t)) * 10) / 10, r = `${e}:${n}`, i = cl.get(r);
 	if (i) return i;
-	ol || (ol = new tl({
-		antialias: !0,
-		alpha: !0,
-		preserveDrawingBuffer: !0
-	}), ol.setPixelRatio(2), ol.setSize(il, il, !1));
+	if (sl) return ll(n);
+	if (!ol) {
+		try {
+			ol = new tl({
+				antialias: !0,
+				alpha: !0,
+				preserveDrawingBuffer: !0
+			});
+		} catch (e) {
+			return console.warn("Plejd panel: WebGL unavailable, using flat lamp icons", e), sl = !0, ll(n);
+		}
+		ol.setPixelRatio(2), ol.setSize(il, il, !1);
+	}
 	let a = new Cn();
 	a.add(new ba(16777215, .9));
 	let o = new ya(16777215, 1.6);
 	o.position.set(2, 3, 4), a.add(o);
-	let s = ml(n), [c, [l, u, d]] = (gl[e] ?? gl.bulb)(s, n);
+	let s = gl(n), [c, [l, u, d]] = (vl[e] ?? vl.bulb)(s, n);
 	if (a.add(c), n) {
 		let e = new ga(al, 6 * n, 4);
 		e.position.set(l, u, d + .2), c.add(e);
 		let t = new Vr(new Dr({
-			map: fl(),
+			map: ml(),
 			blending: 2,
 			depthWrite: !1,
 			opacity: .35 + .65 * n
@@ -20532,11 +20540,11 @@ function _l(e, t) {
 	let f = new ma(32, 1, .1, 50);
 	f.position.set(0, .5, 4.6), f.lookAt(0, 0, 0), ol.render(a, f);
 	let p = ol.domElement.toDataURL("image/png");
-	sl.set(r, p);
+	cl.set(r, p);
 	let m = [
-		cl,
-		ll,
-		ul
+		ul,
+		dl,
+		fl
 	];
 	return a.traverse((e) => {
 		e instanceof oi ? (e.geometry.dispose(), m.includes(e.material) || e.material.dispose()) : e instanceof Vr && e.material.dispose();
@@ -20544,34 +20552,34 @@ function _l(e, t) {
 }
 //#endregion
 //#region src/logic.ts
-var vl = [
+var bl = [
 	"toggle",
 	"on",
 	"off",
 	"scene",
 	"service"
 ];
-function yl(e) {
+function xl(e) {
 	if (e == null || typeof e == "string" && e.trim() === "") return null;
 	let t = Math.round(Number(e));
 	return Number.isFinite(t) ? Math.min(100, Math.max(0, t)) : null;
 }
-function bl(e, t, n) {
+function Sl(e, t, n) {
 	let r = Math.round((e + t * (n.target_temp_step || .5)) * 100) / 100;
 	return n.min_temp != null && (r = Math.max(n.min_temp, r)), n.max_temp != null && (r = Math.min(n.max_temp, r)), r;
 }
-var xl = (e, t) => t === "" ? null : e[Number(t)] || null;
-function Sl(e, t) {
+var Cl = (e, t) => t === "" ? null : e[Number(t)] || null;
+function wl(e, t) {
 	if (!e.device) throw Error("Pick a remote.");
-	let n = xl(t, e.up), r = xl(t, e.down), i = xl(t, e.stop);
+	let n = Cl(t, e.up), r = Cl(t, e.down), i = Cl(t, e.stop);
 	if ((n || r) && !i) throw Error("Pick a release (stop) trigger.");
 	let a = [];
 	if (e.presses.forEach((e, n) => {
-		let r = xl(t, e.trigger), i = e.type === "scene" ? e.entity_id : e.type === "service" ? e.domain || e.service || e.data.trim() : "";
+		let r = Cl(t, e.trigger), i = e.type === "scene" ? e.entity_id : e.type === "service" ? e.domain || e.service || e.data.trim() : "";
 		if (!r && !e.type && !i) return;
 		let o = `Press action ${n + 1}`;
 		if (!r) throw Error(`${o}: pick a trigger.`);
-		if (!vl.includes(e.type)) throw Error(`${o}: pick an action.`);
+		if (!bl.includes(e.type)) throw Error(`${o}: pick an action.`);
 		let s = { type: e.type };
 		if (e.type === "scene") {
 			if (!e.entity_id) throw Error(`${o}: pick a scene.`);
@@ -20599,7 +20607,7 @@ function Sl(e, t) {
 	let u = {};
 	return l && (u.targets = l), n && (u.up = n), r && (u.down = r), (n || r) && (u.stop = i), a.length && (u.presses = a), u;
 }
-function Cl(e) {
+function Tl(e) {
 	let t = e.name.trim();
 	if (!t) throw Error("Name is required.");
 	if (!e.days.length) throw Error("Pick at least one day.");
@@ -20617,7 +20625,7 @@ function Cl(e) {
 }
 //#endregion
 //#region node_modules/react/cjs/react-jsx-runtime.production.js
-var wl = /* @__PURE__ */ e(((e) => {
+var El = /* @__PURE__ */ e(((e) => {
 	var t = Symbol.for("react.transitional.element"), n = Symbol.for("react.fragment");
 	function r(e, n, r) {
 		var i = null;
@@ -20633,16 +20641,16 @@ var wl = /* @__PURE__ */ e(((e) => {
 	}
 	e.Fragment = n, e.jsx = r, e.jsxs = r;
 })), $ = (/* @__PURE__ */ e(((e, t) => {
-	t.exports = wl();
-})))(), Tl = [
+	t.exports = El();
+})))(), Dl = [
 	"devices",
 	"automations",
 	"settings"
-], El = {
+], Ol = {
 	devices: "Devices",
 	automations: "Automations",
 	settings: "Settings"
-}, Dl = 100, Ol = 4, kl = [
+}, kl = 100, Al = 4, jl = [
 	"Mon",
 	"Tue",
 	"Wed",
@@ -20650,21 +20658,21 @@ var wl = /* @__PURE__ */ e(((e) => {
 	"Fri",
 	"Sat",
 	"Sun"
-], Al = {
+], Ml = {
 	toggle: "Toggle",
 	on: "Turn on",
 	off: "Turn off",
 	scene: "Activate scene",
 	service: "Call service"
-}, jl = [
+}, Nl = [
 	["auto", "Automatic (gateway first, Bluetooth fallback)"],
 	["gateway", "Gateway only (remote/cloud)"],
 	["ble", "Bluetooth only (local)"]
-], Ml = (e) => e?.message || String(e), Nl = (e) => e.attributes.friendly_name || e.entity_id, Pl = (e, t) => e.name.localeCompare(t.name), Fl = (e, t) => e.entities?.[t.entity_id]?.platform === "plejd" || t.attributes.attribution === "Plejd", Il = (e, t, n = () => !0) => Object.values(e.states).filter((r) => r.entity_id.startsWith(`${t}.`) && Fl(e, r) && n(r)).sort((e, t) => Nl(e).localeCompare(Nl(t))), Ll = (e, t) => e.devices[t]?.name_by_user || e.devices[t]?.name || t, Rl = (e, t, n) => {
+], Pl = (e) => e?.message || String(e), Fl = (e) => e.attributes.friendly_name || e.entity_id, Il = (e, t) => e.name.localeCompare(t.name), Ll = (e, t) => e.entities?.[t.entity_id]?.platform === "plejd" || t.attributes.attribution === "Plejd", Rl = (e, t, n = () => !0) => Object.values(e.states).filter((r) => r.entity_id.startsWith(`${t}.`) && Ll(e, r) && n(r)).sort((e, t) => Fl(e).localeCompare(Fl(t))), zl = (e, t) => e.devices[t]?.name_by_user || e.devices[t]?.name || t, Bl = (e, t, n) => {
 	let r = e.entities?.[n.entity_id]?.device_id;
-	return r ? Ll(t, r) : Nl(n);
+	return r ? zl(t, r) : Fl(n);
 };
-function zl({ hass: e, narrow: t }) {
+function Vl({ hass: e, narrow: t }) {
 	let [n, r] = (0, l.useState)(() => localStorage.getItem("plejd_tab") || "devices"), i = (e) => {
 		r(e), localStorage.setItem("plejd_tab", e);
 	}, [a, o] = (0, l.useState)(null);
@@ -20686,10 +20694,10 @@ function zl({ hass: e, narrow: t }) {
 		children: [
 			/* @__PURE__ */ (0, $.jsxs)("header", { children: [/* @__PURE__ */ (0, $.jsx)("h1", { children: "Plejd" }), /* @__PURE__ */ (0, $.jsx)("nav", {
 				className: "tabs",
-				children: Tl.map((e) => /* @__PURE__ */ (0, $.jsx)("button", {
+				children: Dl.map((e) => /* @__PURE__ */ (0, $.jsx)("button", {
 					className: n === e ? "on" : "",
 					onClick: () => i(e),
-					children: El[e]
+					children: Ol[e]
 				}, e))
 			})] }),
 			n === "devices" && /* @__PURE__ */ (0, $.jsxs)("div", {
@@ -20697,27 +20705,27 @@ function zl({ hass: e, narrow: t }) {
 				children: [
 					/* @__PURE__ */ (0, $.jsx)("div", {
 						className: "rooms",
-						children: /* @__PURE__ */ (0, $.jsx)(Hl, { ...s })
+						children: /* @__PURE__ */ (0, $.jsx)(Wl, { ...s })
 					}),
-					/* @__PURE__ */ (0, $.jsx)(Ql, { ...s }),
-					/* @__PURE__ */ (0, $.jsx)(Jl, { ...s }),
+					/* @__PURE__ */ (0, $.jsx)(eu, { ...s }),
 					/* @__PURE__ */ (0, $.jsx)(Xl, { ...s }),
-					/* @__PURE__ */ (0, $.jsx)($l, { ...s }),
-					/* @__PURE__ */ (0, $.jsx)(eu, { ...s })
+					/* @__PURE__ */ (0, $.jsx)(Ql, { ...s }),
+					/* @__PURE__ */ (0, $.jsx)(tu, { ...s }),
+					/* @__PURE__ */ (0, $.jsx)(nu, { ...s })
 				]
 			}),
 			n === "automations" && /* @__PURE__ */ (0, $.jsxs)("div", {
 				className: "grid",
-				children: [/* @__PURE__ */ (0, $.jsx)(nu, { ...s }), /* @__PURE__ */ (0, $.jsx)(ou, { ...s })]
+				children: [/* @__PURE__ */ (0, $.jsx)(iu, { ...s }), /* @__PURE__ */ (0, $.jsx)(cu, { ...s })]
 			}),
 			n === "settings" && /* @__PURE__ */ (0, $.jsxs)("div", {
 				className: "grid",
-				children: [/* @__PURE__ */ (0, $.jsx)(su, { ...s }), /* @__PURE__ */ (0, $.jsx)(cu, { ...s })]
+				children: [/* @__PURE__ */ (0, $.jsx)(lu, { ...s }), /* @__PURE__ */ (0, $.jsx)(uu, { ...s })]
 			})
 		]
 	});
 }
-function Bl({ title: e, count: t, wide: n, children: r }) {
+function Hl({ title: e, count: t, wide: n, children: r }) {
 	return /* @__PURE__ */ (0, $.jsxs)("section", {
 		className: `card ${n ? "wide" : ""}`,
 		children: [/* @__PURE__ */ (0, $.jsxs)("div", {
@@ -20729,16 +20737,19 @@ function Bl({ title: e, count: t, wide: n, children: r }) {
 		}), r]
 	});
 }
-var Vl = ({ text: e }) => /* @__PURE__ */ (0, $.jsx)("p", {
+var Ul = ({ text: e }) => /* @__PURE__ */ (0, $.jsx)("p", {
 	className: "muted",
 	children: e
 });
-function Hl({ hass: e }) {
+function Wl({ hass: e }) {
 	let [t, n] = (0, l.useState)(null), [r, i] = (0, l.useState)({}), [a, o] = (0, l.useState)("");
 	(0, l.useEffect)(() => {
-		e.callWS({ type: "plejd/rooms" }).then((e) => n(e.rooms)).catch((e) => {
-			n([]), o(Ml(e));
-		}), e.callWS({ type: "plejd/light_styles/get" }).then((e) => i(e.styles || {})).catch(() => {});
+		let t = 0, r = () => Promise.all([e.callWS({ type: "plejd/rooms" }), e.callWS({ type: "plejd/light_styles/get" })]).then(([e, t]) => {
+			n(e.rooms), i(t.styles || {}), o("");
+		}).catch((e) => {
+			o(Pl(e)), t = window.setTimeout(r, 5e3);
+		});
+		return r(), () => clearTimeout(t);
 	}, []);
 	let s = (t, n) => {
 		i((e) => ({
@@ -20748,12 +20759,12 @@ function Hl({ hass: e }) {
 			type: "plejd/light_styles/set",
 			entity_id: t,
 			style: n
-		}).then((e) => i(e.styles)).catch((e) => o(`Could not save the lamp type: ${Ml(e)}`));
-	}, c = Il(e, "light");
-	if (t === null) return /* @__PURE__ */ (0, $.jsx)(Bl, {
+		}).then((e) => i(e.styles)).catch((e) => o(`Could not save the lamp type: ${Pl(e)}`));
+	}, c = Rl(e, "light");
+	if (t === null) return /* @__PURE__ */ (0, $.jsx)(Hl, {
 		title: "Lights",
 		wide: !0,
-		children: /* @__PURE__ */ (0, $.jsx)(Vl, { text: "Loading…" })
+		children: /* @__PURE__ */ (0, $.jsx)(Ul, { text: a ? `Waiting for Plejd… (${a})` : "Loading…" })
 	});
 	let u = new Set(t.map((e) => e.entity_id)), d = new Set(t.flatMap((e) => e.lights)), f = c.filter((e) => !u.has(e.entity_id) && !d.has(e.entity_id)).map((e) => e.entity_id), p = [...t.filter((e) => e.lights.length), ...f.length ? [{
 		room_id: "",
@@ -20762,7 +20773,7 @@ function Hl({ hass: e }) {
 		lights: f
 	}] : []];
 	return /* @__PURE__ */ (0, $.jsxs)($.Fragment, { children: [
-		a && /* @__PURE__ */ (0, $.jsx)(Bl, {
+		a && /* @__PURE__ */ (0, $.jsx)(Hl, {
 			title: "Lights",
 			wide: !0,
 			children: /* @__PURE__ */ (0, $.jsx)("p", {
@@ -20770,20 +20781,20 @@ function Hl({ hass: e }) {
 				children: a
 			})
 		}),
-		p.map((t) => /* @__PURE__ */ (0, $.jsx)(Ul, {
+		p.map((t) => /* @__PURE__ */ (0, $.jsx)(Gl, {
 			hass: e,
 			room: t,
 			styles: r,
 			setStyle: s
 		}, t.room_id || "other")),
-		!p.length && /* @__PURE__ */ (0, $.jsx)(Bl, {
+		!p.length && /* @__PURE__ */ (0, $.jsx)(Hl, {
 			title: "Lights",
 			wide: !0,
-			children: /* @__PURE__ */ (0, $.jsx)(Vl, { text: "No Plejd lights found." })
+			children: /* @__PURE__ */ (0, $.jsx)(Ul, { text: "No Plejd lights found." })
 		})
 	] });
 }
-function Ul({ hass: e, room: t, styles: n, setStyle: r }) {
+function Gl({ hass: e, room: t, styles: n, setStyle: r }) {
 	let [i, a] = (0, l.useState)(!1), o = t.lights.map((t) => e.states[t]).filter(Boolean), s = o.filter((e) => e.state === "on").length, c = t.entity_id ? e.states[t.entity_id] : void 0;
 	return /* @__PURE__ */ (0, $.jsxs)("section", {
 		className: `card room ${o.length > 3 ? "big" : ""}`,
@@ -20804,10 +20815,10 @@ function Ul({ hass: e, room: t, styles: n, setStyle: r }) {
 					onClick: () => a(!i),
 					children: "✎"
 				}),
-				c ? /* @__PURE__ */ (0, $.jsx)(Wl, {
+				c ? /* @__PURE__ */ (0, $.jsx)(Kl, {
 					hass: e,
 					s: c
-				}) : /* @__PURE__ */ (0, $.jsx)(Gl, {
+				}) : /* @__PURE__ */ (0, $.jsx)(ql, {
 					hass: e,
 					members: o,
 					name: t.name
@@ -20815,7 +20826,7 @@ function Ul({ hass: e, room: t, styles: n, setStyle: r }) {
 			]
 		}), /* @__PURE__ */ (0, $.jsx)("div", {
 			className: "tiles",
-			children: o.map((t) => /* @__PURE__ */ (0, $.jsx)(Kl, {
+			children: o.map((t) => /* @__PURE__ */ (0, $.jsx)(Jl, {
 				hass: e,
 				s: t,
 				style: n[t.entity_id] ?? "bulb",
@@ -20825,8 +20836,8 @@ function Ul({ hass: e, room: t, styles: n, setStyle: r }) {
 		})]
 	});
 }
-function Wl({ hass: e, s: t }) {
-	let n = ql(e, t);
+function Kl({ hass: e, s: t }) {
+	let n = Yl(e, t);
 	return /* @__PURE__ */ (0, $.jsxs)("div", {
 		className: "room-control",
 		children: [n.dimmable && /* @__PURE__ */ (0, $.jsx)("input", {
@@ -20836,20 +20847,20 @@ function Wl({ hass: e, s: t }) {
 			value: n.pct,
 			disabled: n.unavailable,
 			className: n.on ? "" : "idle",
-			"aria-label": `Brightness ${Nl(t)}`,
+			"aria-label": `Brightness ${Fl(t)}`,
 			onChange: (e) => n.slide(Number(e.target.value))
 		}), /* @__PURE__ */ (0, $.jsx)("button", {
 			type: "button",
 			role: "switch",
 			"aria-checked": n.on,
-			"aria-label": `${n.on ? "Turn off" : "Turn on"} ${Nl(t)}`,
+			"aria-label": `${n.on ? "Turn off" : "Turn on"} ${Fl(t)}`,
 			className: `switch ${n.on ? "on" : ""}`,
 			disabled: n.unavailable,
 			onClick: n.toggle
 		})]
 	});
 }
-function Gl({ hass: e, members: t, name: n }) {
+function ql({ hass: e, members: t, name: n }) {
 	let r = t.some((e) => e.state === "on");
 	return /* @__PURE__ */ (0, $.jsx)("button", {
 		type: "button",
@@ -20860,8 +20871,8 @@ function Gl({ hass: e, members: t, name: n }) {
 		onClick: () => e.callService("light", r ? "turn_off" : "turn_on", { entity_id: t.map((e) => e.entity_id) }).catch((e) => console.warn("Plejd panel: failed to switch", n, e))
 	});
 }
-function Kl({ hass: e, s: t, style: n, editing: r, setStyle: i }) {
-	let a = ql(e, t);
+function Jl({ hass: e, s: t, style: n, editing: r, setStyle: i }) {
+	let a = Yl(e, t);
 	return /* @__PURE__ */ (0, $.jsxs)("div", {
 		className: `tile ${a.on ? "lit" : ""} ${a.unavailable ? "off" : ""}`,
 		children: [
@@ -20869,17 +20880,17 @@ function Kl({ hass: e, s: t, style: n, editing: r, setStyle: i }) {
 				className: "lamp",
 				onClick: a.toggle,
 				disabled: a.unavailable,
-				"aria-label": `${a.on ? "Turn off" : "Turn on"} ${Nl(t)}`,
+				"aria-label": `${a.on ? "Turn off" : "Turn on"} ${Fl(t)}`,
 				children: /* @__PURE__ */ (0, $.jsx)("img", {
-					src: _l(n, a.on ? a.dimmable ? a.pct / 100 : 1 : 0),
+					src: yl(n, a.on ? a.dimmable ? a.pct / 100 : 1 : 0),
 					alt: "",
 					draggable: !1
 				})
 			}),
 			/* @__PURE__ */ (0, $.jsx)("div", {
 				className: "tile-name",
-				title: Nl(t),
-				children: Nl(t)
+				title: Fl(t),
+				children: Fl(t)
 			}),
 			/* @__PURE__ */ (0, $.jsx)("div", {
 				className: "muted",
@@ -20887,7 +20898,7 @@ function Kl({ hass: e, s: t, style: n, editing: r, setStyle: i }) {
 			}),
 			r ? /* @__PURE__ */ (0, $.jsx)("select", {
 				value: n,
-				"aria-label": `Lamp type for ${Nl(t)}`,
+				"aria-label": `Lamp type for ${Fl(t)}`,
 				onChange: (e) => i(e.target.value),
 				children: nl.map((e) => /* @__PURE__ */ (0, $.jsx)("option", {
 					value: e,
@@ -20900,13 +20911,13 @@ function Kl({ hass: e, s: t, style: n, editing: r, setStyle: i }) {
 				value: a.pct,
 				disabled: a.unavailable,
 				className: a.on ? "" : "idle",
-				"aria-label": `Brightness ${Nl(t)}`,
+				"aria-label": `Brightness ${Fl(t)}`,
 				onChange: (e) => a.slide(Number(e.target.value))
 			})
 		]
 	});
 }
-function ql(e, t) {
+function Yl(e, t) {
 	let n = t.entity_id, r = t.state === "unavailable", i = t.attributes.brightness, a = t.state === "on", o = i == null ? 100 : Math.round(i / 255 * 100), [s, c] = (0, l.useState)(null), [u, d] = (0, l.useState)(null), f = (0, l.useRef)(0), p = (0, l.useRef)({
 		sending: !1,
 		queued: null,
@@ -20953,7 +20964,7 @@ function ql(e, t) {
 		slide: (e) => {
 			let t = p.current;
 			d(e), clearTimeout(t.timer);
-			let n = Dl - (Date.now() - t.last);
+			let n = kl - (Date.now() - t.last);
 			t.pending = e;
 			let r = () => {
 				t.last = Date.now(), t.pending = null, b(e);
@@ -20962,24 +20973,24 @@ function ql(e, t) {
 		}
 	};
 }
-function Jl({ hass: e }) {
-	let t = Il(e, "climate");
-	return /* @__PURE__ */ (0, $.jsxs)(Bl, {
+function Xl({ hass: e }) {
+	let t = Rl(e, "climate");
+	return /* @__PURE__ */ (0, $.jsxs)(Hl, {
 		title: "Climate",
 		count: t.length,
-		children: [t.map((t) => /* @__PURE__ */ (0, $.jsx)(Yl, {
+		children: [t.map((t) => /* @__PURE__ */ (0, $.jsx)(Zl, {
 			hass: e,
 			s: t
-		}, t.entity_id)), !t.length && /* @__PURE__ */ (0, $.jsx)(Vl, { text: "No Plejd thermostats found." })]
+		}, t.entity_id)), !t.length && /* @__PURE__ */ (0, $.jsx)(Ul, { text: "No Plejd thermostats found." })]
 	});
 }
-function Yl({ hass: e, s: t }) {
+function Zl({ hass: e, s: t }) {
 	let n = t.attributes.temperature, [r, i] = (0, l.useState)(null);
 	(0, l.useEffect)(() => {
 		r === n && i(null);
 	}, [n, r]);
 	let a = r ?? n, o = a == null || t.state === "unavailable", s = (n) => {
-		let r = bl(a, n, t.attributes);
+		let r = Sl(a, n, t.attributes);
 		i(r), e.callService("climate", "set_temperature", {
 			entity_id: t.entity_id,
 			temperature: r
@@ -20992,7 +21003,7 @@ function Yl({ hass: e, s: t }) {
 		children: [
 			/* @__PURE__ */ (0, $.jsx)("span", {
 				className: "grow",
-				children: Nl(t)
+				children: Fl(t)
 			}),
 			/* @__PURE__ */ (0, $.jsx)("button", {
 				className: "btn small",
@@ -21015,19 +21026,19 @@ function Yl({ hass: e, s: t }) {
 		]
 	});
 }
-function Xl({ hass: e }) {
-	let t = Il(e, "cover");
-	return /* @__PURE__ */ (0, $.jsxs)(Bl, {
+function Ql({ hass: e }) {
+	let t = Rl(e, "cover");
+	return /* @__PURE__ */ (0, $.jsxs)(Hl, {
 		title: "Covers",
 		count: t.length,
-		children: [t.map((t) => /* @__PURE__ */ (0, $.jsx)(Zl, {
+		children: [t.map((t) => /* @__PURE__ */ (0, $.jsx)($l, {
 			hass: e,
 			s: t
-		}, t.entity_id)), !t.length && /* @__PURE__ */ (0, $.jsx)(Vl, { text: "No Plejd covers found." })]
+		}, t.entity_id)), !t.length && /* @__PURE__ */ (0, $.jsx)(Ul, { text: "No Plejd covers found." })]
 	});
 }
-function Zl({ hass: e, s: t }) {
-	let n = t.entity_id, r = t.state === "unavailable", i = yl(t.attributes.current_position), [a, o] = (0, l.useState)(null), [s, c] = (0, l.useState)(null), u = (0, l.useRef)(0), d = i ?? a, f = !!((t.attributes.supported_features || 0) & Ol), p = (t, r, i) => {
+function $l({ hass: e, s: t }) {
+	let n = t.entity_id, r = t.state === "unavailable", i = xl(t.attributes.current_position), [a, o] = (0, l.useState)(null), [s, c] = (0, l.useState)(null), u = (0, l.useRef)(0), d = i ?? a, f = !!((t.attributes.supported_features || 0) & Al), p = (t, r, i) => {
 		let a = ++u.current;
 		e.callService("cover", t, {
 			entity_id: n,
@@ -21048,7 +21059,7 @@ function Zl({ hass: e, s: t }) {
 			className: "line",
 			children: [/* @__PURE__ */ (0, $.jsx)("span", {
 				className: "grow",
-				children: Nl(t)
+				children: Fl(t)
 			}), /* @__PURE__ */ (0, $.jsx)("span", {
 				className: "count",
 				children: r ? "unavailable" : i == null ? t.state : `${i}%`
@@ -21082,7 +21093,7 @@ function Zl({ hass: e, s: t }) {
 					max: 100,
 					value: s ?? d ?? 50,
 					disabled: r,
-					"aria-label": `Position ${Nl(t)}`,
+					"aria-label": `Position ${Fl(t)}`,
 					onChange: (e) => c(Number(e.target.value)),
 					onPointerCancel: () => c(null)
 				})
@@ -21090,11 +21101,11 @@ function Zl({ hass: e, s: t }) {
 		})]
 	});
 }
-function Ql({ hass: e }) {
-	let t = Il(e, "scene"), [n, r] = (0, l.useState)(""), i = (t) => {
-		r(""), e.callService("scene", "turn_on", { entity_id: t }).catch((e) => r(`Could not activate scene: ${Ml(e)}`));
+function eu({ hass: e }) {
+	let t = Rl(e, "scene"), [n, r] = (0, l.useState)(""), i = (t) => {
+		r(""), e.callService("scene", "turn_on", { entity_id: t }).catch((e) => r(`Could not activate scene: ${Pl(e)}`));
 	};
-	return /* @__PURE__ */ (0, $.jsxs)(Bl, {
+	return /* @__PURE__ */ (0, $.jsxs)(Hl, {
 		title: "Scenes",
 		count: t.length,
 		children: [
@@ -21102,14 +21113,14 @@ function Ql({ hass: e }) {
 				className: "row line",
 				children: [/* @__PURE__ */ (0, $.jsx)("span", {
 					className: "grow",
-					children: Nl(e)
+					children: Fl(e)
 				}), /* @__PURE__ */ (0, $.jsx)("button", {
 					className: "btn",
 					onClick: () => i(e.entity_id),
 					children: "Activate"
 				})]
 			}, e.entity_id)),
-			!t.length && /* @__PURE__ */ (0, $.jsx)(Vl, { text: "No Plejd scenes found." }),
+			!t.length && /* @__PURE__ */ (0, $.jsx)(Ul, { text: "No Plejd scenes found." }),
 			n && /* @__PURE__ */ (0, $.jsx)("p", {
 				className: "error",
 				children: n
@@ -21117,12 +21128,12 @@ function Ql({ hass: e }) {
 		]
 	});
 }
-function $l({ hass: e, reg: t }) {
-	let n = Il(e, "binary_sensor", (e) => e.attributes.device_class === "motion"), r = (t) => {
+function tu({ hass: e, reg: t }) {
+	let n = Rl(e, "binary_sensor", (e) => e.attributes.device_class === "motion"), r = (t) => {
 		let n = e.entities?.[t.entity_id]?.device_id, r = n && Object.values(e.states).find((t) => t.entity_id.startsWith("sensor.") && t.attributes.device_class === "illuminance" && e.entities?.[t.entity_id]?.device_id === n);
 		return r && !["unavailable", "unknown"].includes(r.state) ? ` · ${r.state} lx` : "";
 	};
-	return /* @__PURE__ */ (0, $.jsxs)(Bl, {
+	return /* @__PURE__ */ (0, $.jsxs)(Hl, {
 		title: "Motion & illuminance",
 		count: n.length,
 		children: [n.map((n) => /* @__PURE__ */ (0, $.jsxs)("div", {
@@ -21131,23 +21142,23 @@ function $l({ hass: e, reg: t }) {
 				/* @__PURE__ */ (0, $.jsx)("span", { className: `dot ${n.state === "on" ? "on" : ""}` }),
 				/* @__PURE__ */ (0, $.jsx)("span", {
 					className: "grow",
-					children: Rl(e, t, n)
+					children: Bl(e, t, n)
 				}),
 				/* @__PURE__ */ (0, $.jsxs)("span", {
 					className: "count",
 					children: [["unavailable", "unknown"].includes(n.state) ? "Unavailable" : n.state === "on" ? "Detected" : "Clear", r(n)]
 				})
 			]
-		}, n.entity_id)), !n.length && /* @__PURE__ */ (0, $.jsx)(Vl, { text: "No motion sensors found." })]
+		}, n.entity_id)), !n.length && /* @__PURE__ */ (0, $.jsx)(Ul, { text: "No motion sensors found." })]
 	});
 }
-function eu({ hass: e, reg: t }) {
-	let n = Il(e, "binary_sensor", (e) => e.attributes.device_class === "problem" && e.state === "on").map((n) => ({
+function nu({ hass: e, reg: t }) {
+	let n = Rl(e, "binary_sensor", (e) => e.attributes.device_class === "problem" && e.state === "on").map((n) => ({
 		id: n.entity_id,
-		name: Rl(e, t, n),
+		name: Bl(e, t, n),
 		flags: (n.attributes.active_faults || []).map((e) => e.replace(/_/g, " ")).join(", ")
-	})).sort(Pl);
-	return /* @__PURE__ */ (0, $.jsxs)(Bl, {
+	})).sort(Il);
+	return /* @__PURE__ */ (0, $.jsxs)(Hl, {
 		title: "Device health",
 		count: n.length,
 		children: [n.map((e) => /* @__PURE__ */ (0, $.jsxs)("div", {
@@ -21163,21 +21174,21 @@ function eu({ hass: e, reg: t }) {
 					children: e.flags
 				})
 			]
-		}, e.id)), !n.length && /* @__PURE__ */ (0, $.jsx)(Vl, { text: "All devices healthy." })]
+		}, e.id)), !n.length && /* @__PURE__ */ (0, $.jsx)(Ul, { text: "All devices healthy." })]
 	});
 }
-var tu = {
+var ru = {
 	name: "",
 	days: [],
 	time: "07:00",
 	scene: "",
 	fade: "0"
 };
-function nu({ hass: e }) {
-	let [t, n] = (0, l.useState)(null), [r, i] = (0, l.useState)([]), [a, o] = (0, l.useState)(""), [s, c] = (0, l.useState)(tu), [u, d] = (0, l.useState)(!1), [f, p] = (0, l.useState)(""), [m, h] = (0, l.useState)(""), g = () => {
+function iu({ hass: e }) {
+	let [t, n] = (0, l.useState)(null), [r, i] = (0, l.useState)([]), [a, o] = (0, l.useState)(""), [s, c] = (0, l.useState)(ru), [u, d] = (0, l.useState)(!1), [f, p] = (0, l.useState)(""), [m, h] = (0, l.useState)(""), g = () => {
 		o(""), e.callWS({ type: "plejd/schedules/list" }).then((e) => {
 			n(e.schedules || []), i(e.scenes || []);
-		}).catch((e) => o(`Could not load schedules: ${Ml(e)}`));
+		}).catch((e) => o(`Could not load schedules: ${Pl(e)}`));
 	};
 	(0, l.useEffect)(g, []);
 	let _ = async (t, r) => {
@@ -21186,27 +21197,27 @@ function nu({ hass: e }) {
 			let i = await e.callWS(t);
 			n(i.schedules || []), h(i.reload_failed || (r ? "Saved." : "")), r?.();
 		} catch (e) {
-			p(Ml(e));
+			p(Pl(e));
 		} finally {
 			d(!1);
 		}
 	}, v = () => {
 		let e;
 		try {
-			e = Cl(s);
+			e = Tl(s);
 		} catch (e) {
-			p(Ml(e)), h("");
+			p(Pl(e)), h("");
 			return;
 		}
 		_({
 			type: "plejd/schedules/add",
 			...e
-		}, () => c(tu));
+		}, () => c(ru));
 	}, y = (e) => r.find((t) => t.index === e)?.name || `Scene ${e}`, b = (e) => c({
 		...s,
 		...e
 	});
-	return /* @__PURE__ */ (0, $.jsxs)(Bl, {
+	return /* @__PURE__ */ (0, $.jsxs)(Hl, {
 		title: "Schedules",
 		wide: !0,
 		children: [/* @__PURE__ */ (0, $.jsx)("p", {
@@ -21222,7 +21233,7 @@ function nu({ hass: e }) {
 				onClick: g,
 				children: "Retry"
 			})
-		})] }) : /* @__PURE__ */ (0, $.jsx)(Vl, { text: "Loading…" }) : /* @__PURE__ */ (0, $.jsxs)($.Fragment, { children: [
+		})] }) : /* @__PURE__ */ (0, $.jsx)(Ul, { text: "Loading…" }) : /* @__PURE__ */ (0, $.jsxs)($.Fragment, { children: [
 			t.map((e) => /* @__PURE__ */ (0, $.jsxs)("div", {
 				className: "row line",
 				children: [/* @__PURE__ */ (0, $.jsxs)("div", {
@@ -21230,7 +21241,7 @@ function nu({ hass: e }) {
 					children: [/* @__PURE__ */ (0, $.jsx)("div", { children: e.name }), /* @__PURE__ */ (0, $.jsxs)("div", {
 						className: "muted",
 						children: [
-							e.days?.length ? e.days.map((e) => kl[e]).join(", ") : "—",
+							e.days?.length ? e.days.map((e) => jl[e]).join(", ") : "—",
 							" · ",
 							e.time,
 							" · ",
@@ -21248,7 +21259,7 @@ function nu({ hass: e }) {
 					children: "Delete"
 				})]
 			}, e.id)),
-			!t.length && /* @__PURE__ */ (0, $.jsx)(Vl, { text: "No schedules yet." }),
+			!t.length && /* @__PURE__ */ (0, $.jsx)(Ul, { text: "No schedules yet." }),
 			/* @__PURE__ */ (0, $.jsxs)("div", {
 				className: "form",
 				children: [
@@ -21304,7 +21315,7 @@ function nu({ hass: e }) {
 					}),
 					/* @__PURE__ */ (0, $.jsx)("div", {
 						className: "checks",
-						children: kl.map((e, t) => /* @__PURE__ */ (0, $.jsxs)("label", { children: [/* @__PURE__ */ (0, $.jsx)("input", {
+						children: jl.map((e, t) => /* @__PURE__ */ (0, $.jsxs)("label", { children: [/* @__PURE__ */ (0, $.jsx)("input", {
 							type: "checkbox",
 							checked: s.days.includes(t),
 							onChange: (e) => b({ days: e.target.checked ? [...s.days, t] : s.days.filter((e) => e !== t) })
@@ -21331,27 +21342,27 @@ function nu({ hass: e }) {
 		] })]
 	});
 }
-var ru = {
+var au = {
 	target: "",
 	device: "",
 	up: "",
 	down: "",
 	stop: "",
 	presses: []
-}, iu = {
+}, ou = {
 	trigger: "",
 	type: "",
 	entity_id: "",
 	domain: "",
 	service: "",
 	data: ""
-}, au = (e) => {
+}, su = (e) => {
 	let t = (e.type || "trigger").replace(/_/g, " ");
 	return e.subtype ? `${t} · ${e.subtype}` : t;
 };
-function ou({ hass: e, reg: t }) {
-	let [n, r] = (0, l.useState)(null), [i, a] = (0, l.useState)(""), [o, s] = (0, l.useState)({}), [c, u] = (0, l.useState)(ru), [d, f] = (0, l.useState)(!1), [p, m] = (0, l.useState)(""), [h, g] = (0, l.useState)(""), _ = () => {
-		a(""), e.callWS({ type: "plejd/dim_bindings/list" }).then((e) => r(e.bindings || [])).catch((e) => a(`Could not load bindings: ${Ml(e)}`));
+function cu({ hass: e, reg: t }) {
+	let [n, r] = (0, l.useState)(null), [i, a] = (0, l.useState)(""), [o, s] = (0, l.useState)({}), [c, u] = (0, l.useState)(au), [d, f] = (0, l.useState)(!1), [p, m] = (0, l.useState)(""), [h, g] = (0, l.useState)(""), _ = () => {
+		a(""), e.callWS({ type: "plejd/dim_bindings/list" }).then((e) => r(e.bindings || [])).catch((e) => a(`Could not load bindings: ${Pl(e)}`));
 	};
 	(0, l.useEffect)(_, []);
 	let v = async (t) => {
@@ -21378,7 +21389,7 @@ function ou({ hass: e, reg: t }) {
 				}
 			}));
 		} catch (e) {
-			m(`Could not load triggers: ${Ml(e)}`);
+			m(`Could not load triggers: ${Pl(e)}`);
 		}
 	}, y = async (t, n) => {
 		f(!0), m(""), g("");
@@ -21387,23 +21398,23 @@ function ou({ hass: e, reg: t }) {
 				type: "plejd/dim_bindings/save",
 				bindings: t
 			});
-			r(i.bindings || []), g("Saved."), n && u(ru);
+			r(i.bindings || []), g("Saved."), n && u(au);
 		} catch (e) {
-			m(Ml(e));
+			m(Pl(e));
 		} finally {
 			f(!1);
 		}
 	}, b = () => {
 		try {
-			y([...n, Sl(c, o[c.device]?.triggers || [])], !0);
+			y([...n, wl(c, o[c.device]?.triggers || [])], !0);
 		} catch (e) {
-			m(Ml(e)), g("");
+			m(Pl(e)), g("");
 		}
 	}, x = (e) => t.areas[e]?.name || e, S = (t) => e.states[t]?.attributes.friendly_name || t, C = (e) => {
 		let n = e.targets || {}, r = [
 			...[].concat(n.entity_id || []).map(S),
 			...[].concat(n.area_id || []).map(x),
-			...[].concat(n.device_id || []).map((e) => Ll(t, e))
+			...[].concat(n.device_id || []).map((e) => zl(t, e))
 		];
 		return r.length ? r.join(", ") : "—";
 	}, w = (e) => {
@@ -21414,25 +21425,25 @@ function ou({ hass: e, reg: t }) {
 		].filter((t) => e[t]).join(" / ")].filter(Boolean), r = (e.presses || []).length;
 		r && n.push(`${r} press action${r === 1 ? "" : "s"}`);
 		let i = (e.up || e.down || e.stop || e.presses?.[0]?.trigger)?.device_id;
-		return `${i ? Ll(t, i) : "—"} · ${n.join(", ") || "—"}`;
+		return `${i ? zl(t, i) : "—"} · ${n.join(", ") || "—"}`;
 	}, T = Object.values(e.states).filter((e) => e.entity_id.startsWith("light.")).map((e) => ({
 		id: e.entity_id,
-		name: Nl(e)
-	})).sort(Pl), E = Object.values(t.areas).map((e) => ({
+		name: Fl(e)
+	})).sort(Il), E = Object.values(t.areas).map((e) => ({
 		id: e.area_id,
 		name: e.name || e.area_id
-	})).sort(Pl), D = Object.values(t.devices).map((e) => ({
+	})).sort(Il), D = Object.values(t.devices).map((e) => ({
 		id: e.id,
 		name: e.name_by_user || e.name
-	})).filter((e) => e.name).sort(Pl), O = Object.values(e.states).filter((e) => e.entity_id.startsWith("scene.")).map((e) => ({
+	})).filter((e) => e.name).sort(Il), O = Object.values(e.states).filter((e) => e.entity_id.startsWith("scene.")).map((e) => ({
 		id: e.entity_id,
-		name: Nl(e)
-	})).sort(Pl), ee = o[c.device], k = ee?.kind || "remote", A = /* @__PURE__ */ (0, $.jsxs)($.Fragment, { children: [/* @__PURE__ */ (0, $.jsx)("option", {
+		name: Fl(e)
+	})).sort(Il), ee = o[c.device], k = ee?.kind || "remote", A = /* @__PURE__ */ (0, $.jsxs)($.Fragment, { children: [/* @__PURE__ */ (0, $.jsx)("option", {
 		value: "",
 		children: "(none)"
 	}), (ee?.triggers || []).map((e, t) => /* @__PURE__ */ (0, $.jsx)("option", {
 		value: t,
-		children: au(e)
+		children: su(e)
 	}, t))] }), j = (e, t) => u({
 		...c,
 		presses: c.presses.map((n, r) => r === e ? {
@@ -21440,7 +21451,7 @@ function ou({ hass: e, reg: t }) {
 			...t
 		} : n)
 	});
-	return /* @__PURE__ */ (0, $.jsxs)(Bl, {
+	return /* @__PURE__ */ (0, $.jsxs)(Hl, {
 		title: "Remote dim bindings",
 		wide: !0,
 		children: [/* @__PURE__ */ (0, $.jsx)("p", {
@@ -21456,7 +21467,7 @@ function ou({ hass: e, reg: t }) {
 				onClick: _,
 				children: "Retry"
 			})
-		})] }) : /* @__PURE__ */ (0, $.jsx)(Vl, { text: "Loading…" }) : /* @__PURE__ */ (0, $.jsxs)($.Fragment, { children: [
+		})] }) : /* @__PURE__ */ (0, $.jsx)(Ul, { text: "Loading…" }) : /* @__PURE__ */ (0, $.jsxs)($.Fragment, { children: [
 			n.map((e) => /* @__PURE__ */ (0, $.jsxs)("div", {
 				className: "row line",
 				children: [/* @__PURE__ */ (0, $.jsxs)("div", {
@@ -21472,7 +21483,7 @@ function ou({ hass: e, reg: t }) {
 					children: "Delete"
 				})]
 			}, e.id)),
-			!n.length && /* @__PURE__ */ (0, $.jsx)(Vl, { text: "No bindings yet." }),
+			!n.length && /* @__PURE__ */ (0, $.jsx)(Ul, { text: "No bindings yet." }),
 			/* @__PURE__ */ (0, $.jsxs)("div", {
 				className: "form",
 				children: [
@@ -21584,7 +21595,7 @@ function ou({ hass: e, reg: t }) {
 								className: "btn",
 								onClick: () => u({
 									...c,
-									presses: [...c.presses, iu]
+									presses: [...c.presses, ou]
 								}),
 								children: "+ Add press action"
 							})]
@@ -21612,9 +21623,9 @@ function ou({ hass: e, reg: t }) {
 												children: [/* @__PURE__ */ (0, $.jsx)("option", {
 													value: "",
 													children: "Select an action…"
-												}), vl.map((e) => /* @__PURE__ */ (0, $.jsx)("option", {
+												}), bl.map((e) => /* @__PURE__ */ (0, $.jsx)("option", {
 													value: e,
-													children: Al[e]
+													children: Ml[e]
 												}, e))]
 											})]
 										}),
@@ -21697,13 +21708,13 @@ function ou({ hass: e, reg: t }) {
 		] })]
 	});
 }
-function su({ hass: e }) {
+function lu({ hass: e }) {
 	let [t, n] = (0, l.useState)(null), [r, i] = (0, l.useState)(null), [a, o] = (0, l.useState)(""), [s, c] = (0, l.useState)(!1), [u, d] = (0, l.useState)(""), [f, p] = (0, l.useState)(""), m = () => {
 		o(""), e.callWS({ type: "plejd/settings/get" }).then((e) => {
 			n(e), i(e);
-		}).catch((e) => o(`Could not load settings: ${Ml(e)}`));
+		}).catch((e) => o(`Could not load settings: ${Pl(e)}`));
 	};
-	if ((0, l.useEffect)(m, []), !r || !t) return /* @__PURE__ */ (0, $.jsx)(Bl, {
+	if ((0, l.useEffect)(m, []), !r || !t) return /* @__PURE__ */ (0, $.jsx)(Hl, {
 		title: "Settings",
 		children: a ? /* @__PURE__ */ (0, $.jsxs)($.Fragment, { children: [/* @__PURE__ */ (0, $.jsx)("p", {
 			className: "error",
@@ -21715,7 +21726,7 @@ function su({ hass: e }) {
 				onClick: m,
 				children: "Retry"
 			})
-		})] }) : /* @__PURE__ */ (0, $.jsx)(Vl, { text: "Loading…" })
+		})] }) : /* @__PURE__ */ (0, $.jsx)(Ul, { text: "Loading…" })
 	});
 	let h = (e) => {
 		i({
@@ -21734,12 +21745,12 @@ function su({ hass: e }) {
 			});
 			p(o.reload_failed || "Saved."), m();
 		} catch (e) {
-			d(Ml(e));
+			d(Pl(e));
 		} finally {
 			c(!1);
 		}
-	}, v = Object.values(e.states).filter((e) => e.entity_id.startsWith("light.")).sort((e, t) => Nl(e).localeCompare(Nl(t))), y = (e, t) => h({ holiday_lights: t ? [...r.holiday_lights, e] : r.holiday_lights.filter((t) => t !== e) });
-	return /* @__PURE__ */ (0, $.jsxs)(Bl, {
+	}, v = Object.values(e.states).filter((e) => e.entity_id.startsWith("light.")).sort((e, t) => Fl(e).localeCompare(Fl(t))), y = (e, t) => h({ holiday_lights: t ? [...r.holiday_lights, e] : r.holiday_lights.filter((t) => t !== e) });
+	return /* @__PURE__ */ (0, $.jsxs)(Hl, {
 		title: "Settings",
 		children: [
 			r.has_gateway && /* @__PURE__ */ (0, $.jsxs)($.Fragment, { children: [
@@ -21749,7 +21760,7 @@ function su({ hass: e }) {
 					children: [/* @__PURE__ */ (0, $.jsx)("span", { children: "Send commands via" }), /* @__PURE__ */ (0, $.jsx)("select", {
 						value: r.transport,
 						onChange: (e) => h({ transport: e.target.value }),
-						children: jl.map(([e, t]) => /* @__PURE__ */ (0, $.jsx)("option", {
+						children: Nl.map(([e, t]) => /* @__PURE__ */ (0, $.jsx)("option", {
 							value: e,
 							children: t
 						}, e))
@@ -21791,7 +21802,7 @@ function su({ hass: e }) {
 					type: "checkbox",
 					checked: r.holiday_lights.includes(e.entity_id),
 					onChange: (t) => y(e.entity_id, t.target.checked)
-				}), Nl(e)] }, e.entity_id)), !v.length && /* @__PURE__ */ (0, $.jsx)(Vl, { text: "No Plejd lights found." })]
+				}), Fl(e)] }, e.entity_id)), !v.length && /* @__PURE__ */ (0, $.jsx)(Ul, { text: "No Plejd lights found." })]
 			}),
 			u ? /* @__PURE__ */ (0, $.jsx)("p", {
 				className: "error",
@@ -21812,9 +21823,9 @@ function su({ hass: e }) {
 		]
 	});
 }
-function cu({ hass: e }) {
+function uu({ hass: e }) {
 	let [t, n] = (0, l.useState)(null), [r, i] = (0, l.useState)(null), [a, o] = (0, l.useState)(""), [s, c] = (0, l.useState)(""), [u, d] = (0, l.useState)(""), [f, p] = (0, l.useState)(!1), [m, h] = (0, l.useState)(""), [g, _] = (0, l.useState)("");
-	return /* @__PURE__ */ (0, $.jsxs)(Bl, {
+	return /* @__PURE__ */ (0, $.jsxs)(Hl, {
 		title: "Add a device",
 		children: [
 			/* @__PURE__ */ (0, $.jsx)("p", {
@@ -21896,7 +21907,7 @@ function cu({ hass: e }) {
 					className: `btn ${r ? "ghost" : ""}`,
 					disabled: f,
 					onClick: () => {
-						h(""), _(""), i(null), e.callWS({ type: "plejd/devices/scan" }).then(n).catch((e) => h(Ml(e)));
+						h(""), _(""), i(null), e.callWS({ type: "plejd/devices/scan" }).then(n).catch((e) => h(Pl(e)));
 					},
 					children: t ? "Scan again" : "Scan"
 				}), r && /* @__PURE__ */ (0, $.jsx)("button", {
@@ -21917,7 +21928,7 @@ function cu({ hass: e }) {
 										...u ? { room_category: u } : {}
 									}), _(`${a.trim()} added.`), i(null), o(""), c(""), d(""), n(null);
 								} catch (e) {
-									h(`Failed to add the device: ${Ml(e)}`);
+									h(`Failed to add the device: ${Pl(e)}`);
 								} finally {
 									p(!1);
 								}
@@ -21932,7 +21943,7 @@ function cu({ hass: e }) {
 }
 //#endregion
 //#region src/styles.css?inline
-var lu = ":host{--pl-bg:var(--primary-background-color,#f4f6f9);--pl-card:var(--card-background-color,#fff);--pl-text:var(--primary-text-color,#1d2330);--pl-muted:var(--secondary-text-color,#6b7484);--pl-line:color-mix(in srgb, var(--pl-muted) 18%, transparent);--pl-field:var(--secondary-background-color,#fafafa);--pl-accent:var(--primary-color,#03a9f4);--pl-on:var(--state-light-active-color,#fdd835);--pl-neg:var(--error-color,#db4437);--pl-radius:16px;display:block}*{box-sizing:border-box}.page{max-width:1180px;min-height:100vh;color:var(--pl-text);font:14px/1.45 var(--paper-font-body1_-_font-family,Inter, Roboto, system-ui, sans-serif);background:var(--pl-bg);margin:0 auto;padding:20px 28px 56px}.page.narrow{padding:10px 10px 40px}header{z-index:2;background:var(--pl-bg);flex-wrap:wrap;justify-content:space-between;align-items:center;gap:12px;margin:-20px -28px 18px;padding:20px 28px 12px;display:flex;position:sticky;top:0}.narrow header{margin:-10px -10px 14px;padding:10px 10px 8px}h1{letter-spacing:-.02em;margin:0;font-size:26px;font-weight:600}h2{margin:0;font-size:15px;font-weight:600}h3{margin:0 0 10px;font-size:13.5px;font-weight:600}.tabs{background:var(--pl-card);border:1px solid var(--pl-line);border-radius:999px;gap:2px;max-width:100%;padding:4px;display:inline-flex;overflow-x:auto}.tabs button{color:var(--pl-muted);font:inherit;cursor:pointer;white-space:nowrap;background:0 0;border:0;border-radius:999px;padding:7px 14px;font-weight:500}.tabs button:hover{color:var(--pl-text)}.tabs button.on{background:var(--pl-accent);color:var(--text-primary-color,#fff)}.grid{grid-template-columns:repeat(auto-fit,minmax(340px,1fr));align-items:start;gap:16px;display:grid}.narrow .grid{grid-template-columns:1fr}.card{background:var(--pl-card);border-radius:var(--pl-radius);border:1px solid var(--pl-line);min-width:0;padding:18px;box-shadow:0 1px 2px #0000000a,0 8px 24px -12px #0000001f}.card.wide{grid-column:1/-1}.rooms{grid-column:1/-1;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));align-items:start;gap:16px;display:grid}.rooms>.card.wide{grid-column:1/-1}.room{padding:14px 14px 10px}.room.big{grid-column:span 2}.narrow .room.big{grid-column:auto}input[type=range].idle{opacity:.35}.room-head{align-items:center;gap:10px;margin-bottom:8px;display:flex}.room-head h2{line-height:1.2}.room-control{align-items:center;gap:10px;display:flex}.room-control input[type=range]{width:90px;margin:0}button.icon{color:var(--pl-muted);cursor:pointer;background:0 0;border:0;border-radius:8px;padding:4px 7px;font-size:15px}button.icon.on,button.icon:hover{color:var(--pl-accent);background:color-mix(in srgb, var(--pl-accent) 12%, transparent)}.tiles{grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:8px;display:grid}.tile{text-align:center;background:color-mix(in srgb, var(--pl-muted) 6%, transparent);border-radius:12px;min-width:0;padding:6px 6px 8px}.tile.lit{background:radial-gradient(circle at 50% 35%, color-mix(in srgb, var(--pl-on) 22%, transparent), transparent 70%), color-mix(in srgb, var(--pl-muted) 6%, transparent)}.tile .lamp{cursor:pointer;aspect-ratio:1;background:0 0;border:0;width:100%;padding:0;display:block}.tile .lamp:disabled{cursor:not-allowed}.tile .lamp img{object-fit:contain;width:100%;height:100%;display:block}.tile-name{white-space:nowrap;text-overflow:ellipsis;font-size:12.5px;font-weight:500;overflow:hidden}.tile input[type=range]{margin-top:4px}.tile select{margin-top:4px;padding:4px 6px;font-size:12px}.card-head{justify-content:space-between;align-items:baseline;gap:10px;margin-bottom:8px;display:flex}.count,.muted{color:var(--pl-muted)}.muted{font-size:12.5px}.lead{color:var(--pl-muted);margin:0 0 12px}.error{color:var(--pl-neg);margin:10px 0 0}.notice{color:var(--pl-muted);margin:10px 0 0}.row{border-bottom:1px solid var(--pl-line);padding:10px 2px}.row:last-child{border-bottom:0}.line{align-items:center;gap:12px;display:flex}.grow{flex:1;min-width:0}.click{cursor:pointer}.off{opacity:.5;cursor:not-allowed}.dot{background:var(--disabled-text-color,#9e9e9e);border-radius:50%;flex:none;width:10px;height:10px}.dot.on{background:var(--pl-on)}.dot.bad{background:var(--pl-neg)}.switch{cursor:pointer;background:var(--disabled-text-color,#9e9e9e);border:0;border-radius:10px;flex:none;width:34px;height:20px;padding:0;position:relative}.switch.on{background:var(--pl-accent)}.switch:after{content:\"\";background:#fff;border-radius:50%;width:16px;height:16px;transition:left .15s;position:absolute;top:2px;left:2px;box-shadow:0 1px 2px #0000004d}.switch.on:after{left:16px}.switch:disabled{opacity:.5;cursor:not-allowed}input[type=range]{width:100%;accent-color:var(--pl-accent);margin-top:6px}.line input[type=range]{flex:1;margin:0}button.btn{font:inherit;cursor:pointer;background:var(--pl-accent);color:var(--text-primary-color,#fff);border:0;border-radius:8px;padding:8px 14px}button.btn.ghost{background:var(--pl-muted)}button.btn.danger{background:var(--pl-neg)}button.btn.small{padding:4px 12px}button.btn:disabled{opacity:.5;cursor:not-allowed}.temp{text-align:center;min-width:56px}.form{border-top:1px solid var(--pl-line);margin-top:14px;padding-top:12px}.fields{grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-top:10px;display:grid}.fields.press{grid-template-columns:1fr 1fr auto;align-items:end}label.f{display:block}label.f>span,.label{color:var(--pl-muted);margin:0 0 4px;font-size:12px;display:block}input:not([type]),input[type=text],input[type=time],input[type=number],select,textarea{border:1px solid var(--pl-line);background:var(--pl-field);width:100%;color:var(--pl-text);font:inherit;border-radius:8px;padding:8px 10px}textarea{min-height:56px;font-family:monospace}.box{border:1px solid var(--pl-line);border-radius:8px;margin-top:8px;padding:10px}.checks{flex-wrap:wrap;gap:12px;display:flex}.checks label{align-items:center;gap:4px;display:flex}.checks.col{flex-direction:column;gap:4px;max-height:240px;overflow-y:auto}.actions{justify-content:flex-end;gap:8px;margin-top:14px;display:flex}", uu = class extends HTMLElement {
+var du = ":host{--pl-bg:var(--primary-background-color,#f4f6f9);--pl-card:var(--card-background-color,#fff);--pl-text:var(--primary-text-color,#1d2330);--pl-muted:var(--secondary-text-color,#6b7484);--pl-line:color-mix(in srgb, var(--pl-muted) 18%, transparent);--pl-field:var(--secondary-background-color,#fafafa);--pl-accent:var(--primary-color,#03a9f4);--pl-on:var(--state-light-active-color,#fdd835);--pl-neg:var(--error-color,#db4437);--pl-radius:16px;display:block}*{box-sizing:border-box}.page{max-width:1180px;min-height:100vh;color:var(--pl-text);font:14px/1.45 var(--paper-font-body1_-_font-family,Inter, Roboto, system-ui, sans-serif);background:var(--pl-bg);margin:0 auto;padding:20px 28px 56px}.page.narrow{padding:10px 10px 40px}header{z-index:2;background:var(--pl-bg);flex-wrap:wrap;justify-content:space-between;align-items:center;gap:12px;margin:-20px -28px 18px;padding:20px 28px 12px;display:flex;position:sticky;top:0}.narrow header{margin:-10px -10px 14px;padding:10px 10px 8px}h1{letter-spacing:-.02em;margin:0;font-size:26px;font-weight:600}h2{margin:0;font-size:15px;font-weight:600}h3{margin:0 0 10px;font-size:13.5px;font-weight:600}.tabs{background:var(--pl-card);border:1px solid var(--pl-line);border-radius:999px;gap:2px;max-width:100%;padding:4px;display:inline-flex;overflow-x:auto}.tabs button{color:var(--pl-muted);font:inherit;cursor:pointer;white-space:nowrap;background:0 0;border:0;border-radius:999px;padding:7px 14px;font-weight:500}.tabs button:hover{color:var(--pl-text)}.tabs button.on{background:var(--pl-accent);color:var(--text-primary-color,#fff)}.grid{grid-template-columns:repeat(auto-fit,minmax(340px,1fr));align-items:start;gap:16px;display:grid}.narrow .grid{grid-template-columns:1fr}.card{background:var(--pl-card);border-radius:var(--pl-radius);border:1px solid var(--pl-line);min-width:0;padding:18px;box-shadow:0 1px 2px #0000000a,0 8px 24px -12px #0000001f}.card.wide{grid-column:1/-1}.rooms{grid-column:1/-1;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));align-items:start;gap:16px;display:grid}.rooms>.card.wide{grid-column:1/-1}.room{padding:14px 14px 10px}.room.big{grid-column:span 2}.narrow .room.big{grid-column:auto}input[type=range].idle{opacity:.35}.room-head{align-items:center;gap:10px;margin-bottom:8px;display:flex}.room-head h2{line-height:1.2}.room-control{align-items:center;gap:10px;display:flex}.room-control input[type=range]{width:90px;margin:0}button.icon{color:var(--pl-muted);cursor:pointer;background:0 0;border:0;border-radius:8px;padding:4px 7px;font-size:15px}button.icon.on,button.icon:hover{color:var(--pl-accent);background:color-mix(in srgb, var(--pl-accent) 12%, transparent)}.tiles{grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:8px;display:grid}.tile{text-align:center;background:color-mix(in srgb, var(--pl-muted) 6%, transparent);border-radius:12px;min-width:0;padding:6px 6px 8px}.tile.lit{background:radial-gradient(circle at 50% 35%, color-mix(in srgb, var(--pl-on) 22%, transparent), transparent 70%), color-mix(in srgb, var(--pl-muted) 6%, transparent)}.tile .lamp{cursor:pointer;aspect-ratio:1;background:0 0;border:0;width:100%;padding:0;display:block}.tile .lamp:disabled{cursor:not-allowed}.tile .lamp img{object-fit:contain;width:100%;height:100%;display:block}.tile-name{white-space:nowrap;text-overflow:ellipsis;font-size:12.5px;font-weight:500;overflow:hidden}.tile input[type=range]{margin-top:4px}.tile select{margin-top:4px;padding:4px 6px;font-size:12px}.card-head{justify-content:space-between;align-items:baseline;gap:10px;margin-bottom:8px;display:flex}.count,.muted{color:var(--pl-muted)}.muted{font-size:12.5px}.lead{color:var(--pl-muted);margin:0 0 12px}.error{color:var(--pl-neg);margin:10px 0 0}.notice{color:var(--pl-muted);margin:10px 0 0}.row{border-bottom:1px solid var(--pl-line);padding:10px 2px}.row:last-child{border-bottom:0}.line{align-items:center;gap:12px;display:flex}.grow{flex:1;min-width:0}.click{cursor:pointer}.off{opacity:.5;cursor:not-allowed}.dot{background:var(--disabled-text-color,#9e9e9e);border-radius:50%;flex:none;width:10px;height:10px}.dot.on{background:var(--pl-on)}.dot.bad{background:var(--pl-neg)}.switch{cursor:pointer;background:var(--disabled-text-color,#9e9e9e);border:0;border-radius:10px;flex:none;width:34px;height:20px;padding:0;position:relative}.switch.on{background:var(--pl-accent)}.switch:after{content:\"\";background:#fff;border-radius:50%;width:16px;height:16px;transition:left .15s;position:absolute;top:2px;left:2px;box-shadow:0 1px 2px #0000004d}.switch.on:after{left:16px}.switch:disabled{opacity:.5;cursor:not-allowed}input[type=range]{width:100%;accent-color:var(--pl-accent);margin-top:6px}.line input[type=range]{flex:1;margin:0}button.btn{font:inherit;cursor:pointer;background:var(--pl-accent);color:var(--text-primary-color,#fff);border:0;border-radius:8px;padding:8px 14px}button.btn.ghost{background:var(--pl-muted)}button.btn.danger{background:var(--pl-neg)}button.btn.small{padding:4px 12px}button.btn:disabled{opacity:.5;cursor:not-allowed}.temp{text-align:center;min-width:56px}.form{border-top:1px solid var(--pl-line);margin-top:14px;padding-top:12px}.fields{grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-top:10px;display:grid}.fields.press{grid-template-columns:1fr 1fr auto;align-items:end}label.f{display:block}label.f>span,.label{color:var(--pl-muted);margin:0 0 4px;font-size:12px;display:block}input:not([type]),input[type=text],input[type=time],input[type=number],select,textarea{border:1px solid var(--pl-line);background:var(--pl-field);width:100%;color:var(--pl-text);font:inherit;border-radius:8px;padding:8px 10px}textarea{min-height:56px;font-family:monospace}.box{border:1px solid var(--pl-line);border-radius:8px;margin-top:8px;padding:10px}.checks{flex-wrap:wrap;gap:12px;display:flex}.checks label{align-items:center;gap:4px;display:flex}.checks.col{flex-direction:column;gap:4px;max-height:240px;overflow-y:auto}.actions{justify-content:flex-end;gap:8px;margin-top:14px;display:flex}", fu = class extends HTMLElement {
 	root;
 	_hass;
 	_narrow = !1;
@@ -21947,7 +21958,7 @@ var lu = ":host{--pl-bg:var(--primary-background-color,#f4f6f9);--pl-card:var(--
 		let e = this.shadowRoot ?? this.attachShadow({ mode: "open" });
 		e.replaceChildren();
 		let t = document.createElement("style");
-		t.textContent = lu;
+		t.textContent = du;
 		let n = document.createElement("div");
 		e.append(t, n), this.root = (0, u.createRoot)(n), this.render();
 	}
@@ -21955,11 +21966,11 @@ var lu = ":host{--pl-bg:var(--primary-background-color,#f4f6f9);--pl-card:var(--
 		this.root?.unmount(), this.root = void 0;
 	}
 	render() {
-		this.root && this._hass && this.root.render(/* @__PURE__ */ (0, $.jsx)(zl, {
+		this.root && this._hass && this.root.render(/* @__PURE__ */ (0, $.jsx)(Vl, {
 			hass: this._hass,
 			narrow: this._narrow
 		}));
 	}
 };
-customElements.get("plejd-panel") ? location.reload() : customElements.define("plejd-panel", uu);
+customElements.get("plejd-panel") ? location.reload() : customElements.define("plejd-panel", fu);
 //#endregion

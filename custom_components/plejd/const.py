@@ -25,6 +25,8 @@ CONF_DEVICES = "devices"  # cached device list (so HA works offline after setup)
 CONF_DEVICE_ADDRESSES = "device_addresses"  # device_id -> physical mesh address, for fault polling
 CONF_SCENES = "scenes"  # cached scene list
 CONF_ROOMS = "rooms"  # cached room list (name + group mesh address + member output addresses)
+# Every room's title by room_id, including rooms CONF_ROOMS leaves out (no safe light-only group).
+CONF_ROOM_NAMES = "room_names"
 CONF_INPUTS = "inputs"  # cached button-input list
 CONF_MOTION = "motion"  # cached motion-sensor list
 CONF_PENDING_ROOM_MOVES = "pending_room_moves"  # move_device_to_room's own not-yet-cloud-confirmed moves

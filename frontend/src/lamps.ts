@@ -19,7 +19,14 @@ const WARM = 0xffc46b;
 // One WebGL renderer for every lamp on the page (browsers cap live WebGL contexts at ~16):
 // each style/state is rendered once to an image and cached, the tiles just show <img>.
 let renderer: WebGLRenderer | null = null;
+let webglFailed = false;
 const cache = new Map<string, string>();
+
+// Fallback when WebGL can't be created: a plain bulb whose glow follows the level.
+const flatLamp = (level: number) =>
+  "data:image/svg+xml," + encodeURIComponent(
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><circle cx="32" cy="26" r="${12 + 10 * level}" fill="#ffc46b" opacity="${0.35 * level}"/>` +
+    `<circle cx="32" cy="26" r="12" fill="${level ? "#fff1d0" : "#9a9a9a"}"/><rect x="26" y="38" width="12" height="10" rx="2" fill="#8a8f98"/></svg>`);
 
 const body = new MeshStandardMaterial({ color: 0x8a8f98, metalness: 0.6, roughness: 0.35 });
 const dark = new MeshStandardMaterial({ color: 0x43474e, metalness: 0.3, roughness: 0.55 });
@@ -134,8 +141,16 @@ export function lampImage(style: LampStyle, level: number): string {
   const key = `${style}:${q}`;
   const hit = cache.get(key);
   if (hit) return hit;
+  if (webglFailed) return flatLamp(q);
   if (!renderer) {
-    renderer = new WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
+    try {
+      renderer = new WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
+    } catch (e) {
+      // WebGL disabled or unavailable (some WebViews): draw a flat lamp rather than break the panel.
+      console.warn("Plejd panel: WebGL unavailable, using flat lamp icons", e);
+      webglFailed = true;
+      return flatLamp(q);
+    }
     renderer.setPixelRatio(2);
     renderer.setSize(SIZE, SIZE, false);
   }

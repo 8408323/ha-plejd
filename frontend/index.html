@@ -3,6 +3,13 @@
 <title>Plejd preview</title>
 <style>body{margin:0;background:#111;--primary-background-color:#111;--card-background-color:#1c1c1c;--primary-text-color:#e1e1e1;--secondary-text-color:#9b9b9b;--primary-color:#03a9f4;--secondary-background-color:#262626;color-scheme:dark}</style>
 </head><body><plejd-panel id="p"></plejd-panel>
+<script>
+// ?nowebgl: act like a browser without WebGL (the lamps fall back to flat icons)
+if (location.search.includes("nowebgl")) {
+  const get = HTMLCanvasElement.prototype.getContext;
+  HTMLCanvasElement.prototype.getContext = function (t, ...a) { return /webgl/.test(t) ? null : get.call(this, t, ...a); };
+}
+</script>
 <script type="module">
 // `npm run dev`: the panel against a fake hass (no Home Assistant needed).
 import "/src/main.tsx";
@@ -31,12 +38,14 @@ const all = [
 let schedules = [{ id: 0, slot: 0, name: "Morning", days: [0, 1, 2, 3, 4], time: "06:30:00", scene: 1, fade: 5 }];
 let bindings = [];
 let settings = { transport: "auto", has_gateway: true, holiday_lights: [], holiday_window_start: "18:00", holiday_window_end: "23:00" };
+let roomsFail = Number(new URLSearchParams(location.search).get("roomsfail") || 0);
 let styles = { "light.kok_spot": "spot", "light.kok_o": "pendant", "light.kok_strip": "strip", "light.golv": "floor", "light.bord": "table", "light.vagg": "wall", "light.kitchen": "ceiling" };
 const ws = {
-  "plejd/rooms": () => ({ rooms: [
+  // ?roomsfail=N: the first N calls fail, like Plejd still starting up
+  "plejd/rooms": () => { if (roomsFail-- > 0) throw new Error("Unknown command."); return { rooms: [
     { room_id: "r1", name: "Kök", entity_id: "light.kok", lights: ["light.kitchen", "light.kok_spot", "light.kok_o", "light.kok_strip"] },
     { room_id: "r2", name: "Vardagsrum", entity_id: "light.vardagsrum", lights: ["light.golv", "light.bord", "light.vagg"] },
-  ] }),
+  ] }; },
   "plejd/light_styles/get": () => ({ styles }),
   "plejd/light_styles/set": (m) => (m.style ? styles[m.entity_id] = m.style : delete styles[m.entity_id], { styles }),
   "plejd/schedules/list": () => ({ schedules, scenes: [{ index: 1, name: "Evening" }] }),

@@ -31,8 +31,8 @@ def _device(device_id, room_id, output_index=0, category="light"):
     return types.SimpleNamespace(device_id=device_id, room_id=room_id, output_index=output_index, category=category)
 
 
-def _hass(coordinator=None):
-    entry = types.SimpleNamespace(entry_id="e1", runtime_data=coordinator)
+def _hass(coordinator=None, room_names=None, entry=True):
+    data = {"room_names": room_names} if room_names is not None else {}
     registry = er.EntityRegistry(
         {
             e.entity_id: e
@@ -41,11 +41,15 @@ def _hass(coordinator=None):
                 _reg("d1", "light.kok_tak"),
                 _reg("d2_1", "light.kok_spot"),
                 _reg("d3", "light.hall"),
+                _reg("d6", "light.garage"),
                 _reg("room_r2", "light.tom"),
             ]
         }
     )
-    return types.SimpleNamespace(data={DATA_ENTRY: entry}, entity_registry=registry)
+    hass = types.SimpleNamespace(data={}, entity_registry=registry)
+    if entry:
+        hass.data[DATA_ENTRY] = types.SimpleNamespace(entry_id="e1", runtime_data=coordinator, data=data)
+    return hass
 
 
 async def test_rooms_maps_each_plejd_room_to_its_group_light_and_members():
@@ -60,10 +64,11 @@ async def test_rooms_maps_each_plejd_room_to_its_group_light_and_members():
             _device("d3", None),
             _device("d4", "r1", category="relay"),  # not a light
             _device("d5", "r1"),  # no entity registered
+            _device("d6", "r3"),  # room with a relay: no safe group light, but still its own room
         ],
     )
     conn = _Conn()
-    await room_ws.ws_rooms(_hass(coordinator), conn, {"id": 1})
+    await room_ws.ws_rooms(_hass(coordinator, room_names={"r1": "Old name", "r3": "Garage"}), conn, {"id": 1})
     assert conn.result == (
         1,
         {
@@ -74,10 +79,22 @@ async def test_rooms_maps_each_plejd_room_to_its_group_light_and_members():
                     "entity_id": "light.kok",
                     "lights": ["light.kok_tak", "light.kok_spot"],
                 },
+                {"room_id": "r3", "name": "Garage", "entity_id": None, "lights": ["light.garage"]},
                 {"room_id": "r2", "name": "Tomt", "entity_id": "light.tom", "lights": []},
             ]
         },
     )
+
+
+async def test_rooms_without_stored_names_fall_back_to_group_rooms():
+    coordinator = types.SimpleNamespace(
+        rooms=[PlejdCloudRoom("r1", "Kök", 1, [], True, [])], devices=[_device("d1", "r1")]
+    )
+    conn = _Conn()
+    await room_ws.ws_rooms(_hass(coordinator), conn, {"id": 1})
+    assert conn.result[1]["rooms"] == [
+        {"room_id": "r1", "name": "Kök", "entity_id": "light.kok", "lights": ["light.kok_tak"]}
+    ]
 
 
 async def test_rooms_errors_when_not_loaded():
@@ -102,6 +119,31 @@ async def test_style_set_persists_and_clear_removes(style):
     assert conn.result[1]["styles"] == {"light.kok_tak": style, "light.hall": "wall"}
     await room_ws.ws_styles_set(hass, conn, {"id": 7, "entity_id": "light.hall", "style": None})
     assert conn.result == (7, {"styles": {"light.kok_tak": style}})
+
+
+async def test_style_follows_an_entity_id_rename():
+    hass = _hass()
+    conn = _Conn()
+    await room_ws.ws_styles_set(hass, conn, {"id": 1, "entity_id": "light.hall", "style": "wall"})
+    registry = hass.entity_registry._entities
+    registry["light.hallway"] = registry.pop("light.hall")
+    registry["light.hallway"].entity_id = "light.hallway"
+    await room_ws.ws_styles_get(hass, conn, {"id": 2})
+    assert conn.result[1]["styles"] == {"light.hallway": "wall"}
+
+
+async def test_style_set_rejects_an_unknown_light():
+    conn = _Conn()
+    await room_ws.ws_styles_set(_hass(), conn, {"id": 1, "entity_id": "light.nope", "style": "wall"})
+    assert conn.error == (1, "not_found", "Unknown light")
+
+
+async def test_styles_are_empty_when_plejd_is_not_loaded():
+    hass = _hass(entry=False)
+    hass.data[("store", "plejd.light_styles")] = {"d3": "wall"}
+    conn = _Conn()
+    await room_ws.ws_styles_get(hass, conn, {"id": 1})
+    assert conn.result[1]["styles"] == {}
 
 
 def test_async_register_registers_all_commands():
