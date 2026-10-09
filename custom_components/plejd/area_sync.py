@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
 
@@ -21,6 +22,17 @@ _LOGGER = logging.getLogger(__name__)
 
 STORE_VERSION = 1
 STORE_KEY = f"{DOMAIN}.area_sync"
+DATA_LOCKS = f"{DOMAIN}_area_sync_locks"
+DATA_GENERATIONS = f"{DOMAIN}_area_sync_generations"
+
+
+def _lock(hass: HomeAssistant, entry: ConfigEntry) -> asyncio.Lock:
+    # One per entry, shared by sync and reset, so a reset never interleaves with an in-flight sync.
+    return hass.data.setdefault(DATA_LOCKS, {}).setdefault(entry.entry_id, asyncio.Lock())
+
+
+def _generation(hass: HomeAssistant, entry: ConfigEntry) -> int:
+    return hass.data.get(DATA_GENERATIONS, {}).get(entry.entry_id, 0)
 
 
 def _store(hass: HomeAssistant, entry: ConfigEntry) -> Store:
@@ -61,48 +73,56 @@ def get_device_rooms(entry_data: dict[str, Any]) -> dict[str, str]:
     return rooms
 
 
-async def async_sync_areas(hass: HomeAssistant, entry: ConfigEntry) -> None:
+async def async_sync_areas(hass: HomeAssistant, entry: ConfigEntry, *, generation: int | None = None) -> None:
     """Move devices whose Plejd room changed since the last sync to the matching HA area."""
     # NOTE: record a device only once its room resolved to an area, so later room/area changes re-evaluate it;
     # remembering the area we assigned lets a changed match retarget it without overriding a hand-picked one.
-    room_names = {
-        **{room["room_id"]: room["name"] for room in entry.data.get(CONF_ROOMS, [])},
-        **(entry.data.get(CONF_ROOM_NAMES) or {}),
-    }
-    store = _store(hass, entry)
-    synced: dict[str, dict[str, str]] = await store.async_load() or {}
-    devices = dr.async_get(hass)
-    areas = list(ar.async_get(hass).async_list_areas())
+    async with _lock(hass, entry):
+        if generation is not None and generation != _generation(hass, entry):
+            return  # a reset ran since this sync was requested; saving now would undo it
+        room_names = {
+            **{room["room_id"]: room["name"] for room in entry.data.get(CONF_ROOMS, [])},
+            **(entry.data.get(CONF_ROOM_NAMES) or {}),
+        }
+        store = _store(hass, entry)
+        synced: dict[str, dict[str, str]] = await store.async_load() or {}
+        devices = dr.async_get(hass)
+        areas = list(ar.async_get(hass).async_list_areas())
 
-    resolved: dict[str, dict[str, str]] = {}
-    for plejd_id, room_id in get_device_rooms(entry.data).items():
-        room_key = f"{room_id}:{room_names[room_id]}" if room_id in room_names else None
-        device = devices.async_get_device(identifiers={(DOMAIN, plejd_id)})
-        area = match_area(room_names[room_id], areas) if room_key else None
-        if device is None or area is None:
-            continue
-        resolved[plejd_id] = {"room": room_key, "area": area.id}
-        previous = synced.get(plejd_id) or {}
-        room_changed = previous.get("room") != room_key
-        match_changed = previous.get("area") != area.id and device.area_id == previous.get("area")
-        if (room_changed or match_changed) and device.area_id != area.id:
-            _LOGGER.info("Plejd: moving %s to area %s (Plejd room changed)", device.name, area.name)
-            devices.async_update_device(device.id, area_id=area.id)
-    if resolved != synced:
-        await store.async_save(resolved)
+        resolved: dict[str, dict[str, str]] = {}
+        for plejd_id, room_id in get_device_rooms(entry.data).items():
+            room_key = f"{room_id}:{room_names[room_id]}" if room_id in room_names else None
+            device = devices.async_get_device(identifiers={(DOMAIN, plejd_id)})
+            area = match_area(room_names[room_id], areas) if room_key else None
+            if device is None or area is None:
+                continue
+            resolved[plejd_id] = {"room": room_key, "area": area.id}
+            previous = synced.get(plejd_id) or {}
+            room_changed = previous.get("room") != room_key
+            match_changed = previous.get("area") != area.id and device.area_id == previous.get("area")
+            if (room_changed or match_changed) and device.area_id != area.id:
+                _LOGGER.info("Plejd: moving %s to area %s (Plejd room changed)", device.name, area.name)
+                devices.async_update_device(device.id, area_id=area.id)
+        if resolved != synced:
+            await store.async_save(resolved)
 
 
 async def async_reset_areas(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Forget what was synced; run while the option is off and on entry removal."""
-    await _store(hass, entry).async_remove()
+    async with _lock(hass, entry):
+        generations = hass.data.setdefault(DATA_GENERATIONS, {})
+        generations[entry.entry_id] = generations.get(entry.entry_id, 0) + 1
+        await _store(hass, entry).async_remove()
 
 
 def async_listen_area_changes(hass: HomeAssistant, entry: ConfigEntry) -> Callable[[], None]:
     """Re-run the sync when an area is added or renamed, so a newly matching room takes effect."""
 
+    generation = _generation(hass, entry)
+
     async def _on_area_change(_event: Event) -> None:
         try:
-            await async_sync_areas(hass, entry)
+            await async_sync_areas(hass, entry, generation=generation)
         except Exception:  # noqa: BLE001 - optional; never let a registry event handler raise
             _LOGGER.warning("Plejd: could not sync device areas after an area change", exc_info=True)
 

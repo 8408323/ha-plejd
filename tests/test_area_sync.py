@@ -195,7 +195,7 @@ async def test_area_registry_change_re_runs_the_sync():
 async def test_area_change_handler_swallows_sync_errors(monkeypatch):
     hass = _hass([])
 
-    async def _boom(hass, entry):
+    async def _boom(hass, entry, **_kwargs):
         raise RuntimeError("registry gone")
 
     monkeypatch.setattr(area_sync, "async_sync_areas", _boom)
@@ -230,3 +230,34 @@ async def test_changed_area_match_keeps_a_hand_picked_area():
         assert hass.device_registry.devices["d1"].area_id == "hall"
     finally:
         AREAS[:] = areas_before
+
+
+async def test_reset_waits_for_an_in_flight_sync_instead_of_being_undone(monkeypatch):
+    import asyncio
+
+    release = asyncio.Event()
+    real_store = area_sync.Store
+
+    class _SlowStore(real_store):
+        async def async_load(self):
+            await release.wait()  # the sync is mid-I/O when the reset arrives
+            return await super().async_load()
+
+    monkeypatch.setattr(area_sync, "Store", _SlowStore)
+    hass = _hass([_device("d1", "TEKNIK", "garage")])
+    sync = asyncio.create_task(async_sync_areas(hass, _entry()))
+    await asyncio.sleep(0)
+    reset = asyncio.create_task(async_reset_areas(hass, _entry()))
+    await asyncio.sleep(0)
+    release.set()
+    await asyncio.gather(sync, reset)
+    assert ("store", f"{area_sync.STORE_KEY}.e1") not in hass.data
+
+
+async def test_area_event_sync_queued_behind_a_reset_does_not_recreate_the_store():
+    hass = _hass([_device("d1", "TEKNIK", "garage")])
+    async_listen_area_changes(hass, _entry())  # subscribed while syncing was on
+    [(_, handler)] = hass.bus.listeners
+    await async_reset_areas(hass, _entry())  # option turned off / entry removed
+    await handler(types.SimpleNamespace(data={}))  # stale event delivered afterwards
+    assert ("store", f"{area_sync.STORE_KEY}.e1") not in hass.data
