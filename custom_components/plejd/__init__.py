@@ -412,17 +412,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     entry.async_on_unload(partial(_drop, hass, dim_binding_ws.DATA_BINDINGS))
     entry.async_on_unload(dim_bindings.shutdown)
 
-    # Activity log for the dashboard's Log tab. Optional like the bindings: a storage error mustn't stop setup.
-    activity_log = activity.PlejdActivityLog(hass, entry.entry_id)
-    try:
-        await activity_log.async_load()
-    except Exception:  # noqa: BLE001 - optional; start with an empty log
-        _LOGGER.warning("Plejd: could not load the activity log; starting empty", exc_info=True)
-    activity_log.async_start()
-    hass.data[activity.DATA_ACTIVITY] = activity_log
-    entry.async_on_unload(partial(_drop, hass, activity.DATA_ACTIVITY))
-    entry.async_on_unload(activity_log.async_stop)
-
     # Schedules (managed from the dashboard via the WebSocket API too, mirroring bindings above).
     hass.data[schedule_ws.DATA_ENTRY] = entry
     entry.async_on_unload(partial(_drop, hass, schedule_ws.DATA_ENTRY))
@@ -444,6 +433,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         room_ws.async_register(hass)
         activity.async_register(hass)
         hass.data[_WS_REGISTERED] = True
+    # Activity log for the dashboard's Log tab, started last so a setup that fails earlier never starts it.
+    # Optional like the bindings: a storage error mustn't stop setup. Stopped in async_unload_entry, and only
+    # when the unload succeeds: older HA runs on_unload callbacks even after a refused unload, which would
+    # leave a still-running integration without its log.
+    activity_log = activity.PlejdActivityLog(hass, entry.entry_id)
+    try:
+        await activity_log.async_load()
+    except Exception:  # noqa: BLE001 - optional; start with an empty log
+        _LOGGER.warning("Plejd: could not load the activity log; starting empty", exc_info=True)
+    activity_log.async_start()
+    hass.data[activity.DATA_ACTIVITY] = activity_log
+
     # Room renames/moves and site syncs all reload the entry without touching entity ids; tell an
     # open dashboard to fetch the rooms again.
     hass.bus.async_fire(room_ws.EVENT_ROOMS_CHANGED, {})
@@ -497,6 +498,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
         hass.data.pop(DATA_HOLIDAY_MODE, None)
+        if (activity_log := hass.data.pop(activity.DATA_ACTIVITY, None)) is not None:
+            await activity_log.async_stop()
         await entry.runtime_data.async_shutdown()
     elif was_holiday_mode_running:
         await holiday_mode.async_start()

@@ -1482,6 +1482,27 @@ async def test_unload_failure_keeps_holiday_mode_registered_for_a_retry(monkeypa
     assert _FakeHolidayMode.instances[-1].started is True
 
 
+async def test_activity_log_is_stopped_only_by_a_successful_unload(monkeypatch):
+    from plejd import activity
+
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    monkeypatch.setattr(plejd, "PlejdHolidayMode", _FakeHolidayMode)
+    _FakeCoordinator.instances.clear()
+    hass, entry = _hass(), _entry()
+    unloads: list = []
+    entry.async_on_unload = unloads.append
+    await async_setup_entry(hass, entry)
+    log = hass.data[activity.DATA_ACTIVITY]
+    for unload in unloads:  # older HA runs these even when the unload is refused
+        await _run_unload(unload)
+    hass.config_entries.unload_result = False
+    assert await async_unload_entry(hass, entry) is False
+    assert hass.data[activity.DATA_ACTIVITY] is log and log._unsubs  # still logging
+    hass.config_entries.unload_result = True
+    assert await async_unload_entry(hass, entry) is True
+    assert activity.DATA_ACTIVITY not in hass.data and not log._unsubs
+
+
 async def test_unload_failure_does_not_resume_holiday_mode_that_was_already_off(monkeypatch):
     from plejd.holiday_mode import DATA_HOLIDAY_MODE
 

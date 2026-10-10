@@ -163,8 +163,20 @@ class PlejdActivityLog:
             value = service_data.get(key) or []
             return {value} if isinstance(value, str) else set(value)
 
+        def expand_groups(targets: set[str]) -> set[str]:
+            """Members of any (nested) legacy group.* target, like HA's own expansion."""
+            out, todo = set(), list(targets)
+            while todo:
+                entity_id = todo.pop()
+                if entity_id in out:
+                    continue
+                out.add(entity_id)
+                if entity_id.startswith("group.") and (group := self.hass.states.get(entity_id)):
+                    todo.extend(group.attributes.get("entity_id") or [])
+            return out
+
         entity_ids, device_ids, area_ids, floor_ids, label_ids = (
-            ids("entity_id"),
+            expand_groups(ids("entity_id")),
             ids("device_id"),
             ids("area_id"),
             ids("floor_id"),
@@ -190,7 +202,8 @@ class PlejdActivityLog:
                 | set(getattr(area, "labels", ()) or ())
             )
             if (
-                reg.entity_id in entity_ids
+                "all" in entity_ids  # entity_id: all targets every light
+                or reg.entity_id in entity_ids
                 or (reg.device_id and reg.device_id in device_ids)
                 or (area_id and area_id in area_ids)
                 or (getattr(area, "floor_id", None) in floor_ids)
@@ -212,9 +225,10 @@ class PlejdActivityLog:
         ha = self._ha_source(state.context)
         if ha:
             return ha
-        cmd = self._room_commands.get(address) if address is not None else None
+        # A room command is used up by the member's first transition after it, whichever way that goes: it
+        # credits that transition if it's the one the command asked for, and nothing later either way.
+        cmd = self._room_commands.pop(address, None) if address is not None else None
         if cmd and time.monotonic() - cmd[0] <= _ROOM_COMMAND_WINDOW and cmd[2] in (None, state.state):
-            del self._room_commands[address]  # credits only the one transition the command caused
             return dict(cmd[1])
         if address is None:  # an alarm panel: its own integration may know who changed it
             changed_by = state.attributes.get("changed_by")

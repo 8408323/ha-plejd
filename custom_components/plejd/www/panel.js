@@ -24107,16 +24107,16 @@ function _u({ hass: e }) {
 		"cover"
 	].some((e) => t.entity_id.startsWith(`${e}.`)) && Hl(e, t)).map((e) => `${e.entity_id}:${e.state}`).join("|");
 	(0, l.useEffect)(() => {
-		let t = !1;
-		return e.callWS({
+		let t = !1, n = 0, i = () => e.callWS({
 			type: "plejd/activity/list",
 			limit: 1e3
 		}).then((e) => {
 			t || (r(e.entries), a(""));
 		}).catch((e) => {
-			t || a(zl(e));
-		}), () => {
-			t = !0;
+			t || (a(zl(e)), n = window.setTimeout(i, 5e3));
+		});
+		return i(), () => {
+			t = !0, clearTimeout(n);
 		};
 	}, [c]);
 	let u = t.lang === "nb" ? "nb-NO" : t.lang, d = e.locale?.time_format, f = d === "24" ? { hourCycle: "h23" } : d === "12" ? { hourCycle: "h12" } : {}, p = (e) => Tl({

@@ -77,7 +77,12 @@ def _hass(origin=None):
     async def _get_user(user_id):
         return users.get(user_id)
 
+    group_states = {
+        "group.downstairs": types.SimpleNamespace(attributes={"entity_id": ["group.inner", "light.other"]}),
+        "group.inner": types.SimpleNamespace(attributes={"entity_id": ["light.room_kontor", "group.downstairs"]}),
+    }
     return types.SimpleNamespace(
+        states=types.SimpleNamespace(get=group_states.get),
         data={DATA_ENTRY: types.SimpleNamespace(runtime_data=coordinator, entry_id="e1")},
         device_registry=types.SimpleNamespace(
             async_get=lambda device_id: (
@@ -328,6 +333,10 @@ async def test_room_command_from_ha_is_credited_to_the_one_transition_it_caused(
     assert _member(hass, "off", "on") == {"kind": "user", "user_id": "u1"}
     assert _member(hass, "on", "off") == {"kind": "external"}  # consumed: a second change isn't credited
 
+    _room_call(hass, _ctx(user_id="u1"), entity_id="light.room_kontor")  # turn_on to a member that is already on...
+    assert _member(hass, "on", "off") == {"kind": "external"}  # ...is used up by the next (off) transition...
+    assert _member(hass, "off", "on") == {"kind": "external"}  # ...so a later outside "on" isn't credited to it
+
     _room_call(hass, _ctx(user_id="u1"), service="turn_on", entity_id=["light.room_kontor"])
     assert _member(hass, "on", "off") == {"kind": "external"}  # wrong direction for turn_on
     clock[0] += 20
@@ -342,6 +351,8 @@ async def test_room_command_targeted_by_device_area_or_label_is_credited():
     reg = hass.entity_registry.async_get("light.room_kontor")
     reg.labels = {"evening"}
     for target in (
+        {"entity_id": "all"},
+        {"entity_id": "group.downstairs"},  # a nested (and self-referencing) legacy group
         {"device_id": "dev_room"},
         {"area_id": ["kontor"]},
         {"floor_id": "upstairs"},
