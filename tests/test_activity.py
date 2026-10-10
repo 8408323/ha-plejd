@@ -32,17 +32,32 @@ class _Conn:
         self.error = (msg_id, code, message)
 
 
+class _Services:
+    def __init__(self):
+        self.calls = []
+
+    def async_services(self):
+        return {
+            "notify": {"mobile_app_pixel": None, "family": None, "persistent_notification": None, "send_message": None}
+        }
+
+    async def async_call(self, domain, service, data):
+        self.calls.append((domain, service, data))
+
+
 def _ctx(id_="c1", user_id=None, parent_id=None):
     return types.SimpleNamespace(id=id_, user_id=user_id, parent_id=parent_id)
 
 
 def _state(entity_id, state, ctx=None, **attrs):
+    when = attrs.pop("when", datetime(2026, 10, 10, 19, 5, tzinfo=UTC))
     return types.SimpleNamespace(
         entity_id=entity_id,
         state=state,
         attributes={"friendly_name": entity_id.split(".")[1].title(), **attrs},
         context=ctx or _ctx(),
-        last_changed=datetime(2026, 10, 10, 19, 5, tzinfo=UTC),
+        last_changed=when,
+        last_updated=when,
     )
 
 
@@ -69,11 +84,11 @@ def _hass(origin=None, mesh_after=None):
     )
     coordinator = types.SimpleNamespace(
         devices=[
-            types.SimpleNamespace(device_id="d1", output_index=0, address=42, category="light"),
+            types.SimpleNamespace(device_id="d1", output_index=0, address=42, category="light", room_id="r1"),
             types.SimpleNamespace(device_id="d2", output_index=0, address=None, category="light"),
             types.SimpleNamespace(device_id="d3", output_index=0, address=43, category="relay"),
         ],
-        rooms=[types.SimpleNamespace(room_id="r1", member_addresses=[42])],
+        rooms=[types.SimpleNamespace(room_id="r1", name="Kontor-group", member_addresses=[42])],
         toggle_origin=lambda address, since=None, state=None: origin if since is None else mesh_after.get(since),
     )
     users = {"u1": types.SimpleNamespace(name="Jonathan")}
@@ -87,7 +102,12 @@ def _hass(origin=None, mesh_after=None):
     }
     return types.SimpleNamespace(
         states=types.SimpleNamespace(get=group_states.get),
-        data={DATA_ENTRY: types.SimpleNamespace(runtime_data=coordinator, entry_id="e1")},
+        data={
+            DATA_ENTRY: types.SimpleNamespace(
+                runtime_data=coordinator, entry_id="e1", data={"room_names": {"r1": "Kontor"}}, options={}
+            )
+        },
+        services=_Services(),
         device_registry=types.SimpleNamespace(
             async_get=lambda device_id: (
                 types.SimpleNamespace(area_id="kontor", labels={"dev-label"}) if device_id == "dev_room" else None
@@ -122,9 +142,11 @@ async def test_ha_user_change_is_logged_with_the_user_name():
     assert conn.result[1]["entries"] == [
         {
             "t": "2026-10-10T19:05:00+00:00",
+            "type": "state",
             "entity_id": "light.kontor",
             "name": "Kontor",
             "state": "on",
+            "room": "Kontor",
             "brightness": 50,
             "source": {"kind": "user", "user_id": "u1", "name": "Jonathan"},
         }
@@ -312,10 +334,10 @@ async def test_list_errors_when_not_loaded_and_keeps_unknown_user_ids():
     assert [e["source"]["name"] for e in conn.result[1]["entries"]] == ["gone", "gone"]
 
 
-def test_async_register_registers_the_command():
+def test_async_register_registers_the_commands():
     hass = types.SimpleNamespace(data={})
     activity.async_register(hass)
-    assert activity.ws_list in hass.data["ws_commands"]
+    assert {activity.ws_list, activity.ws_alerts_get, activity.ws_alerts_set} <= set(hass.data["ws_commands"])
 
 
 def _room_call(hass, ctx, service="turn_on", domain="light", **target):
@@ -511,3 +533,231 @@ async def test_a_room_command_after_the_members_own_call_wins(monkeypatch):
         _change(_state("light.kontor", "off"), _state("light.kontor", "on", _ctx("direct", user_id="u1")))
     )
     assert hass.data[activity.DATA_ACTIVITY].entries[-1]["source"] == {"kind": "user", "user_id": "u2"}
+
+
+# ── v2: room, dimming, retention, schedules, alerts, ranges ──────────────────
+
+
+async def test_entries_name_their_plejd_room():
+    hass = await _log_hass()
+    hass.bus.listeners["state_changed"](_change(_state("light.kontor", "off"), _state("light.kontor", "on")))
+    assert hass.data[activity.DATA_ACTIVITY].entries[-1]["room"] == "Kontor"
+
+
+async def test_a_dim_is_one_entry_from_start_to_end_level(monkeypatch):
+    clock = [100.0]
+    monkeypatch.setattr(activity.time, "monotonic", lambda: clock[0])
+    hass = await _log_hass()
+    fire = hass.bus.listeners["state_changed"]
+
+    def level(before, after, ctx=None):
+        fire(
+            _change(
+                _state("light.kontor", "on", brightness=before), _state("light.kontor", "on", ctx, brightness=after)
+            )
+        )
+
+    level(51, 102, _ctx(user_id="u1"))  # 20% -> 40%
+    clock[0] += 1
+    level(102, 204)  # still the same dim: steps within 3 s merge
+    clock[0] += 1
+    level(204, 204)  # no change in level: ignored
+    clock[0] += 5
+    level(204, 26)  # settled, so this is a new dim
+    dims = [e for e in hass.data[activity.DATA_ACTIVITY].entries if e["type"] == "dim"]
+    assert [(d["from"], d["to"], d["source"]["kind"], d["room"]) for d in dims] == [
+        (20, 80, "user", "Kontor"),
+        (80, 10, "external", "Kontor"),
+    ]
+    fire(_change(_state("light.kontor", "on", brightness=26), _state("light.kontor", "on")))  # brightness gone: ignored
+    fire(_change(_state("light.kontor", "on"), _state("light.kontor", "on", color_temp=300)))  # not a dim
+    assert len([e for e in hass.data[activity.DATA_ACTIVITY].entries if e["type"] == "dim"]) == 2
+
+
+async def test_switching_off_ends_a_dim(monkeypatch):
+    clock = [100.0]
+    monkeypatch.setattr(activity.time, "monotonic", lambda: clock[0])
+    hass = await _log_hass()
+    fire = hass.bus.listeners["state_changed"]
+    fire(_change(_state("light.kontor", "on", brightness=51), _state("light.kontor", "on", brightness=102)))
+    fire(_change(_state("light.kontor", "on", brightness=102), _state("light.kontor", "off")))
+    fire(_change(_state("light.kontor", "off"), _state("light.kontor", "on", brightness=102)))
+    fire(_change(_state("light.kontor", "on", brightness=102), _state("light.kontor", "on", brightness=204)))
+    assert [e["type"] for e in hass.data[activity.DATA_ACTIVITY].entries] == ["dim", "state", "state", "dim"]
+
+
+async def test_entries_older_than_30_days_are_dropped():
+    hass = await _log_hass()  # "now" in the test stub is 2026-05-31
+    fire = hass.bus.listeners["state_changed"]
+    old = datetime(2026, 4, 20, tzinfo=UTC)
+    recent = datetime(2026, 5, 20, tzinfo=UTC)
+    fire(_change(_state("light.kontor", "off"), _state("light.kontor", "on", when=old)))
+    fire(_change(_state("light.kontor", "on"), _state("light.kontor", "off", when=recent)))
+    assert [e["state"] for e in hass.data[activity.DATA_ACTIVITY].entries] == ["off"]
+
+
+async def test_scene_at_a_schedules_time_is_credited_to_the_schedule():
+    when = datetime(2026, 10, 12, 5, 31, tzinfo=UTC)  # a Monday, 07:31 local (+02:00)
+    hass = await _log_hass(origin={"kind": "plejd_scene", "name": "Morgon", "index": 3})
+    hass.data[DATA_ENTRY].options = {
+        "schedules": [
+            {"name": "Weekend", "days": [5, 6], "time": "07:30:00", "scene": 3},
+            {"name": "Other scene", "days": [0], "time": "07:30:00", "scene": 9},
+            {"name": "Workday", "days": [0, 1, 2, 3, 4], "time": "07:30:00", "scene": 3},
+        ]
+    }
+    fire = hass.bus.listeners["state_changed"]
+    fire(_change(_state("light.kontor", "off"), _state("light.kontor", "on", when=when)))
+    fire(_change(_state("light.kontor", "on"), _state("light.kontor", "off", when=when.replace(hour=12))))
+    assert [e["source"] for e in hass.data[activity.DATA_ACTIVITY].entries] == [
+        {"kind": "plejd_schedule", "name": "Workday"},
+        {"kind": "plejd_scene", "name": "Morgon"},  # not near any schedule's time: just the scene
+    ]
+
+
+async def test_automation_trigger_is_kept_with_its_source():
+    hass = await _log_hass()
+    hass.bus.listeners["automation_triggered"](
+        types.SimpleNamespace(
+            event_type="automation_triggered",
+            context=_ctx("run"),
+            data={"name": "Hall", "entity_id": "automation.hall", "source": "state of binary_sensor.hall_motion"},
+        )
+    )
+    hass.bus.listeners["state_changed"](
+        _change(_state("light.kontor", "off"), _state("light.kontor", "on", _ctx("run")))
+    )
+    assert hass.data[activity.DATA_ACTIVITY].entries[-1]["source"]["trigger"] == "state of binary_sensor.hall_motion"
+
+
+async def _alert_hass(**cfg):
+    hass = await _log_hass(origin={"kind": "plejd_room", "name": "Kontor"})
+    await hass.data[activity.DATA_ACTIVITY].async_set_alerts(
+        {"enabled": True, "start": "23:00", "end": "06:00", "targets": ["mobile_app_pixel"], **cfg}
+    )
+    tasks = []
+    hass.async_create_task = tasks.append
+    return hass, tasks
+
+
+async def test_night_watch_notifies_about_a_light_going_on_in_the_window():
+    hass, tasks = await _alert_hass()
+    fire = hass.bus.listeners["state_changed"]
+    night = datetime(2026, 10, 11, 0, 13, tzinfo=UTC)  # 02:13 local
+    fire(_change(_state("light.kontor", "off"), _state("light.kontor", "on", when=night)))
+    for task in tasks:
+        await task
+    assert hass.services.calls == [
+        (
+            "notify",
+            "mobile_app_pixel",
+            {"title": "Plejd night watch", "message": "Kontor (Kontor) turned on at 02:13 — Plejd app (whole room)"},
+        ),
+        (
+            "persistent_notification",
+            "create",
+            {"title": "Plejd night watch", "message": "Kontor (Kontor) turned on at 02:13 — Plejd app (whole room)"},
+        ),
+    ]
+
+
+async def test_night_watch_stays_quiet_outside_its_rules():
+    hass, tasks = await _alert_hass(persistent=False)
+    fire = hass.bus.listeners["state_changed"]
+    night = datetime(2026, 10, 11, 0, 13, tzinfo=UTC)
+    day = datetime(2026, 10, 11, 12, 0, tzinfo=UTC)
+    fire(_change(_state("light.kontor", "off"), _state("light.kontor", "on", when=day)))  # outside the window
+    fire(_change(_state("light.kontor", "on"), _state("light.kontor", "off", when=night)))  # off, not on
+    fire(
+        _change(_state("alarm_control_panel.v", "disarmed"), _state("alarm_control_panel.v", "armed_away", when=night))
+    )
+    hass.bus.listeners["automation_triggered"](
+        types.SimpleNamespace(
+            event_type="automation_triggered", context=_ctx("run"), data={"entity_id": "automation.n"}
+        )
+    )
+    fire(_change(_state("light.kontor", "off"), _state("light.kontor", "on", _ctx("run"), when=night)))  # planned
+    assert tasks == []
+    await hass.data[activity.DATA_ACTIVITY].async_set_alerts({"enabled": False})
+    fire(_change(_state("light.kontor", "off"), _state("light.kontor", "on", when=night)))
+    assert tasks == []
+
+
+async def test_night_watch_can_include_the_alarm():
+    hass, tasks = await _alert_hass(alarm=True, targets=[])
+    night = datetime(2026, 10, 11, 0, 13, tzinfo=UTC)
+    alarm = "alarm_control_panel.verisure"
+    hass.bus.listeners["state_changed"](
+        _change(_state(alarm, "armed_away"), _state(alarm, "disarmed", when=night, changed_by="Sofia"))
+    )
+    for task in tasks:
+        await task
+    assert hass.services.calls == [
+        (
+            "persistent_notification",
+            "create",
+            {"title": "Plejd night watch", "message": "Verisure alarm: disarmed at 02:13 — Changed by Sofia"},
+        ),
+    ]
+
+
+def test_window_handles_midnight_and_same_day():
+    assert activity._in_window("23:30", "23:00", "06:00") and activity._in_window("05:59", "23:00", "06:00")
+    assert not activity._in_window("06:00", "23:00", "06:00")
+    assert activity._in_window("13:00", "12:00", "14:00") and not activity._in_window("14:00", "12:00", "14:00")
+
+
+def test_describe_source_covers_every_kind():
+    assert (
+        activity.describe_source({"kind": "plejd_motion", "name": "Garage"}) == "Plejd motion sensor: Garage (likely)"
+    )
+    assert activity.describe_source({"kind": "nope"}) == "Outside Home Assistant"
+
+
+async def test_list_filters_by_time_range_and_reports_more():
+    hass = await _log_hass()
+    fire = hass.bus.listeners["state_changed"]
+    for day in (20, 21, 22):
+        when = datetime(2026, 5, day, 12, tzinfo=UTC)
+        fire(_change(_state("light.kontor", "off"), _state("light.kontor", "on", when=when)))
+    conn = _Conn()
+    await activity.ws_list(
+        hass, conn, {"id": 1, "start": "2026-05-21T00:00:00+00:00", "end": "2026-05-23T00:00:00+00:00", "limit": 1}
+    )
+    result = conn.result[1]
+    assert [e["t"][:10] for e in result["entries"]] == ["2026-05-22"]
+    assert result["more"] is True and result["oldest"].startswith("2026-05-20")
+    await activity.ws_list(hass, conn, {"id": 2, "start": "yesterday", "limit": 5})
+    assert conn.error == (2, "invalid_time", "start/end must be ISO times")
+
+
+async def test_alert_settings_round_trip_and_reject_unknown_targets():
+    hass = await _log_hass()
+    conn = _Conn()
+    await activity.ws_alerts_get(hass, conn, {"id": 1})
+    assert conn.result[1]["alerts"] == activity.DEFAULT_ALERTS
+    assert conn.result[1]["notify_services"] == ["family", "mobile_app_pixel"]
+    cfg = {**activity.DEFAULT_ALERTS, "enabled": True, "targets": ["family"]}
+    await activity.ws_alerts_set(hass, conn, {"id": 2, "alerts": cfg})
+    assert conn.result == (2, {"alerts": cfg})
+    reloaded = activity.PlejdActivityLog(hass, hass.data[DATA_ENTRY])
+    await reloaded.async_load()
+    assert reloaded.alerts == cfg
+    await activity.ws_alerts_set(hass, conn, {"id": 3, "alerts": {**cfg, "targets": ["gone"]}})
+    assert conn.error == (3, "unknown_target", "Unknown notify service: gone")
+
+
+async def test_alert_commands_error_when_not_loaded():
+    conn = _Conn()
+    empty = types.SimpleNamespace(data={})
+    await activity.ws_alerts_get(empty, conn, {"id": 1})
+    assert conn.error[1] == "not_loaded"
+    await activity.ws_alerts_set(empty, conn, {"id": 2, "alerts": activity.DEFAULT_ALERTS})
+    assert conn.error[1] == "not_loaded"
+
+
+async def test_a_light_without_a_room_has_no_room_field():
+    hass = await _log_hass()
+    hass.data[DATA_ENTRY].runtime_data.devices[0].room_id = None
+    hass.bus.listeners["state_changed"](_change(_state("light.kontor", "off"), _state("light.kontor", "on")))
+    assert "room" not in hass.data[activity.DATA_ACTIVITY].entries[-1]

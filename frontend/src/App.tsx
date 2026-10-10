@@ -1056,28 +1056,54 @@ function Language({ lang, setLang }: { lang: string | null; setLang: (x: string 
   );
 }
 
-type LogEntry = { t: string; entity_id: string; name: string; state: string; brightness?: number; source: { kind: string; name?: string } };
-const LOG_FILTERS = ["all", "lights", "alarm"] as const;
+type LogEntry = {
+  t: string; type?: "state" | "dim" | "alarm"; entity_id: string; name: string; room?: string; state: string;
+  brightness?: number; from?: number; to?: number; source: { kind: string; name?: string; trigger?: string };
+};
+const LOG_RANGES = { today: 0, "24h": 1, "7d": 7, "30d": 30 } as const;
+type LogRange = keyof typeof LOG_RANGES;
+// Source kinds grouped the way people think about them, for the source filter.
+const SOURCE_GROUPS: Record<string, string[]> = {
+  ha: ["user"], auto: ["automation", "script"], app: ["plejd_room", "plejd_device"], switch: ["plejd_input"],
+  motion: ["plejd_motion"], scene: ["plejd_scene", "plejd_schedule"], alarm: ["alarm"], ext: ["external"],
+};
+const typeOf = (e: LogEntry) => e.type ?? (e.entity_id.startsWith("alarm_control_panel.") ? "alarm" : "state");
 
 function ActivityLog({ hass }: Ctx) {
   const t = useT();
   const [entries, setEntries] = useState<LogEntry[] | null>(null);
+  const [more, setMore] = useState(false);
   const [error, setError] = useState("");
-  const [filter, setFilter] = useState<(typeof LOG_FILTERS)[number]>("all");
-  // Refresh whenever a tracked entity changes; the integration has logged it by then.
+  const [range, setRange] = useState<LogRange>("24h");
+  const [extraDays, setExtraDays] = useState(0); // "load earlier" adds a day at a time, up to the 30 kept
+  const [query, setQuery] = useState("");
+  const [types, setTypes] = useState({ state: true, dim: true, alarm: true });
+  const [group, setGroup] = useState("");
+  const [room, setRoom] = useState("");
+  const [between, setBetween] = useState({ on: false, from: "23:00", to: "06:00" });
+
+  // Refresh whenever a tracked entity changes (on/off, brightness, alarm); the integration has logged it by then.
   const key = (Object.values(hass.states) as St[])
-    .filter((s) => s.entity_id.startsWith("alarm_control_panel.") || (["light", "switch", "cover"].some((d) => s.entity_id.startsWith(`${d}.`)) && isPlejd(hass, s)))
-    .map((s) => `${s.entity_id}:${s.state}`).join("|");
+    .filter((s) => s.entity_id.startsWith("alarm_control_panel.") || (["light", "switch"].some((d) => s.entity_id.startsWith(`${d}.`)) && isPlejd(hass, s)))
+    .map((s) => `${s.entity_id}:${s.state}:${s.attributes.brightness ?? ""}`).join("|");
+  const start = (() => {
+    const d = new Date();
+    if (range === "today") d.setHours(0, 0, 0, 0);
+    else d.setDate(d.getDate() - LOG_RANGES[range]);
+    d.setDate(d.getDate() - extraDays);
+    return d;
+  })();
+  const startKey = start.toISOString().slice(0, 13);
   useEffect(() => {
     let cancelled = false;
     let timer = 0;
     // Retried like the room loader: during a reload the log isn't back yet (not_loaded) for a moment.
-    const load = () => hass.callWS({ type: "plejd/activity/list", limit: 1000 })
-      .then((r: any) => { if (!cancelled) { setEntries(r.entries); setError(""); } })
+    const load = () => hass.callWS({ type: "plejd/activity/list", start: start.toISOString(), limit: 50000 })
+      .then((r: any) => { if (!cancelled) { setEntries(r.entries); setMore(Boolean(r.oldest) && new Date(r.oldest) < start); setError(""); } })
       .catch((e: any) => { if (!cancelled) { setError(errMsg(e)); timer = window.setTimeout(load, 5000); } });
     load();
     return () => { cancelled = true; clearTimeout(timer); };
-  }, [key]);
+  }, [key, startKey]);
 
   const locale = t.lang === "nb" ? "nb-NO" : t.lang;
   // HA's own 12/24-hour setting wins over the language's default ("language" = follow the language).
@@ -1087,53 +1113,171 @@ function ActivityLog({ hass }: Ctx) {
     const templates: Record<string, string> = {
       user: t.src_user, automation: t.src_automation, script: t.src_script, plejd_room: t.src_plejd_room,
       plejd_device: t.src_plejd_device, plejd_input: t.src_plejd_input, alarm: t.src_alarm,
+      plejd_scene: t.src_plejd_scene, plejd_schedule: t.src_plejd_schedule, plejd_motion: t.src_plejd_motion,
     };
-    return fmt(templates[src.kind] ?? t.src_external, { name: src.name ?? "" });
+    const text = fmt(templates[src.kind] ?? t.src_external, { name: src.name ?? "" });
+    return src.trigger ? `${text} · ${fmt(t.log_trigger, { trigger: src.trigger })}` : text;
   };
-  const stateLabel = (e: LogEntry) =>
-    e.entity_id.startsWith("alarm_control_panel.") ? (t.alarm_states[e.state] ?? e.state)
-      : e.state === "on" ? (e.brightness != null ? `${t.state_on} · ${e.brightness}%` : t.state_on)
-        : e.state === "off" ? t.state_off : e.state;
+  const stateLabel = (e: LogEntry) => {
+    const kind = typeOf(e);
+    if (kind === "alarm") return t.alarm_states[e.state] ?? e.state;
+    if (kind === "dim") return fmt(t.log_dimmed, { from: e.from ?? "?", to: e.to ?? "?" });
+    return e.state === "on" ? (e.brightness != null ? `${t.state_on} · ${e.brightness}%` : t.state_on) : e.state === "off" ? t.state_off : e.state;
+  };
   const dayLabel = (d: Date) => {
     const today = new Date(); today.setHours(0, 0, 0, 0);
     const day = new Date(d); day.setHours(0, 0, 0, 0);
     const diff = Math.round((today.getTime() - day.getTime()) / 864e5);
     return diff === 0 ? t.log_today : diff === 1 ? t.log_yesterday : d.toLocaleDateString(locale, { weekday: "long", day: "numeric", month: "long" });
   };
+  const hhmm = (d: Date) => `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  const inWindow = (d: Date) => {
+    const x = hhmm(d), { from, to } = between;
+    return from <= to ? x >= from && x < to : x >= from || x < to;
+  };
 
-  const shown = (entries ?? []).filter((e) => filter === "all" || (filter === "alarm") === e.entity_id.startsWith("alarm_control_panel."));
+  const all = entries ?? [];
+  const rooms = [...new Set(all.map((e) => e.room).filter(Boolean) as string[])].sort();
+  const q = query.trim().toLowerCase();
+  const shown = all.filter((e) =>
+    types[typeOf(e)]
+    && (!group || SOURCE_GROUPS[group].includes(e.source.kind))
+    && (!room || e.room === room)
+    && (!between.on || inWindow(new Date(e.t)))
+    && (!q || [e.name, e.room, sourceLabel(e.source), stateLabel(e)].some((x) => x?.toLowerCase().includes(q))));
   const days: [string, LogEntry[]][] = [];
   for (const e of shown) {
     const label = dayLabel(new Date(e.t));
     if (days.at(-1)?.[0] !== label) days.push([label, []]);
     days.at(-1)![1].push(e);
   }
+  const groupLabels: Record<string, string> = {
+    ha: t.srcgrp_ha, auto: t.srcgrp_auto, app: t.srcgrp_app, switch: t.srcgrp_switch,
+    motion: t.srcgrp_motion, scene: t.srcgrp_scene, alarm: t.srcgrp_alarm, ext: t.srcgrp_ext,
+  };
+  const rangeLabels: Record<LogRange, string> = { today: t.range_today, "24h": t.range_24h, "7d": t.range_7d, "30d": t.range_30d };
+  const maxExtra = Math.max(0, 30 - LOG_RANGES[range]);
   return (
-    <Card title={t.log_title} wide>
-      <p className="lead">{t.log_lead}</p>
-      <div className="seg" role="radiogroup" aria-label={t.log_title} style={{ marginLeft: 0, marginBottom: 12 }}>
-        {LOG_FILTERS.map((f) => (
-          <button key={f} role="radio" aria-checked={filter === f} className={filter === f ? "on" : ""} onClick={() => setFilter(f)}>
-            {{ all: t.log_all, lights: t.log_lights, alarm: t.log_alarm }[f]}
-          </button>
+    <>
+      <Card title={t.log_title} wide>
+        <p className="lead">{t.log_lead}</p>
+        <div className="log-filters">
+          <input type="search" className="log-search" placeholder={t.log_search} aria-label={t.log_search} value={query} onChange={(e) => setQuery(e.target.value)} />
+          <div className="seg" role="radiogroup" aria-label={t.log_range}>
+            {(Object.keys(LOG_RANGES) as LogRange[]).map((r) => (
+              <button key={r} role="radio" aria-checked={range === r} className={range === r ? "on" : ""} onClick={() => { setRange(r); setExtraDays(0); }}>{rangeLabels[r]}</button>
+            ))}
+          </div>
+          <div className="checks" role="group" aria-label={t.log_type}>
+            {([["state", t.log_onoff], ["dim", t.log_dim], ["alarm", t.log_alarm]] as const).map(([k, label]) => (
+              <label key={k}><input type="checkbox" checked={types[k]} onChange={(e) => setTypes({ ...types, [k]: e.target.checked })} />{label}</label>
+            ))}
+          </div>
+          <label className="f"><span>{t.log_source}</span>
+            <select value={group} onChange={(e) => setGroup(e.target.value)}>
+              <option value="">{t.log_any}</option>
+              {Object.keys(SOURCE_GROUPS).map((g) => <option key={g} value={g}>{groupLabels[g]}</option>)}
+            </select>
+          </label>
+          <label className="f"><span>{t.log_room}</span>
+            <select value={room} onChange={(e) => setRoom(e.target.value)}>
+              <option value="">{t.log_any}</option>
+              {rooms.map((r) => <option key={r} value={r}>{r}</option>)}
+            </select>
+          </label>
+          <div className="log-between">
+            <label><input type="checkbox" checked={between.on} onChange={(e) => setBetween({ ...between, on: e.target.checked })} />{t.log_between}</label>
+            <input type="time" value={between.from} disabled={!between.on} aria-label={t.nw_from} onChange={(e) => setBetween({ ...between, from: e.target.value })} />
+            <span>{t.log_and}</span>
+            <input type="time" value={between.to} disabled={!between.on} aria-label={t.nw_to} onChange={(e) => setBetween({ ...between, to: e.target.value })} />
+          </div>
+        </div>
+        <p className="muted">{fmt(t.log_count, { n: shown.length })}</p>
+        {error && <p className="error">{error}</p>}
+        {entries === null && !error && <Empty text={t.loading} />}
+        {entries !== null && !shown.length && <Empty text={t.log_empty} />}
+        {days.map(([label, list]) => (
+          <div key={label} className="log-day">
+            <h3>{label}</h3>
+            {list.map((e, i) => (
+              <div key={`${e.t}-${e.entity_id}-${i}`} className={`row line log-row log-${typeOf(e)}`}>
+                <span className="log-time">{new Date(e.t).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit", second: "2-digit", ...hourCycle })}</span>
+                <span className={`dot ${e.state === "on" || e.state.startsWith("armed") || e.state === "triggered" ? "on" : ""}`} />
+                <span className="grow"><strong>{e.name}</strong>{e.room && <span className="muted"> · {e.room}</span>} · {stateLabel(e)}</span>
+                <span className={`muted log-src src-${e.source.kind}`}>{sourceLabel(e.source)}</span>
+              </div>
+            ))}
+          </div>
+        ))}
+        {more && extraDays < maxExtra && <div className="actions"><button className="btn ghost" onClick={() => setExtraDays(extraDays + 1)}>{t.log_earlier}</button></div>}
+      </Card>
+      <NightWatch hass={hass} />
+    </>
+  );
+}
+
+type Alerts = { enabled: boolean; start: string; end: string; targets: string[]; persistent: boolean; ignore: string[]; alarm: boolean };
+
+
+
+function NightWatch({ hass }: Ctx) {
+  const t = useT();
+  const [saved, setSaved] = useState<Alerts | null>(null);
+  const [draft, setDraft] = useState<Alerts | null>(null);
+  const [services, setServices] = useState<string[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  useEffect(() => {
+    hass.callWS({ type: "plejd/activity/alerts/get" })
+      .then((r: any) => { setSaved(r.alerts); setDraft(r.alerts); setServices(r.notify_services); })
+      .catch((e: any) => setError(errMsg(e)));
+  }, []);
+  if (!draft || !saved) return <Card title={t.nw_title} wide>{error ? <p className="error">{error}</p> : <Empty text={t.loading} />}</Card>;
+  const set = (patch: Partial<Alerts>) => { setDraft({ ...draft, ...patch }); setNotice(""); };
+  const dirty = JSON.stringify(draft) !== JSON.stringify(saved);
+  const save = async () => {
+    setBusy(true); setError(""); setNotice("");
+    try {
+      const r = await hass.callWS({ type: "plejd/activity/alerts/set", alerts: draft });
+      setSaved(r.alerts); setDraft(r.alerts); setNotice(t.saved);
+    } catch (e) {
+      setError(errMsg(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const plannedLabels: Record<string, string> = { automation: t.srcgrp_auto, script: t.srcgrp_auto, plejd_schedule: t.nw_schedules };
+  const toggleIn = (list: string[], item: string, on: boolean) => (on ? [...new Set([...list, item])] : list.filter((x) => x !== item));
+  return (
+    <Card title={t.nw_title} wide>
+      <p className="lead">{t.nw_lead}</p>
+      <label className="checks"><span><input type="checkbox" checked={draft.enabled} onChange={(e) => set({ enabled: e.target.checked })} /> {t.nw_enabled}</span></label>
+      <div className="fields">
+        <label className="f"><span>{t.nw_from}</span><input type="time" value={draft.start} onChange={(e) => set({ start: e.target.value })} /></label>
+        <label className="f"><span>{t.nw_to}</span><input type="time" value={draft.end} onChange={(e) => set({ end: e.target.value })} /></label>
+      </div>
+      <span className="label" style={{ marginTop: 10 }}>{t.nw_targets}</span>
+      <div className="checks col">
+        {services.map((svc) => (
+          <label key={svc}><input type="checkbox" checked={draft.targets.includes(svc)} onChange={(e) => set({ targets: toggleIn(draft.targets, svc, e.target.checked) })} />{svc.replace(/^mobile_app_/, "📱 ").replace(/_/g, " ")}</label>
+        ))}
+        {!services.length && <Empty text={t.nw_none} />}
+        <label><input type="checkbox" checked={draft.persistent} onChange={(e) => set({ persistent: e.target.checked })} />{t.nw_persistent}</label>
+      </div>
+      <span className="label" style={{ marginTop: 10 }}>{t.nw_also}</span>
+      <div className="checks">
+        <label><input type="checkbox" checked={draft.alarm} onChange={(e) => set({ alarm: e.target.checked })} />{t.nw_alarm}</label>
+        {(["automation", "plejd_schedule"] as const).map((kind) => (
+          <label key={kind}><input type="checkbox" checked={!draft.ignore.includes(kind)}
+            onChange={(e) => {
+              const kinds = kind === "automation" ? ["automation", "script"] : [kind];
+              set({ ignore: kinds.reduce((list, k) => toggleIn(list, k, !e.target.checked), draft.ignore) });
+            }} />{plannedLabels[kind]}</label>
         ))}
       </div>
-      {error && <p className="error">{error}</p>}
-      {entries === null && !error && <Empty text={t.loading} />}
-      {entries !== null && !shown.length && <Empty text={t.log_empty} />}
-      {days.map(([label, list]) => (
-        <div key={label} className="log-day">
-          <h3>{label}</h3>
-          {list.map((e, i) => (
-            <div key={`${e.t}-${e.entity_id}-${i}`} className="row line log-row">
-              <span className="log-time">{new Date(e.t).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit", second: "2-digit", ...hourCycle })}</span>
-              <span className={`dot ${e.state === "on" || e.state.startsWith("armed") || e.state === "triggered" ? "on" : ""}`} />
-              <span className="grow"><strong>{e.name}</strong> · {stateLabel(e)}</span>
-              <span className={`muted log-src src-${e.source.kind}`}>{sourceLabel(e.source)}</span>
-            </div>
-          ))}
-        </div>
-      ))}
+      {error ? <p className="error">{error}</p> : notice && <p className="notice">{notice}</p>}
+      <div className="actions"><button className="btn" disabled={busy || !dirty} onClick={save}>{busy ? t.saving : t.save}</button></div>
     </Card>
   );
 }

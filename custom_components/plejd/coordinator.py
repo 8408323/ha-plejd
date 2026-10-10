@@ -62,6 +62,7 @@ from .const import (
     CMD_OUTPUT_SET,
     CMD_OUTPUT_SPEED,
     CMD_OUTPUT_STATE_AND_LEVEL,
+    CMD_SCENE,
     CONF_CRYPTO_KEY,
     CONF_DEVICE_ADDRESSES,
     CONF_DEVICES,
@@ -252,6 +253,10 @@ class PlejdCoordinator:
         self._button_listeners: list[Callable[[int, bool], None]] = []
         # mesh address -> (monotonic time, on/off value) of the last 0x0097 command seen for it, for the activity log
         self._recent_toggles: dict[int, tuple[float, bool]] = {}
+        # Other recent mesh events that can explain a change, for the activity log:
+        # last scene run (monotonic time, scene index) and last motion seen per motion-sensor address.
+        self._recent_scene: tuple[float, int] | None = None
+        self._recent_motion: dict[int, float] = {}
         self._motion_listeners: list[Callable[[MotionEvent], None]] = []
         self._fault_listeners: list[Callable[[int, frozenset[str]], None]] = []
         self._faults: dict[int, frozenset[str]] = {}
@@ -338,7 +343,12 @@ class PlejdCoordinator:
         return _remove
 
     def toggle_origin(
-        self, output_address: int, window: float = 5.0, since: float | None = None, state: str | None = None
+        self,
+        output_address: int,
+        window: float = 5.0,
+        motion_window: float = 60.0,
+        since: float | None = None,
+        state: str | None = None,
     ) -> dict | None:
         """Where a just-seen on/off of `output_address` came from, as far as the mesh shows it.
 
@@ -371,10 +381,34 @@ class PlejdCoordinator:
             candidates.append((at, {"kind": "plejd_device"}))
         # A separate remote/wall switch pressed just before. Plejd doesn't say which outputs a button
         # drives, so this is a best guess (and it only wins when it is the newest command).
-        own_device = next((d.device_id for d in self.devices if d.address == output_address), None)
+        own_device = next((d for d in self.devices if d.address == output_address), None)
         for button in self.inputs:
-            if button.device_id != own_device and (at := seen(button.address, match_state=False)) is not None:
+            if (own_device is None or button.device_id != own_device.device_id) and (
+                at := seen(button.address, match_state=False)
+            ) is not None:
                 candidates.append((at, {"kind": "plejd_input", "name": button.name}))
+        # A scene run on the mesh (Plejd app, a Plejd schedule, or a button bound to the scene).
+        if (
+            self._recent_scene is not None
+            and now - self._recent_scene[0] <= window
+            and (since is None or self._recent_scene[0] > since)
+        ):
+            index = self._recent_scene[1]
+            name = next((s.name for s in self.scenes if s.index == index), f"#{index}")
+            candidates.append((self._recent_scene[0], {"kind": "plejd_scene", "name": name, "index": index}))
+        # A Plejd motion sensor in the same room that saw motion shortly before (its own rule switched the light).
+        room_id = own_device.room_id if own_device else None
+        for sensor in self.motion:
+            at = self._recent_motion.get(sensor.address)
+            sensor_room = next((d.room_id for d in self.devices if d.device_id == sensor.device_id), None)
+            if (
+                at is not None
+                and now - at <= motion_window
+                and (since is None or at > since)
+                and room_id
+                and sensor_room == room_id
+            ):
+                candidates.append((at, {"kind": "plejd_motion", "name": sensor.name}))
         return max(candidates, key=lambda c: c[0])[1] if candidates else None
 
     def faults_for(self, address: int) -> frozenset[str]:
@@ -400,9 +434,13 @@ class PlejdCoordinator:
             pressed = bool(command.data and command.data[0])
             for cb in list(self._button_listeners):
                 cb(command.address, pressed)
+        elif command.command == CMD_SCENE and command.data[:1]:
+            self._recent_scene = (time.monotonic(), command.data[0])
         elif command.command == CMD_OUTPUT_SET and command.address in self._motion_addresses:
             event = decode_motion(command)
             if event is not None:
+                if event.motion:
+                    self._recent_motion[event.address] = time.monotonic()
                 for motion_cb in list(self._motion_listeners):
                     motion_cb(event)
         elif command.command in _SETTINGS_CMDS and command.command_type & protocol.TYPE_ACK:

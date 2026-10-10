@@ -1,4 +1,4 @@
-"""Activity log for the dashboard: every on/off of a Plejd light or switch and every alarm change, with its source.
+"""Activity log for the dashboard: on/off and dimming of Plejd lights/switches and alarm changes, with their source.
 
 HA's own context says when a change came from Home Assistant (a user, an automation or a script). For
 changes from outside HA, the mesh shows only part of the story - see PlejdCoordinator.toggle_origin - and
@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import time
 from collections import OrderedDict
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import voluptuous as vol
@@ -19,11 +20,27 @@ from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.storage import Store
+from homeassistant.util import dt as dt_util
 
-from .const import CATEGORY_LIGHT, DOMAIN
+from .const import CATEGORY_LIGHT, CONF_ROOM_NAMES, CONF_SCHEDULES, DOMAIN
 
 DATA_ACTIVITY = f"{DOMAIN}_activity"
-MAX_ENTRIES = 1000
+RETENTION = timedelta(days=30)
+MAX_ENTRIES = 50000  # safety cap on top of the 30 days
+# A dim is finished once the level has stayed put this long; until then its steps merge into one entry.
+DIM_SETTLE = 3.0
+# A scene run this close to an on-device schedule's time is credited to that schedule.
+_SCHEDULE_SLACK = timedelta(minutes=2)
+_ALERT_STORE_KEY = f"{DOMAIN}.activity_alerts"
+DEFAULT_ALERTS: dict[str, Any] = {
+    "enabled": False,
+    "start": "23:00",
+    "end": "06:00",
+    "targets": [],  # notify services, e.g. "mobile_app_pixel"
+    "persistent": True,  # also a notification in Home Assistant itself
+    "ignore": ["automation", "script", "plejd_schedule"],  # planned changes don't alert
+    "alarm": False,  # also alert on alarm changes in the window
+}
 _STORE_KEY = f"{DOMAIN}.activity"  # + ".<entry_id>": one log per Plejd setup
 # Covers aren't logged: Plejd covers have no state read-back, so they never change state in HA.
 _TRACKED_PLEJD_DOMAINS = ("light", "switch")
@@ -59,11 +76,19 @@ class PlejdActivityLog:
         # member mesh address -> (when, source) of an HA command sent to its Plejd room light. The room light
         # isn't logged, and the member changes it causes carry no context of their own.
         self._room_commands: dict[int, tuple[float, dict[str, Any], str | None]] = {}  # + the expected new state
+        self._dims: dict[str, tuple[float, dict[str, Any]]] = {}  # entity_id -> (last step, its open dim entry)
+        self._alert_store: Store = Store(hass, 1, f"{_ALERT_STORE_KEY}.{entry.entry_id}")
+        self.alerts: dict[str, Any] = dict(DEFAULT_ALERTS)
         self._unsubs: list = []
 
     async def async_load(self) -> None:
         self.entries = list((await self._store.async_load() or {}).get("entries", []))[-MAX_ENTRIES:]
         self._can_save = True
+        self.alerts = {**DEFAULT_ALERTS, **(await self._alert_store.async_load() or {})}
+
+    async def async_set_alerts(self, alerts: dict[str, Any]) -> None:
+        self.alerts = {**DEFAULT_ALERTS, **alerts}
+        await self._alert_store.async_save(self.alerts)
 
     @callback
     def async_start(self) -> None:
@@ -95,6 +120,9 @@ class PlejdActivityLog:
                 "kind": kind,
                 "name": event.data.get("name") or event.data.get("entity_id", ""),
                 "entity_id": event.data.get("entity_id", ""),
+                **(
+                    {"trigger": event.data["source"]} if event.data.get("source") else {}
+                ),  # e.g. "state of binary_sensor.x"
             },
         )
         while self._runs and (len(self._runs) > _MAX_CONTEXTS or now - next(iter(self._runs.values()))[0] > _RUN_TTL):
@@ -133,33 +161,117 @@ class PlejdActivityLog:
     @callback
     def _on_state_changed(self, event) -> None:
         old, new = event.data.get("old_state"), event.data.get("new_state")
-        if old is None or new is None or old.state == new.state:
-            return  # added/removed, or only an attribute (e.g. brightness) changed
+        if old is None or new is None:
+            return  # added or removed
         if old.state in _IGNORED_STATES or new.state in _IGNORED_STATES:
             return  # connection drops and restarts, not someone switching anything
         entity_id = new.entity_id
         domain = entity_id.split(".")[0]
-        address = None
+        output = None
         if domain != "alarm_control_panel":
-            address = self._plejd_address(entity_id, domain)
-            if address is None:
+            output = self._plejd_output(entity_id, domain)
+            if output is None:
                 return
-        entry = {
+        if old.state == new.state:
+            if new.state == "on" and output is not None:
+                self._dim_step(new, old, output)
+            return  # any other attribute-only change isn't activity
+        self._dims.pop(entity_id, None)  # switching on/off ends a dim in progress
+        entry: dict[str, Any] = {
             "t": new.last_changed.isoformat(),
+            "type": "alarm" if output is None else "state",
             "entity_id": entity_id,
             "name": new.attributes.get("friendly_name", entity_id),
             "state": new.state,
-            "source": self._source(new, address),
+            "source": self._source(new, output.address if output else None),
         }
-        if address is not None and isinstance(brightness := new.attributes.get("brightness"), int | float):
-            entry["brightness"] = round(brightness / 255 * 100)
+        if output is not None and (room := self._room_name(output)):
+            entry["room"] = room
+        if output is not None and (pct := _pct(new)) is not None:  # brightness means nothing on an alarm panel
+            entry["brightness"] = pct
+        self._add(entry)
+        self._maybe_alert(entry)
+
+    def _dim_step(self, new, old, output) -> None:
+        """A brightness change while on: merged into one dim entry until the level settles."""
+        before, after = _pct(old), _pct(new)
+        if before is None or after is None or before == after:
+            return
+        now = time.monotonic()
+        open_dim = self._dims.get(new.entity_id)
+        if open_dim is not None and now - open_dim[0] <= DIM_SETTLE:
+            open_dim[1]["to"] = after
+            open_dim[1]["t_end"] = new.last_updated.isoformat()
+            self._dims[new.entity_id] = (now, open_dim[1])
+            self._save()
+            return
+        entry: dict[str, Any] = {
+            "t": new.last_updated.isoformat(),
+            "type": "dim",
+            "entity_id": new.entity_id,
+            "name": new.attributes.get("friendly_name", new.entity_id),
+            "state": "on",
+            "from": before,
+            "to": after,
+            "source": self._ha_source(new.context) or {"kind": "external"},
+        }
+        if room := self._room_name(output):
+            entry["room"] = room
+        self._dims[new.entity_id] = (now, entry)
+        self._add(entry)
+
+    def _add(self, entry: dict[str, Any]) -> None:
         self.entries.append(entry)
-        del self.entries[:-MAX_ENTRIES]
+        cutoff = (dt_util.now() - RETENTION).isoformat()
+        drop = 0
+        while drop < len(self.entries) and _utc(self.entries[drop]["t"]) < _utc(cutoff):
+            drop += 1
+        del self.entries[: max(drop, len(self.entries) - MAX_ENTRIES)]
+        self._save()
+
+    def _save(self) -> None:
         if self._can_save:
             self._store.async_delay_save(lambda: {"entries": self.entries}, 10)
 
-    def _plejd_address(self, entity_id: str, domain: str) -> int | None:
-        """The mesh address of a Plejd output entity; None for anything that isn't one."""
+    def _room_name(self, output) -> str | None:
+        """The Plejd room an output is in, by name (every room's title is kept in the entry's room_names)."""
+        room_id = getattr(output, "room_id", None)
+        entry = self._entry
+        if not room_id:
+            return None
+        names = {r.room_id: r.name for r in getattr(entry.runtime_data, "rooms", [])}
+        names.update((getattr(entry, "data", None) or {}).get(CONF_ROOM_NAMES) or {})
+        return names.get(room_id)
+
+    def _maybe_alert(self, entry: dict[str, Any]) -> None:
+        """Night watch: notify about a light going on (or an alarm change) inside the configured window."""
+        cfg = self.alerts
+        if not cfg.get("enabled"):
+            return
+        if entry["type"] == "alarm" and not cfg.get("alarm"):
+            return
+        if entry["type"] == "state" and entry["state"] != "on":
+            return
+        if entry["source"]["kind"] in (cfg.get("ignore") or []):
+            return
+        local = dt_util.as_local(datetime.fromisoformat(entry["t"]))
+        if not _in_window(local.strftime("%H:%M"), cfg.get("start", "23:00"), cfg.get("end", "06:00")):
+            return
+        room = f" ({entry['room']})" if entry.get("room") else ""
+        what = "turned on" if entry["type"] == "state" else f"alarm: {entry['state'].replace('_', ' ')}"
+        message = f"{entry['name']}{room} {what} at {local:%H:%M} — {describe_source(entry['source'])}"
+        title = "Plejd night watch"
+        for target in cfg.get("targets") or []:
+            self.hass.async_create_task(
+                self.hass.services.async_call("notify", target, {"title": title, "message": message})
+            )
+        if cfg.get("persistent"):
+            self.hass.async_create_task(
+                self.hass.services.async_call("persistent_notification", "create", {"title": title, "message": message})
+            )
+
+    def _plejd_output(self, entity_id: str, domain: str):
+        """The Plejd output (cloud device) behind an entity; None for anything that isn't one."""
         if domain not in _TRACKED_PLEJD_DOMAINS:
             return None
         reg = er.async_get(self.hass).async_get(entity_id)
@@ -169,7 +281,7 @@ class PlejdActivityLog:
         for device in coordinator.devices:
             uid = device.device_id if device.output_index == 0 else f"{device.device_id}_{device.output_index}"
             if uid == reg.unique_id and device.address is not None:
-                return device.address
+                return device
         return None  # e.g. a room-group light, which only mirrors its member lights
 
     def _targeted_room_members(self, service_data: dict[str, Any]) -> list[int]:
@@ -269,18 +381,86 @@ class PlejdActivityLog:
             return {"kind": "alarm", "name": changed_by} if changed_by else {"kind": "external"}
         coordinator = getattr(self._entry, "runtime_data", None)
         origin = coordinator.toggle_origin(address, state=state.state) if coordinator is not None else None
+        if origin and origin["kind"] == "plejd_scene" and (schedule := self._schedule_for(origin["index"], state)):
+            return {"kind": "plejd_schedule", "name": schedule}
+        if origin:
+            origin = {k: v for k, v in origin.items() if k != "index"}
         return origin or {"kind": "external"}
+
+    def _schedule_for(self, scene_index: int, state) -> str | None:
+        """The on-device schedule that runs this scene at about this time, if any."""
+        entry = self._entry
+        local = dt_util.as_local(state.last_changed)
+        for schedule in (getattr(entry, "options", None) or {}).get(CONF_SCHEDULES) or []:
+            if schedule.get("scene") != scene_index or local.weekday() not in schedule.get("days", []):
+                continue
+            hour, minute, *_ = (int(p) for p in str(schedule.get("time", "")).split(":") + ["0"])
+            planned = local.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            if abs(local - planned) <= _SCHEDULE_SLACK:
+                return schedule.get("name")
+        return None
+
+
+def _pct(state) -> int | None:
+    brightness = state.attributes.get("brightness")
+    return round(brightness / 255 * 100) if isinstance(brightness, int | float) else None
+
+
+def _utc(iso: str) -> datetime:
+    return datetime.fromisoformat(iso).astimezone(UTC)
+
+
+def _in_window(hhmm: str, start: str, end: str) -> bool:
+    """Whether a time of day falls in [start, end); a window like 23:00-06:00 crosses midnight."""
+    return start <= hhmm < end if start <= end else (hhmm >= start or hhmm < end)
+
+
+_SOURCE_TEXT = {
+    "user": "{name} via Home Assistant",
+    "automation": "Automation: {name}",
+    "script": "Script: {name}",
+    "plejd_room": "Plejd app (whole room)",
+    "plejd_device": "Plejd app, Google Home or the light's own switch",
+    "plejd_input": "Switch or remote: {name} (likely)",
+    "plejd_scene": "Plejd scene: {name}",
+    "plejd_schedule": "Plejd schedule: {name}",
+    "plejd_motion": "Plejd motion sensor: {name} (likely)",
+    "alarm": "Changed by {name}",
+}
+
+
+def describe_source(source: dict[str, Any]) -> str:
+    """A source as plain English (notifications; the dashboard has its own translations)."""
+    return _SOURCE_TEXT.get(source.get("kind", ""), "Outside Home Assistant").format(name=source.get("name", ""))
 
 
 @websocket_api.require_admin
-@websocket_api.websocket_command({vol.Required("type"): "plejd/activity/list", vol.Optional("limit", default=300): int})
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "plejd/activity/list",
+        vol.Optional("start"): str,  # ISO times; omitted = the whole kept log
+        vol.Optional("end"): str,
+        vol.Optional("limit", default=5000): vol.All(int, vol.Range(min=1, max=MAX_ENTRIES)),
+    }
+)
 @websocket_api.async_response
 async def ws_list(hass: HomeAssistant, connection, msg) -> None:
     log: PlejdActivityLog | None = hass.data.get(DATA_ACTIVITY)
     if log is None:
         connection.send_error(msg["id"], "not_loaded", "Plejd is not loaded")
         return
-    entries = log.entries[-max(1, min(msg["limit"], MAX_ENTRIES)) :][::-1]  # newest first
+    try:
+        start = _utc(msg["start"]) if msg.get("start") else None
+        end = _utc(msg["end"]) if msg.get("end") else None
+    except ValueError:
+        connection.send_error(msg["id"], "invalid_time", "start/end must be ISO times")
+        return
+    picked = [
+        e
+        for e in reversed(log.entries)
+        if (start is None or _utc(e["t"]) >= start) and (end is None or _utc(e["t"]) < end)
+    ]
+    entries = picked[: msg["limit"]]  # newest first
     names: dict[str, str] = {}
     for entry in entries:
         user_id = entry["source"].get("user_id")
@@ -295,15 +475,67 @@ async def ws_list(hass: HomeAssistant, connection, msg) -> None:
                 if e["source"].get("user_id")
                 else e
                 for e in entries
-            ]
+            ],
+            "more": len(picked) > len(entries),
+            "oldest": log.entries[0]["t"] if log.entries else None,
         },
     )
 
 
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): "plejd/activity/alerts/get"})
+@websocket_api.async_response
+async def ws_alerts_get(hass: HomeAssistant, connection, msg) -> None:
+    log: PlejdActivityLog | None = hass.data.get(DATA_ACTIVITY)
+    if log is None:
+        connection.send_error(msg["id"], "not_loaded", "Plejd is not loaded")
+        return
+    # notify.persistent_notification duplicates the "persistent" option, and notify.send_message needs a
+    # notify entity to target, so neither works as a plain target here.
+    unusable = {"persistent_notification", "send_message"}
+    services = sorted(svc for svc in hass.services.async_services().get("notify", {}) if svc not in unusable)
+    connection.send_result(msg["id"], {"alerts": log.alerts, "notify_services": services})
+
+
+_HHMM = vol.Match(r"^([01]\d|2[0-3]):[0-5]\d$")
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "plejd/activity/alerts/set",
+        vol.Required("alerts"): {
+            vol.Required("enabled"): bool,
+            vol.Required("start"): _HHMM,
+            vol.Required("end"): _HHMM,
+            vol.Required("targets"): [str],
+            vol.Required("persistent"): bool,
+            vol.Required("ignore"): [str],
+            vol.Required("alarm"): bool,
+        },
+    }
+)
+@websocket_api.async_response
+async def ws_alerts_set(hass: HomeAssistant, connection, msg) -> None:
+    log: PlejdActivityLog | None = hass.data.get(DATA_ACTIVITY)
+    if log is None:
+        connection.send_error(msg["id"], "not_loaded", "Plejd is not loaded")
+        return
+    known = set(hass.services.async_services().get("notify", {}))
+    if unknown := [t for t in msg["alerts"]["targets"] if t not in known]:
+        connection.send_error(msg["id"], "unknown_target", f"Unknown notify service: {', '.join(unknown)}")
+        return
+    await log.async_set_alerts(msg["alerts"])
+    connection.send_result(msg["id"], {"alerts": log.alerts})
+
+
 def async_register(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_list)
+    websocket_api.async_register_command(hass, ws_alerts_get)
+    websocket_api.async_register_command(hass, ws_alerts_set)
 
 
 async def async_remove_store(hass: HomeAssistant, entry_id: str) -> None:
-    """Delete a removed Plejd setup's log, so a later setup doesn't inherit it."""
+    """Delete a removed Plejd setup's log and alert settings, so a later setup doesn't inherit them."""
     await Store(hass, 1, f"{_STORE_KEY}.{entry_id}").async_remove()
+    await Store(hass, 1, f"{_ALERT_STORE_KEY}.{entry_id}").async_remove()
