@@ -65,7 +65,7 @@ export default function App({ hass, narrow }: { hass: any; narrow: boolean }) {
           <Scenes {...ctx} /><Climate {...ctx} /><Covers {...ctx} /><Motion {...ctx} /><Health {...ctx} />
         </div>
       )}
-      {tab === "automations" && <div className="grid"><Schedules {...ctx} /><Bindings {...ctx} /></div>}
+      {tab === "automations" && <div className="grid"><Schedules {...ctx} /><AppSchedules {...ctx} /><Bindings {...ctx} /></div>}
       {tab === "log" && <div className="grid"><ActivityLog {...ctx} /></div>}
       {tab === "settings" && <div className="grid"><Settings {...ctx} /><Language lang={lang} setLang={setLang} /><AddDevice {...ctx} /></div>}
     </div>
@@ -613,6 +613,50 @@ function Health({ hass, reg }: RegCtx) {
 }
 
 // ── automations ─────────────────────────────────────────────────────────────
+
+type AppSchedule = {
+  schedule_id: string; scene_name: string | null; devices: string[]; scheduled_days: number[]; fade_time: number;
+  activated: boolean; sunset_offset: number; sunrise_offset: number; from_app: boolean;
+  night_reduction: { start_time: string | null; end_time: string | null } | null;
+};
+
+const offset = (min: number) => (min ? `${min > 0 ? "+" : "−"}${Math.abs(min)} min` : "±0");
+
+// Read-only for now: editing an app-made schedule from HA needs its trigger semantics confirmed first (#120).
+function AppSchedules({ hass }: Ctx) {
+  const t = useT();
+  const [list, setList] = useState<AppSchedule[] | null>(null);
+  const [error, setError] = useState("");
+  const load = () => {
+    setError("");
+    hass.callWS({ type: "plejd/schedules/cloud" })
+      .then((r: any) => setList(r.schedules || []))
+      .catch((e: any) => setError(fmt(t.app_schedules_failed, { error: errMsg(e) })));
+  };
+  useEffect(load, []);
+  return (
+    <Card title={t.app_schedules} wide>
+      <p className="lead">{t.app_schedules_lead}</p>
+      {error ? <><p className="error">{error}</p><div className="actions"><button className="btn" onClick={load}>{t.retry}</button></div></>
+        : list === null ? <Empty text={t.loading} />
+        : !list.length ? <Empty text={t.no_app_schedules} />
+        : list.map((s) => (
+          <div key={s.schedule_id} className="row line">
+            <div className="grow">
+              <div>{s.scene_name || s.devices.join(", ") || s.schedule_id}{!s.from_app && <span className="muted"> · {t.made_here}</span>}{!s.activated && <span className="muted"> · {t.paused}</span>}</div>
+              <div className="muted">
+                {s.scheduled_days.length === 7 ? "" : `${s.scheduled_days.map((d) => t.weekdays[d]).join(", ")} · `}
+                {fmt(t.astro_window, { a: offset(s.sunset_offset), b: offset(s.sunrise_offset) })}
+                {s.night_reduction?.start_time && ` · ${fmt(t.night_window, { a: s.night_reduction.start_time, b: s.night_reduction.end_time ?? "?" })}`}
+                {s.fade_time ? ` · ${fmt(t.fade_s, { n: s.fade_time })}` : ""}
+              </div>
+              {s.devices.length > 0 && <div className="muted">{s.devices.join(", ")}</div>}
+            </div>
+          </div>
+        ))}
+    </Card>
+  );
+}
 
 type Schedule = { id: number; name: string; days: number[]; time: string; scene: number; fade: number };
 const EMPTY_SCHEDULE = { name: "", days: [] as number[], time: "07:00", scene: "", fade: "0" };

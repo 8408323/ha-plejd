@@ -12,8 +12,11 @@ from typing import Any
 
 from homeassistant.components.diagnostics import async_redact_data
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
+from .cloud import PlejdCloudError, async_get_site_raw, async_login
 from .const import (
     CONF_CLOUD_SCHEDULES,
     CONF_CRYPTO_KEY,
@@ -27,6 +30,10 @@ from .const import (
     CONF_SITE_ID,
 )
 from .coordinator import PlejdCoordinator
+
+# Distinct shapes kept per list: the same key holding a different structure (e.g. a schedule's
+# astro vs fixed-time trigger) is exactly what the dump is for, so don't keep only the first.
+_SHAPE_VARIANTS = 4
 
 # Keys to redact wherever they appear (entry data is nested: devices/scenes/inputs/…).
 TO_REDACT = {
@@ -78,4 +85,28 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: ConfigE
             "cloud_schedules": len(entry.data.get(CONF_CLOUD_SCHEDULES) or []),
         },
         "models": sorted({device.model for device in coordinator.devices}),
+        "site_structure": await _site_structure(hass, entry),
     }
+
+
+def site_shape(value: Any) -> Any:
+    """Keys and value types only, never values: shows the cloud schema without any secret or PII."""
+    if isinstance(value, dict):
+        return {key: site_shape(item) for key, item in value.items()}
+    if isinstance(value, list):
+        variants: list[Any] = []
+        for item in value:
+            shape = site_shape(item)
+            if shape not in variants and len(variants) < _SHAPE_VARIANTS:
+                variants.append(shape)
+        return {"<list>": len(value), "items": variants}
+    return type(value).__name__
+
+
+async def _site_structure(hass: HomeAssistant, entry: ConfigEntry) -> Any:
+    session = async_get_clientsession(hass)
+    try:
+        token = await async_login(session, entry.data[CONF_EMAIL], entry.data[CONF_PASSWORD])
+        return site_shape(await async_get_site_raw(session, token, entry.data[CONF_SITE_ID]))
+    except PlejdCloudError as err:
+        return {"error": type(err).__name__}
