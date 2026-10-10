@@ -155,6 +155,22 @@ async def test_motion_sensor_room_comes_from_its_device_entry_or_its_own_record(
             assert [m.room_id for m in (await async_get_site(s, "tok", "S1")).motion] == ["r9"]
 
 
+def test_parse_site_scene_outputs_come_from_scene_steps():
+    steps = [
+        {"sceneId": "sc1", "deviceId": "d1", "output": 0, "dirtyRemoved": False},
+        {"sceneId": "sc1", "deviceId": "d1", "output": 0},  # a duplicate step
+        {"sceneId": "sc1", "deviceId": "d2", "output": 0, "dirtyRemoved": True},  # removed in the app
+        {"sceneId": "sc1", "deviceId": "gone", "output": 0},  # not an output on the site
+        {"sceneId": None, "deviceId": "d2", "output": 0},
+        "not-a-dict",
+    ]
+    assert [s.output_addresses for s in parse_site({**_SITE, "sceneSteps": steps}).scenes] == [[11]]
+    # A scene with no steps sets nothing; a missing or malformed list leaves membership unknown.
+    assert [s.output_addresses for s in parse_site({**_SITE, "sceneSteps": []}).scenes] == [[]]
+    assert [s.output_addresses for s in parse_site(_SITE).scenes] == [None]
+    assert [s.output_addresses for s in parse_site({**_SITE, "sceneSteps": {"x": 1}}).scenes] == [None]
+
+
 async def test_call_function_error_status_raises():
     with aioresponses() as m:
         m.post(_SITE_LIST, status=500, payload={"error": "boom"})

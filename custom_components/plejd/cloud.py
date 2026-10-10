@@ -121,6 +121,8 @@ class PlejdCloudScene:
     scene_id: str
     name: str
     index: int
+    # Mesh addresses of the outputs the scene sets; None when unknown (cached before this was parsed).
+    output_addresses: list[int] | None = None
 
 
 @dataclass
@@ -842,6 +844,7 @@ def parse_site(site: dict) -> PlejdCloudSite:
     # devices at all, since each of those must have a hardware entry here.
     plejd_devices = _checked_list("plejdDevices", "motion", "devices", id_field="deviceId", required=has_devices)
     raw_scenes = _checked_list("scenes", "scenes", id_field="sceneId")
+    raw_scene_steps = site.get("sceneSteps")
     scene_index = _checked_dict("sceneIndex", "scenes")
     # These two carry every mesh address there is: outputAddress is what control commands
     # target, deviceAddress is the physical-device fallback (and what fault polling and the
@@ -1007,8 +1010,25 @@ def parse_site(site: dict) -> PlejdCloudSite:
             faceplate_id=str(faceplate) if faceplate is not None else None,
         )
 
+    # sceneSteps (top level, one per scene output) say which outputs each scene sets. Left unknown (None)
+    # when the list is missing or malformed, so a scene is never wrongly ruled out as a change's origin.
+    scene_outputs: dict[str, list[int]] | None = None
+    if isinstance(raw_scene_steps, list):
+        address_by_output = {(d.device_id, d.output_index): d.address for d in devices if d.address is not None}
+        scene_outputs = {}
+        for step in raw_scene_steps:
+            if not isinstance(step, dict) or step.get("dirtyRemoved") is True:
+                continue  # untrusted cloud data, or a step the app has removed
+            address = address_by_output.get((step.get("deviceId"), step.get("output")))
+            if isinstance(step.get("sceneId"), str) and address is not None:
+                scene_outputs.setdefault(step["sceneId"], []).append(address)
     scenes = [
-        PlejdCloudScene(scene_id=sc["sceneId"], name=sc.get("title") or sc["sceneId"], index=int(idx))
+        PlejdCloudScene(
+            scene_id=sc["sceneId"],
+            name=sc.get("title") or sc["sceneId"],
+            index=int(idx),
+            output_addresses=None if scene_outputs is None else sorted(set(scene_outputs.get(sc["sceneId"], []))),
+        )
         for sc in raw_scenes
         if isinstance(sc, dict)
         and isinstance(sc.get("sceneId"), str)
