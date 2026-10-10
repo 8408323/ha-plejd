@@ -24359,25 +24359,30 @@ function yu({ hass: e }) {
 		on: !1,
 		from: "23:00",
 		to: "06:00"
-	}), C = Object.values(e.states).filter((t) => t.entity_id.startsWith("alarm_control_panel.") || ["light", "switch"].some((e) => t.entity_id.startsWith(`${e}.`)) && Hl(e, t)).map((e) => `${e.entity_id}:${e.state}:${e.attributes.brightness ?? ""}`).join("|"), w = (() => {
+	}), [, C] = (0, l.useState)(0);
+	(0, l.useEffect)(() => {
+		let e = window.setInterval(() => C((e) => e + 1), 6e4);
+		return () => clearInterval(e);
+	}, []);
+	let w = Object.values(e.states).filter((t) => t.entity_id.startsWith("alarm_control_panel.") || ["light", "switch"].some((e) => t.entity_id.startsWith(`${e}.`)) && Hl(e, t)).map((e) => `${e.entity_id}:${e.state}:${e.attributes.brightness ?? ""}`).join("|"), T = (() => {
 		let e = c === "24h" ? /* @__PURE__ */ new Date(Date.now() - 864e5) : /* @__PURE__ */ new Date();
 		return c === "today" ? e.setHours(0, 0, 0, 0) : c !== "24h" && e.setDate(e.getDate() - gu[c]), e.setDate(e.getDate() - d), e;
-	})(), T = w.toISOString().slice(0, 13);
+	})(), E = T.toISOString().slice(0, 13);
 	(0, l.useEffect)(() => {
 		let t = !1, n = 0, i = () => e.callWS({
 			type: "plejd/activity/list",
-			start: w.toISOString(),
+			start: T.toISOString(),
 			limit: 5e4
 		}).then((e) => {
-			t || (r(e.entries), a(!!e.oldest && new Date(e.oldest) < w), s(""));
+			t || (r(e.entries), a(!!e.oldest && new Date(e.oldest) < T), s(""));
 		}).catch((e) => {
 			t || (s(zl(e)), n = window.setTimeout(i, 5e3));
 		});
 		return i(), () => {
 			t = !0, clearTimeout(n);
 		};
-	}, [C, T]);
-	let E = t.lang === "nb" ? "nb-NO" : t.lang, D = e.locale?.time_format, O = D === "24" ? { hourCycle: "h23" } : D === "12" ? { hourCycle: "h12" } : {}, k = (e) => {
+	}, [w, E]);
+	let D = t.lang === "nb" ? "nb-NO" : t.lang, O = e.locale?.time_format, k = O === "24" ? { hourCycle: "h23" } : O === "12" ? { hourCycle: "h12" } : {}, A = (e) => {
 		let n = Tl({
 			user: t.src_user,
 			automation: t.src_automation,
@@ -24391,37 +24396,37 @@ function yu({ hass: e }) {
 			plejd_motion: t.src_plejd_motion
 		}[e.kind] ?? t.src_external, { name: e.name ?? "" });
 		return e.trigger ? `${n} · ${Tl(t.log_trigger, { trigger: e.trigger })}` : n;
-	}, A = (e) => {
+	}, j = (e) => {
 		let n = vu(e);
 		return n === "alarm" ? t.alarm_states[e.state] ?? e.state : n === "dim" ? Tl(t.log_dimmed, {
 			from: e.from ?? "?",
 			to: e.to ?? "?"
 		}) : e.state === "on" ? e.brightness == null ? t.state_on : `${t.state_on} · ${e.brightness}%` : e.state === "off" ? t.state_off : e.state;
-	}, j = (e) => {
+	}, ee = (e) => {
 		let n = /* @__PURE__ */ new Date();
 		n.setHours(0, 0, 0, 0);
 		let r = new Date(e);
 		r.setHours(0, 0, 0, 0);
 		let i = Math.round((n.getTime() - r.getTime()) / 864e5);
-		return i === 0 ? t.log_today : i === 1 ? t.log_yesterday : e.toLocaleDateString(E, {
+		return i === 0 ? t.log_today : i === 1 ? t.log_yesterday : e.toLocaleDateString(D, {
 			weekday: "long",
 			day: "numeric",
 			month: "long"
 		});
-	}, ee = (e) => `${String(e.getHours()).padStart(2, "0")}:${String(e.getMinutes()).padStart(2, "0")}`, M = (e) => {
-		let t = ee(e), { from: n, to: r } = x;
+	}, M = (e) => `${String(e.getHours()).padStart(2, "0")}:${String(e.getMinutes()).padStart(2, "0")}`, N = (e) => {
+		let t = M(e), { from: n, to: r } = x;
 		return n <= r ? t >= n && t < r : t >= n || t < r;
-	}, N = n ?? [], P = [...new Set(N.map((e) => e.room).filter(Boolean))].sort(), te = p.trim().toLowerCase(), ne = N.filter((e) => h[vu(e)] && (!_ || _u[_].includes(e.source.kind)) && (!y || e.room === y) && (!x.on || M(new Date(e.t))) && (!te || [
+	}, P = n ?? [], te = [...new Set(P.map((e) => e.room).filter(Boolean))].sort(), ne = p.trim().toLowerCase(), re = P.filter((e) => new Date(e.t) >= T && h[vu(e)] && (!_ || _u[_].includes(e.source.kind)) && (!y || e.room === y) && (!x.on || N(new Date(e.t))) && (!ne || [
 		e.name,
 		e.room,
-		k(e.source),
-		A(e)
-	].some((e) => e?.toLowerCase().includes(te)))), re = [];
-	for (let e of ne) {
-		let t = j(new Date(e.t));
-		re.at(-1)?.[0] !== t && re.push([t, []]), re.at(-1)[1].push(e);
+		A(e.source),
+		j(e)
+	].some((e) => e?.toLowerCase().includes(ne)))), ie = [];
+	for (let e of re) {
+		let t = ee(new Date(e.t));
+		ie.at(-1)?.[0] !== t && ie.push([t, []]), ie.at(-1)[1].push(e);
 	}
-	let ie = {
+	let ae = {
 		ha: t.srcgrp_ha,
 		auto: t.srcgrp_auto,
 		app: t.srcgrp_app,
@@ -24430,12 +24435,12 @@ function yu({ hass: e }) {
 		scene: t.srcgrp_scene,
 		alarm: t.srcgrp_alarm,
 		ext: t.srcgrp_ext
-	}, ae = {
+	}, oe = {
 		today: t.range_today,
 		"24h": t.range_24h,
 		"7d": t.range_7d,
 		"30d": t.range_30d
-	}, oe = Math.max(0, 30 - gu[c]);
+	}, se = Math.max(0, 30 - gu[c]);
 	return /* @__PURE__ */ (0, $.jsxs)($.Fragment, { children: [/* @__PURE__ */ (0, $.jsxs)(ql, {
 		title: t.log_title,
 		wide: !0,
@@ -24466,7 +24471,7 @@ function yu({ hass: e }) {
 							onClick: () => {
 								u(e), f(0);
 							},
-							children: ae[e]
+							children: oe[e]
 						}, e))
 					}),
 					/* @__PURE__ */ (0, $.jsx)("div", {
@@ -24496,7 +24501,7 @@ function yu({ hass: e }) {
 								children: t.log_any
 							}), Object.keys(_u).map((e) => /* @__PURE__ */ (0, $.jsx)("option", {
 								value: e,
-								children: ie[e]
+								children: ae[e]
 							}, e))]
 						})]
 					}),
@@ -24508,7 +24513,7 @@ function yu({ hass: e }) {
 							children: [/* @__PURE__ */ (0, $.jsx)("option", {
 								value: "",
 								children: t.log_any
-							}), P.map((e) => /* @__PURE__ */ (0, $.jsx)("option", {
+							}), te.map((e) => /* @__PURE__ */ (0, $.jsx)("option", {
 								value: e,
 								children: e
 							}, e))]
@@ -24552,26 +24557,26 @@ function yu({ hass: e }) {
 			}),
 			/* @__PURE__ */ (0, $.jsx)("p", {
 				className: "muted",
-				children: Tl(t.log_count, { n: ne.length })
+				children: Tl(t.log_count, { n: re.length })
 			}),
 			o && /* @__PURE__ */ (0, $.jsx)("p", {
 				className: "error",
 				children: o
 			}),
 			n === null && !o && /* @__PURE__ */ (0, $.jsx)(Jl, { text: t.loading }),
-			n !== null && !ne.length && /* @__PURE__ */ (0, $.jsx)(Jl, { text: t.log_empty }),
-			re.map(([e, t]) => /* @__PURE__ */ (0, $.jsxs)("div", {
+			n !== null && !re.length && /* @__PURE__ */ (0, $.jsx)(Jl, { text: t.log_empty }),
+			ie.map(([e, t]) => /* @__PURE__ */ (0, $.jsxs)("div", {
 				className: "log-day",
 				children: [/* @__PURE__ */ (0, $.jsx)("h3", { children: e }), t.map((e, t) => /* @__PURE__ */ (0, $.jsxs)("div", {
 					className: `row line log-row log-${vu(e)}`,
 					children: [
 						/* @__PURE__ */ (0, $.jsx)("span", {
 							className: "log-time",
-							children: new Date(e.t).toLocaleTimeString(E, {
+							children: new Date(e.t).toLocaleTimeString(D, {
 								hour: "2-digit",
 								minute: "2-digit",
 								second: "2-digit",
-								...O
+								...k
 							})
 						}),
 						/* @__PURE__ */ (0, $.jsx)("span", { className: `dot ${e.state === "on" || e.state.startsWith("armed") || e.state === "triggered" ? "on" : ""}` }),
@@ -24584,17 +24589,17 @@ function yu({ hass: e }) {
 									children: [" · ", e.room]
 								}),
 								" · ",
-								A(e)
+								j(e)
 							]
 						}),
 						/* @__PURE__ */ (0, $.jsx)("span", {
 							className: `muted log-src src-${e.source.kind}`,
-							children: k(e.source)
+							children: A(e.source)
 						})
 					]
 				}, `${e.t}-${e.entity_id}-${t}`))]
 			}, e)),
-			i && d < oe && /* @__PURE__ */ (0, $.jsx)("div", {
+			i && d < se && /* @__PURE__ */ (0, $.jsx)("div", {
 				className: "actions",
 				children: /* @__PURE__ */ (0, $.jsx)("button", {
 					className: "btn ghost",

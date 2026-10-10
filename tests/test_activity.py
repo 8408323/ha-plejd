@@ -397,13 +397,20 @@ async def test_room_command_targeted_by_device_area_or_label_is_credited():
     assert _member(hass, "off", "on") == {"kind": "external"}
 
 
+async def test_room_start_dim_from_ha_is_credited_either_way():
+    hass = await _log_hass()
+    for old, new in (("off", "on"), ("on", "off")):
+        _room_call(hass, _ctx(user_id="u1"), domain="plejd", service="start_dim", entity_id="light.room_kontor")
+        assert _member(hass, old, new) == {"kind": "user", "user_id": "u1"}
+
+
 async def test_room_calls_that_are_not_credited():
     hass = await _log_hass()
     _room_call(hass, _ctx(), entity_id="light.room_kontor")  # no HA source
     _room_call(hass, _ctx(user_id="u1"), entity_id=["light.kontor", "light.unregistered"])  # not a room
     _room_call(hass, _ctx(user_id="u1"), domain="switch", entity_id="light.room_kontor")  # not a light call
     _room_call(hass, _ctx(user_id="u1"), area_id="elsewhere")  # targets something else
-    _room_call(hass, _ctx(user_id="u1"), service="stop_dim", entity_id="light.room_kontor")  # switches nothing
+    _room_call(hass, _ctx(user_id="u1"), domain="plejd", service="stop_dim", entity_id="light.room_kontor")
     assert _member(hass, "off", "on") == {"kind": "external"}
     hass.entity_registry._entities.pop("light.room_kontor")  # room light not registered
     _room_call(hass, _ctx(user_id="u1"), device_id="dev_room")

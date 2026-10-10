@@ -1081,6 +1081,12 @@ function ActivityLog({ hass }: Ctx) {
   const [group, setGroup] = useState("");
   const [room, setRoom] = useState("");
   const [between, setBetween] = useState({ on: false, from: "23:00", to: "06:00" });
+  // The 24h/today cutoffs move with the clock, so re-render each minute even when no light changes.
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const id = window.setInterval(() => setTick((n) => n + 1), 60e3);
+    return () => clearInterval(id);
+  }, []);
 
   // Refresh whenever a tracked entity changes (on/off, brightness, alarm); the integration has logged it by then.
   const key = (Object.values(hass.states) as St[])
@@ -1141,7 +1147,8 @@ function ActivityLog({ hass }: Ctx) {
   const rooms = [...new Set(all.map((e) => e.room).filter(Boolean) as string[])].sort();
   const q = query.trim().toLowerCase();
   const shown = all.filter((e) =>
-    types[typeOf(e)]
+    new Date(e.t) >= start
+    && types[typeOf(e)]
     && (!group || SOURCE_GROUPS[group].includes(e.source.kind))
     && (!room || e.room === room)
     && (!between.on || inWindow(new Date(e.t)))

@@ -969,7 +969,13 @@ def parse_site(site: dict) -> PlejdCloudSite:
             addr = device_address.get(device_id)
             if addr is not None:
                 room = next(
-                    (i.get("roomId") for i in raw_devices if isinstance(i, dict) and i.get("deviceId") == device_id),
+                    (
+                        r
+                        for i in raw_devices
+                        if isinstance(i, dict)
+                        and i.get("deviceId") == device_id
+                        and isinstance(r := i.get("roomId"), str)
+                    ),
                     phys.get("roomId"),
                 )
                 motion.append(

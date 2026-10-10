@@ -159,16 +159,15 @@ class PlejdActivityLog:
                     if device.address is not None and device.category == CATEGORY_LIGHT:  # all_off's own filter
                         self._room_commands[device.address] = (now, source, "off")
             return
-        if event.data.get("domain") != "light":
+        # Only these switch or ramp a light: turn_on/turn_off say which way; toggle and plejd.start_dim (a ramp
+        # that dims an on room or brings an off one up) can go either way. stop_dim and the rest change nothing.
+        service = (event.data.get("domain"), event.data.get("service"))
+        if service not in (("light", "turn_on"), ("light", "turn_off"), ("light", "toggle"), (DOMAIN, "start_dim")):
             return
         source = self._ha_source(event.context)
         if source is None:
             return
-        # Only these switch a light: turn_on/turn_off say which way, toggle can go either way. Anything else
-        # (start_dim/stop_dim, ...) causes no on/off transition and must not be credited with one.
-        service = event.data.get("service")
-        if service not in ("turn_on", "turn_off", "toggle"):
-            return
+        service = service[1]
         expected = {"turn_on": "on", "turn_off": "off"}.get(service)
         now = time.monotonic()
         for address in self._targeted_room_members(event.data.get("service_data") or {}):
