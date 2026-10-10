@@ -981,7 +981,7 @@ def parse_site(site: dict) -> PlejdCloudSite:
                 motion.append(
                     PlejdCloudMotion(
                         device_id=device_id,
-                        name="Motion sensor",
+                        name=name_by_device.get(device_id) or "Motion sensor",
                         address=int(addr),
                         room_id=room if isinstance(room, str) else None,
                     )

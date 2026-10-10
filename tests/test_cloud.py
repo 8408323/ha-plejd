@@ -146,7 +146,8 @@ async def test_motion_sensor_room_comes_from_its_device_entry_or_its_own_record(
     with aioresponses() as m:
         m.post(_SITE_BY_ID, payload={"result": [site_raw]})
         async with aiohttp.ClientSession() as s:
-            assert [m.room_id for m in (await async_get_site(s, "tok", "S1")).motion] == ["r2"]
+            site = await async_get_site(s, "tok", "S1")
+            assert [(m.room_id, m.name) for m in site.motion] == [("r2", "Hall motion")]  # its title, not generic
     site_raw["devices"][-1]["roomId"] = None  # its device entry lacks a room: its own record still has one
     with aioresponses() as m:
         m.post(_SITE_BY_ID, payload={"result": [site_raw]})
