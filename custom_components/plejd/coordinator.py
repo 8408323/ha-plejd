@@ -250,8 +250,8 @@ class PlejdCoordinator:
             )
         self._listeners: list[Callable[[], None]] = []
         self._button_listeners: list[Callable[[int, bool], None]] = []
-        # mesh address -> monotonic time of the last on/off (0x0097) command seen for it, for the activity log
-        self._recent_toggles: dict[int, float] = {}
+        # mesh address -> (monotonic time, on/off value) of the last 0x0097 command seen for it, for the activity log
+        self._recent_toggles: dict[int, tuple[float, bool]] = {}
         self._motion_listeners: list[Callable[[MotionEvent], None]] = []
         self._fault_listeners: list[Callable[[int, frozenset[str]], None]] = []
         self._faults: dict[int, frozenset[str]] = {}
@@ -337,7 +337,9 @@ class PlejdCoordinator:
 
         return _remove
 
-    def toggle_origin(self, output_address: int, window: float = 5.0, since: float | None = None) -> dict | None:
+    def toggle_origin(
+        self, output_address: int, window: float = 5.0, since: float | None = None, state: str | None = None
+    ) -> dict | None:
         """Where a just-seen on/off of `output_address` came from, as far as the mesh shows it.
 
         The mesh carries no sender: an on/off (0x0097) addressed to a room's group came from a whole-room
@@ -347,10 +349,17 @@ class PlejdCoordinator:
         """
         now = time.monotonic()
 
-        def seen(address: int) -> float | None:
-            at = self._recent_toggles.get(address)
-            if at is None or now - at > window or (since is not None and at <= since):
+        def seen(address: int, match_state: bool = True) -> float | None:
+            hit = self._recent_toggles.get(address)
+            if hit is None:
+                return None
+            at, value = hit
+            if now - at > window or (since is not None and at <= since):
                 return None  # too old, or (with since) not newer than the command it would compete with
+            # An on/off sent to a room or to the output carries the new state: one asking for the other state
+            # can't explain this change. (A separate remote's press/release doesn't, so it isn't checked.)
+            if match_state and state in ("on", "off") and value != (state == "on"):
+                return None
             return at
 
         # Every command that could explain this change, newest first: a later command overrides an earlier one.
@@ -364,7 +373,7 @@ class PlejdCoordinator:
         # drives, so this is a best guess (and it only wins when it is the newest command).
         own_device = next((d.device_id for d in self.devices if d.address == output_address), None)
         for button in self.inputs:
-            if button.device_id != own_device and (at := seen(button.address)) is not None:
+            if button.device_id != own_device and (at := seen(button.address, match_state=False)) is not None:
                 candidates.append((at, {"kind": "plejd_input", "name": button.name}))
         return max(candidates, key=lambda c: c[0])[1] if candidates else None
 
@@ -387,7 +396,7 @@ class PlejdCoordinator:
                 update()
         elif command.command == CMD_INPUT_BUTTON:
             if command.data[:1] in (b"\x00", b"\x01"):  # a malformed frame mustn't be credited with a change
-                self._recent_toggles[command.address] = time.monotonic()
+                self._recent_toggles[command.address] = (time.monotonic(), command.data[0] == 1)
             pressed = bool(command.data and command.data[0])
             for cb in list(self._button_listeners):
                 cb(command.address, pressed)

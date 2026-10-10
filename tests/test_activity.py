@@ -74,7 +74,7 @@ def _hass(origin=None, mesh_after=None):
             types.SimpleNamespace(device_id="d3", output_index=0, address=43, category="relay"),
         ],
         rooms=[types.SimpleNamespace(room_id="r1", member_addresses=[42])],
-        toggle_origin=lambda address, since=None: origin if since is None else mesh_after.get(since),
+        toggle_origin=lambda address, since=None, state=None: origin if since is None else mesh_after.get(since),
     )
     users = {"u1": types.SimpleNamespace(name="Jonathan")}
 
@@ -493,3 +493,21 @@ async def test_a_waiting_automation_keeps_its_name_across_a_reload():
         _change(_state("light.kontor", "off"), _state("light.kontor", "on", _ctx("run")))
     )
     assert hass.data[activity.DATA_ACTIVITY].entries[-1]["source"]["name"] == "Kväll"
+
+
+async def test_a_room_command_after_the_members_own_call_wins(monkeypatch):
+    clock = [100.0]
+    monkeypatch.setattr(activity.time, "monotonic", lambda: clock[0])
+    hass = await _log_hass()
+    fire = hass.bus.listeners
+    fire["call_service"](  # a direct command to the member (no-op, but its context stays on the entity)...
+        types.SimpleNamespace(
+            context=_ctx("direct", user_id="u1"), data={"domain": "light", "service": "turn_off", "service_data": {}}
+        )
+    )
+    clock[0] = 102.0
+    _room_call(hass, _ctx("room", user_id="u2"), entity_id="light.room_kontor")  # ...then u2 switches the room
+    fire["state_changed"](
+        _change(_state("light.kontor", "off"), _state("light.kontor", "on", _ctx("direct", user_id="u1")))
+    )
+    assert hass.data[activity.DATA_ACTIVITY].entries[-1]["source"] == {"kind": "user", "user_id": "u2"}

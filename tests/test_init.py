@@ -1602,6 +1602,19 @@ async def test_setup_survives_activity_log_load_failure(monkeypatch):
     assert hass.data[activity.DATA_ACTIVITY].entries == []  # starts empty, still listening
 
 
+async def test_remove_entry_keeps_cleaning_up_when_the_log_cannot_be_deleted(monkeypatch):
+    from plejd import activity
+
+    async def _denied(hass, entry_id):
+        raise PermissionError("read-only")
+
+    monkeypatch.setattr(activity, "async_remove_store", _denied)
+    cleared = []
+    monkeypatch.setattr(plejd, "async_clear_malformed_site_issue", lambda hass, entry_id: cleared.append(entry_id))
+    await plejd.async_remove_entry(_hass(), _entry())
+    assert cleared  # the rest of the removal cleanup still ran
+
+
 async def test_remove_entry_clears_the_persistent_repair_issue():
     # The malformed-cloud issue is persistent, and its only other clear paths (a healthy
     # poll, a successful reconfigure) are unreachable once the entry is gone - so without

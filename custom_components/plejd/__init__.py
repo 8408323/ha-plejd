@@ -511,7 +511,10 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Clean up state that outlives the entry itself."""
-    await activity.async_remove_store(hass, entry.entry_id)
+    try:
+        await activity.async_remove_store(hass, entry.entry_id)
+    except Exception:  # noqa: BLE001 - optional; the cleanup below must still run
+        _LOGGER.warning("Plejd: could not delete the activity log", exc_info=True)
     # The malformed-cloud repair issue is persistent, so nothing else would ever delete it
     # once the entry is gone: its only other clear paths are a healthy poll or a successful
     # reconfigure, neither of which can happen after removal. Without this the user is left

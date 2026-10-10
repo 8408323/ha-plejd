@@ -246,24 +246,29 @@ class PlejdActivityLog:
         # A room command is used up by the member's first transition after it, whichever way that goes (and
         # whatever else explains it): it credits that transition only if it's the one the command asked for.
         cmd = self._room_commands.pop(address, None) if address is not None else None
+        room_cmd = (
+            cmd if cmd and time.monotonic() - cmd[0] <= _ROOM_COMMAND_WINDOW and cmd[2] in (None, state.state) else None
+        )
         ha = self._ha_source(state.context)
+        called = self._calls.get(state.context.id)
+        if room_cmd and ha and called is not None and room_cmd[0] > called:
+            return dict(room_cmd[1])  # a room command sent after the call whose context the member still wears
         if ha:
             # HA keeps a call's context on the entity for a few seconds and reuses it for later writes, so a
             # wall switch or app pressed just after an HA command would wear that command's context. A mesh
             # command seen after the HA call explains this transition better.
             coordinator = getattr(self._entry, "runtime_data", None)
-            called = self._calls.get(state.context.id)
             if address is not None and coordinator is not None and called is not None:
-                if origin := coordinator.toggle_origin(address, since=called):
+                if origin := coordinator.toggle_origin(address, since=called, state=state.state):
                     return origin
             return ha
-        if cmd and time.monotonic() - cmd[0] <= _ROOM_COMMAND_WINDOW and cmd[2] in (None, state.state):
-            return dict(cmd[1])
+        if room_cmd:
+            return dict(room_cmd[1])
         if address is None:  # an alarm panel: its own integration may know who changed it
             changed_by = state.attributes.get("changed_by")
             return {"kind": "alarm", "name": changed_by} if changed_by else {"kind": "external"}
         coordinator = getattr(self._entry, "runtime_data", None)
-        origin = coordinator.toggle_origin(address) if coordinator is not None else None
+        origin = coordinator.toggle_origin(address, state=state.state) if coordinator is not None else None
         return origin or {"kind": "external"}
 
 

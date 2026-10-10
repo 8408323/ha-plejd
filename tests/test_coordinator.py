@@ -3808,6 +3808,24 @@ def test_toggle_origin_since_ignores_commands_from_before(monkeypatch):
     assert c.toggle_origin(5, since=100.0) == {"kind": "plejd_device"}
 
 
+def test_toggle_origin_only_counts_commands_for_the_resulting_state(monkeypatch):
+    from plejd.protocol import Command
+
+    clock = [100.0]
+    c, _ = _origin_coordinator(monkeypatch, clock)
+
+    def onoff(address, value):
+        c._on_event(
+            Command(address=address, command_type=0x10, command=coordinator_mod.CMD_INPUT_BUTTON, data=bytes([value]))
+        )
+
+    onoff(5, 0)  # an "off" straight to the light...
+    assert c.toggle_origin(5, state="on") is None  # ...doesn't explain it turning on
+    assert c.toggle_origin(5, state="off") == {"kind": "plejd_device"}
+    onoff(60, 0)  # a separate remote's release still counts either way (press/release, not on/off)
+    assert c.toggle_origin(5, state="on") == {"kind": "plejd_input", "name": "Hall switch"}
+
+
 def test_toggle_origin_newest_command_wins(monkeypatch):
     clock = [100.0]
     c, toggle = _origin_coordinator(monkeypatch, clock)
