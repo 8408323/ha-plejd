@@ -169,6 +169,21 @@ class PlejdCloudRoomInfo:
 
 
 @dataclass
+class PlejdCloudAstroEvent:
+    """A sunset/sunrise schedule as getSiteById lists it (astroEvents), including ones made in the app."""
+
+    schedule_id: str
+    scene_id: str
+    scheduled_days: list[int]
+    fade_time: int
+    activated: bool
+    sunset_offset: int
+    sunrise_offset: int
+    device_ids: list[str]
+    night_reduction: dict[str, object] | None
+
+
+@dataclass
 class PlejdCloudSite:
     """A site: its crypto key, mesh key, devices, scenes, and any gateway."""
 
@@ -325,9 +340,14 @@ async def async_remove_device(session: ClientSession, token: str, site_id: str, 
     return result is True
 
 
+async def async_get_site_raw(session: ClientSession, token: str, site_id: str) -> object:
+    """getSiteById's unparsed response, for diagnostics."""
+    return await _call_function(session, token, PLEJD_FN_SITE_BY_ID, {"siteId": site_id})
+
+
 async def async_get_site(session: ClientSession, token: str, site_id: str) -> PlejdCloudSite:
     """Fetch one site (crypto key + devices) by id."""
-    result = await _call_function(session, token, PLEJD_FN_SITE_BY_ID, {"siteId": site_id})
+    result = await async_get_site_raw(session, token, site_id)
     if isinstance(result, list):
         if not result:
             raise PlejdCloudError("site not found")
@@ -753,6 +773,49 @@ async def async_set_input_setting(
             "negativeEdgeScene": None,
         },
     )
+
+
+def parse_astro_events(site: dict) -> list[PlejdCloudAstroEvent]:
+    """getSiteById's astroEvents; a record being removed (dirtyRemove) or missing its ids is skipped."""
+    events = []
+    raw = site.get("astroEvents")
+    for ev in raw if isinstance(raw, list) else []:
+        if not isinstance(ev, dict) or ev.get("dirtyRemove") is True:
+            continue
+        schedule_id, scene_id = ev.get("astroEventId"), ev.get("sceneId")
+        if not isinstance(schedule_id, str) or not isinstance(scene_id, str):
+            continue
+        days = ev.get("scheduledDays")
+        targets = ev.get("targetDevices")
+        night = ev.get("nightReduction")
+        weekend = night.get("weekendDeviation") if isinstance(night, dict) else None
+        events.append(
+            PlejdCloudAstroEvent(
+                schedule_id=schedule_id,
+                scene_id=scene_id,
+                scheduled_days=sorted(d for d in days if isinstance(d, int)) if isinstance(days, list) else [],
+                fade_time=ev["fadeTime"] if isinstance(ev.get("fadeTime"), int) else 0,
+                activated=ev.get("activated") is not False,
+                sunset_offset=ev["sunsetOffset"] if isinstance(ev.get("sunsetOffset"), int) else 0,
+                sunrise_offset=ev["sunriseOffset"] if isinstance(ev.get("sunriseOffset"), int) else 0,
+                device_ids=sorted(
+                    {t["deviceId"] for t in targets if isinstance(t, dict) and isinstance(t.get("deviceId"), str)}
+                )
+                if isinstance(targets, list)
+                else [],
+                night_reduction={
+                    "start_time": night.get("startTime"),
+                    "end_time": night.get("endTime"),
+                    "scene_id": night.get("sceneId"),
+                    "weekend_start_time": weekend.get("startTime") if isinstance(weekend, dict) else None,
+                    "weekend_end_time": weekend.get("endTime") if isinstance(weekend, dict) else None,
+                }
+                if isinstance(night, dict)
+                else None,
+            )
+        )
+    events.sort(key=lambda e: e.schedule_id)
+    return events
 
 
 def parse_site(site: dict) -> PlejdCloudSite:

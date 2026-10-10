@@ -4,8 +4,32 @@ from __future__ import annotations
 
 import types
 
-from plejd.cloud import PlejdCloudDevice
-from plejd.diagnostics import async_get_config_entry_diagnostics
+import pytest
+from plejd import diagnostics
+from plejd.cloud import PlejdAuthError, PlejdCloudDevice
+from plejd.diagnostics import async_get_config_entry_diagnostics, site_shape
+
+SITE = {
+    "site": {"title": "Hemma", "siteId": "guid"},
+    "plejdDevices": [
+        {"deviceId": "d1", "firmware": {"version": "1"}},
+        {"deviceId": "d2", "firmware": {"version": "2"}},
+    ],
+    "timeEvents": [{"mode": "astro", "offset": 15}, {"mode": "time", "time": "07:00"}],
+}
+
+
+@pytest.fixture(autouse=True)
+def _cloud(monkeypatch):
+    async def login(session, email, password):
+        return "token"
+
+    async def raw(session, token, site_id):
+        return SITE
+
+    monkeypatch.setattr(diagnostics, "async_get_clientsession", lambda hass: None)
+    monkeypatch.setattr(diagnostics, "async_login", login)
+    monkeypatch.setattr(diagnostics, "async_get_site_raw", raw)
 
 
 def _device(model="DIM-01"):
@@ -150,3 +174,30 @@ async def test_diagnostics_transport_disconnected_label():
     entry.runtime_data.active_transport = None
     diag = await async_get_config_entry_diagnostics(None, entry)
     assert diag["active_transport"] == "disconnected"
+
+
+def test_site_shape_keeps_keys_and_types_but_no_values():
+    shape = site_shape(SITE)
+    assert shape["site"] == {"title": "str", "siteId": "str"}
+    # identical items collapse to one shape; differing ones (the point of the dump) are kept
+    assert shape["plejdDevices"] == {"<list>": 2, "items": [{"deviceId": "str", "firmware": {"version": "str"}}]}
+    assert shape["timeEvents"]["items"] == [{"mode": "str", "offset": "int"}, {"mode": "str", "time": "str"}]
+    assert "Hemma" not in repr(shape) and "07:00" not in repr(shape)
+
+
+def test_site_shape_caps_variants_per_list():
+    assert len(site_shape([{str(i): i} for i in range(10)])["items"]) == 4
+
+
+async def test_diagnostics_include_site_structure():
+    diag = await async_get_config_entry_diagnostics(None, _entry())
+    assert diag["site_structure"]["timeEvents"]["<list>"] == 2
+
+
+async def test_diagnostics_site_structure_reports_cloud_error(monkeypatch):
+    async def fail(session, email, password):
+        raise PlejdAuthError("bad")
+
+    monkeypatch.setattr(diagnostics, "async_login", fail)
+    diag = await async_get_config_entry_diagnostics(None, _entry())
+    assert diag["site_structure"] == {"error": "PlejdAuthError"}
