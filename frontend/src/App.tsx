@@ -10,7 +10,7 @@ type Ctx = { hass: any };
 type Reg = { areas: Record<string, any>; devices: Record<string, any> };
 type RegCtx = Ctx & { reg: Reg };
 
-const TABS = ["devices", "automations", "settings"] as const;
+const TABS = ["devices", "automations", "log", "settings"] as const;
 type Tab = (typeof TABS)[number];
 // Matches DIM_INTERVAL in dim_ramp.py: the same pacing the hold-to-dim ramp uses per tick.
 const DRAG_SEND_INTERVAL_MS = 100;
@@ -42,7 +42,7 @@ export default function App({ hass, narrow }: { hass: any; narrow: boolean }) {
   const [lang, setLangState] = useState<string | null>(() => localStorage.getItem("plejd_lang"));
   const setLang = (x: string | null) => { setLangState(x); x ? localStorage.setItem("plejd_lang", x) : localStorage.removeItem("plejd_lang"); };
   const t = pick(hass.locale?.language ?? hass.language, lang);
-  const tabLabels: Record<Tab, string> = { devices: t.tab_devices, automations: t.tab_automations, settings: t.tab_settings };
+  const tabLabels: Record<Tab, string> = { devices: t.tab_devices, automations: t.tab_automations, log: t.tab_log, settings: t.tab_settings };
   const [fetched, setFetched] = useState<Reg | null>(null);
   useEffect(() => {
     Promise.all([hass.callWS({ type: "config/area_registry/list" }), hass.callWS({ type: "config/device_registry/list" })])
@@ -66,6 +66,7 @@ export default function App({ hass, narrow }: { hass: any; narrow: boolean }) {
         </div>
       )}
       {tab === "automations" && <div className="grid"><Schedules {...ctx} /><Bindings {...ctx} /></div>}
+      {tab === "log" && <div className="grid"><ActivityLog {...ctx} /></div>}
       {tab === "settings" && <div className="grid"><Settings {...ctx} /><Language lang={lang} setLang={setLang} /><AddDevice {...ctx} /></div>}
     </div>
     </TCtx.Provider>
@@ -1051,6 +1052,88 @@ function Language({ lang, setLang }: { lang: string | null; setLang: (x: string 
           {Object.entries(LANGS).map(([code, [, name]]) => <option key={code} value={code}>{name}</option>)}
         </select>
       </label>
+    </Card>
+  );
+}
+
+type LogEntry = { t: string; entity_id: string; name: string; state: string; brightness?: number; source: { kind: string; name?: string } };
+const LOG_FILTERS = ["all", "lights", "alarm"] as const;
+
+function ActivityLog({ hass }: Ctx) {
+  const t = useT();
+  const [entries, setEntries] = useState<LogEntry[] | null>(null);
+  const [error, setError] = useState("");
+  const [filter, setFilter] = useState<(typeof LOG_FILTERS)[number]>("all");
+  // Refresh whenever a tracked entity changes; the integration has logged it by then.
+  const key = (Object.values(hass.states) as St[])
+    .filter((s) => s.entity_id.startsWith("alarm_control_panel.") || (["light", "switch", "cover"].some((d) => s.entity_id.startsWith(`${d}.`)) && isPlejd(hass, s)))
+    .map((s) => `${s.entity_id}:${s.state}`).join("|");
+  useEffect(() => {
+    let cancelled = false;
+    let timer = 0;
+    // Retried like the room loader: during a reload the log isn't back yet (not_loaded) for a moment.
+    const load = () => hass.callWS({ type: "plejd/activity/list", limit: 1000 })
+      .then((r: any) => { if (!cancelled) { setEntries(r.entries); setError(""); } })
+      .catch((e: any) => { if (!cancelled) { setError(errMsg(e)); timer = window.setTimeout(load, 5000); } });
+    load();
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [key]);
+
+  const locale = t.lang === "nb" ? "nb-NO" : t.lang;
+  // HA's own 12/24-hour setting wins over the language's default ("language" = follow the language).
+  const tf = hass.locale?.time_format;
+  const hourCycle = tf === "24" ? { hourCycle: "h23" as const } : tf === "12" ? { hourCycle: "h12" as const } : {};
+  const sourceLabel = (src: LogEntry["source"]) => {
+    const templates: Record<string, string> = {
+      user: t.src_user, automation: t.src_automation, script: t.src_script, plejd_room: t.src_plejd_room,
+      plejd_device: t.src_plejd_device, plejd_input: t.src_plejd_input, alarm: t.src_alarm,
+    };
+    return fmt(templates[src.kind] ?? t.src_external, { name: src.name ?? "" });
+  };
+  const stateLabel = (e: LogEntry) =>
+    e.entity_id.startsWith("alarm_control_panel.") ? (t.alarm_states[e.state] ?? e.state)
+      : e.state === "on" ? (e.brightness != null ? `${t.state_on} · ${e.brightness}%` : t.state_on)
+        : e.state === "off" ? t.state_off : e.state;
+  const dayLabel = (d: Date) => {
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const day = new Date(d); day.setHours(0, 0, 0, 0);
+    const diff = Math.round((today.getTime() - day.getTime()) / 864e5);
+    return diff === 0 ? t.log_today : diff === 1 ? t.log_yesterday : d.toLocaleDateString(locale, { weekday: "long", day: "numeric", month: "long" });
+  };
+
+  const shown = (entries ?? []).filter((e) => filter === "all" || (filter === "alarm") === e.entity_id.startsWith("alarm_control_panel."));
+  const days: [string, LogEntry[]][] = [];
+  for (const e of shown) {
+    const label = dayLabel(new Date(e.t));
+    if (days.at(-1)?.[0] !== label) days.push([label, []]);
+    days.at(-1)![1].push(e);
+  }
+  return (
+    <Card title={t.log_title} wide>
+      <p className="lead">{t.log_lead}</p>
+      <div className="seg" role="radiogroup" aria-label={t.log_title} style={{ marginLeft: 0, marginBottom: 12 }}>
+        {LOG_FILTERS.map((f) => (
+          <button key={f} role="radio" aria-checked={filter === f} className={filter === f ? "on" : ""} onClick={() => setFilter(f)}>
+            {{ all: t.log_all, lights: t.log_lights, alarm: t.log_alarm }[f]}
+          </button>
+        ))}
+      </div>
+      {error && <p className="error">{error}</p>}
+      {entries === null && !error && <Empty text={t.loading} />}
+      {entries !== null && !shown.length && <Empty text={t.log_empty} />}
+      {days.map(([label, list]) => (
+        <div key={label} className="log-day">
+          <h3>{label}</h3>
+          {list.map((e, i) => (
+            <div key={`${e.t}-${e.entity_id}-${i}`} className="row line log-row">
+              <span className="log-time">{new Date(e.t).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit", second: "2-digit", ...hourCycle })}</span>
+              <span className={`dot ${e.state === "on" || e.state.startsWith("armed") || e.state === "triggered" ? "on" : ""}`} />
+              <span className="grow"><strong>{e.name}</strong> · {stateLabel(e)}</span>
+              <span className={`muted log-src src-${e.source.kind}`}>{sourceLabel(e.source)}</span>
+            </div>
+          ))}
+        </div>
+      ))}
     </Card>
   );
 }

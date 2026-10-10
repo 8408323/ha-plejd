@@ -599,6 +599,9 @@ except ImportError:
         async def async_save(self, data):
             self._hass.data[self._key] = data
 
+        def async_delay_save(self, data_func, delay=0):
+            self._hass.data[self._key] = data_func()
+
         async def async_remove(self):
             self._hass.data.pop(self._key, None)
 

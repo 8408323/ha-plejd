@@ -12,7 +12,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry
 
-from . import area_sync, dim_binding_ws, panel, remote_profile_ws, room_ws, schedule_ws
+from . import activity, area_sync, dim_binding_ws, panel, remote_profile_ws, room_ws, schedule_ws
 from .add_device import async_add_device
 from .bindings import PlejdDimBindings
 from .const import (
@@ -431,7 +431,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         schedule_ws.async_register(hass)
         remote_profile_ws.async_register(hass)
         room_ws.async_register(hass)
+        activity.async_register(hass)
         hass.data[_WS_REGISTERED] = True
+    # Activity log for the dashboard's Log tab, started last so a setup that fails earlier never starts it.
+    # Optional like the bindings: a storage error mustn't stop setup. Stopped in async_unload_entry, and only
+    # when the unload succeeds: older HA runs on_unload callbacks even after a refused unload, which would
+    # leave a still-running integration without its log.
+    activity_log = activity.PlejdActivityLog(hass, entry)
+    try:
+        await activity_log.async_load()
+    except Exception:  # noqa: BLE001 - optional; start with an empty log
+        _LOGGER.warning("Plejd: could not load the activity log; starting empty", exc_info=True)
+    activity_log.async_start()
+    hass.data[activity.DATA_ACTIVITY] = activity_log
+
     # Room renames/moves and site syncs all reload the entry without touching entity ids; tell an
     # open dashboard to fetch the rooms again.
     hass.bus.async_fire(room_ws.EVENT_ROOMS_CHANGED, {})
@@ -485,6 +498,11 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
         hass.data.pop(DATA_HOLIDAY_MODE, None)
+        if (activity_log := hass.data.pop(activity.DATA_ACTIVITY, None)) is not None:
+            try:
+                await activity_log.async_stop()
+            except Exception:  # noqa: BLE001 - the log is optional; never leave the mesh connection running over it
+                _LOGGER.warning("Plejd: could not save the activity log on unload", exc_info=True)
         await entry.runtime_data.async_shutdown()
     elif was_holiday_mode_running:
         await holiday_mode.async_start()
@@ -493,6 +511,10 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Clean up state that outlives the entry itself."""
+    try:
+        await activity.async_remove_store(hass, entry.entry_id)
+    except Exception:  # noqa: BLE001 - optional; the cleanup below must still run
+        _LOGGER.warning("Plejd: could not delete the activity log", exc_info=True)
     # The malformed-cloud repair issue is persistent, so nothing else would ever delete it
     # once the entry is gone: its only other clear paths are a healthy poll or a successful
     # reconfigure, neither of which can happen after removal. Without this the user is left

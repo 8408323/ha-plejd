@@ -3746,3 +3746,103 @@ async def test_self_heal_cooldown_survives_a_backwards_wall_clock_step(monkeypat
 
     clock += coordinator_mod.SELF_HEAL_COOLDOWN_SECONDS + 1
     assert c._should_attempt_self_heal() is True  # released purely on elapsed monotonic time
+
+
+# ── toggle_origin (activity-log attribution) ─────────────────────────────────
+
+
+def _origin_coordinator(monkeypatch, clock):
+    from plejd.cloud import PlejdCloudInput, PlejdCloudRoom
+    from plejd.protocol import Command
+
+    monkeypatch.setattr(coordinator_mod.time, "monotonic", lambda: clock[0])
+    c = PlejdCoordinator(_hass(), _entry())  # _DEV: output address 5, device d1
+    c.rooms = [PlejdCloudRoom("r1", "Kontor", 41, [5], True, [5])]
+    c.inputs = [PlejdCloudInput("d1", "Built-in", 5), PlejdCloudInput("remote", "Hall switch", 60)]
+
+    def toggle(address):
+        c._on_event(Command(address=address, command_type=0x10, command=coordinator_mod.CMD_INPUT_BUTTON, data=b"\x01"))
+
+    return c, toggle
+
+
+def test_toggle_origin_room_group_command(monkeypatch):
+    clock = [100.0]
+    c, toggle = _origin_coordinator(monkeypatch, clock)
+    toggle(41)
+    clock[0] = 102.0
+    assert c.toggle_origin(5) == {"kind": "plejd_room", "name": "Kontor"}
+
+
+def test_toggle_origin_on_the_output_itself_is_ambiguous(monkeypatch):
+    clock = [100.0]
+    c, toggle = _origin_coordinator(monkeypatch, clock)
+    toggle(5)
+    assert c.toggle_origin(5) == {"kind": "plejd_device"}
+
+
+def test_toggle_origin_separate_remote_is_a_best_guess(monkeypatch):
+    clock = [100.0]
+    c, toggle = _origin_coordinator(monkeypatch, clock)
+    toggle(60)
+    assert c.toggle_origin(5) == {"kind": "plejd_input", "name": "Hall switch"}
+
+
+def test_toggle_origin_ignores_malformed_toggle_frames(monkeypatch):
+    from plejd.protocol import Command
+
+    clock = [100.0]
+    c, _ = _origin_coordinator(monkeypatch, clock)
+    for data in (b"", b"\x07"):
+        c._on_event(Command(address=41, command_type=0x10, command=coordinator_mod.CMD_INPUT_BUTTON, data=data))
+    assert c.toggle_origin(5) is None
+
+
+def test_toggle_origin_since_ignores_commands_from_before(monkeypatch):
+    clock = [100.0]
+    c, toggle = _origin_coordinator(monkeypatch, clock)
+    toggle(5)
+    assert c.toggle_origin(5, since=100.0) is None  # not newer than the HA call
+    clock[0] = 101.0
+    toggle(5)
+    assert c.toggle_origin(5, since=100.0) == {"kind": "plejd_device"}
+
+
+def test_toggle_origin_only_counts_commands_for_the_resulting_state(monkeypatch):
+    from plejd.protocol import Command
+
+    clock = [100.0]
+    c, _ = _origin_coordinator(monkeypatch, clock)
+
+    def onoff(address, value):
+        c._on_event(
+            Command(address=address, command_type=0x10, command=coordinator_mod.CMD_INPUT_BUTTON, data=bytes([value]))
+        )
+
+    onoff(5, 0)  # an "off" straight to the light...
+    assert c.toggle_origin(5, state="on") is None  # ...doesn't explain it turning on
+    assert c.toggle_origin(5, state="off") == {"kind": "plejd_device"}
+    onoff(60, 0)  # a separate remote's release still counts either way (press/release, not on/off)
+    assert c.toggle_origin(5, state="on") == {"kind": "plejd_input", "name": "Hall switch"}
+
+
+def test_toggle_origin_newest_command_wins(monkeypatch):
+    clock = [100.0]
+    c, toggle = _origin_coordinator(monkeypatch, clock)
+    toggle(41)  # room command...
+    clock[0] = 103.0
+    toggle(5)  # ...then one straight to the light: that one explains the change
+    assert c.toggle_origin(5) == {"kind": "plejd_device"}
+    clock[0] = 104.0
+    toggle(60)  # and a remote pressed after both
+    assert c.toggle_origin(5) == {"kind": "plejd_input", "name": "Hall switch"}
+
+
+def test_toggle_origin_ignores_old_commands_and_unknown_addresses(monkeypatch):
+    clock = [100.0]
+    c, toggle = _origin_coordinator(monkeypatch, clock)
+    toggle(41)
+    toggle(60)
+    clock[0] = 106.0  # past the 5 s window
+    assert c.toggle_origin(5) is None
+    assert c.toggle_origin(99) is None

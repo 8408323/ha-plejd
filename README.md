@@ -75,6 +75,12 @@ A **Plejd** entry in the sidebar (admins only) has three tabs:
   light), and reorders/resizes the cards; nothing changes until **Save**. Then scenes,
   thermostats, covers, motion sensors and device health.
 - **Automations** — on-device weekly schedules and remote → light dim bindings.
+- **Log** — every light switched on or off and every alarm change, with where it came
+  from. Inside Home Assistant that is exact (who, or which automation). From outside,
+  the Plejd mesh carries no sender: a whole-room command is shown as the Plejd app,
+  a separate remote as that remote (a best guess), and an on/off sent straight to a
+  light can't be told apart between the Plejd app, Google Home through Plejd, or a
+  switch wired to that light's own input.
 - **Settings** — holiday mode (lights + active window), the communication path on
   sites with a gateway, and adding a new device.
 

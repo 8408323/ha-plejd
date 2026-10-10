@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import types
 from unittest.mock import AsyncMock
@@ -104,6 +105,13 @@ class _FakeServices:
 
     def has_service(self, domain, service):
         return f"{domain}.{service}" in self._handlers
+
+
+async def _run_unload(unload) -> None:
+    """Run one on_unload callback the way HA does: a returned coroutine is awaited."""
+    result = unload()
+    if inspect.iscoroutine(result):
+        await asyncio.gather(result)
 
 
 class _FakeBus:
@@ -441,7 +449,7 @@ async def test_add_device_service_survives_entry_unload_cleanup(monkeypatch):
     await async_setup_entry(hass, entry)
     assert f"plejd.{SERVICE_ADD_DEVICE}" in hass.services._handlers
     for unload in unloads:
-        unload()
+        await _run_unload(unload)
     assert f"plejd.{SERVICE_ADD_DEVICE}" in hass.services._handlers
 
 
@@ -466,7 +474,7 @@ async def test_remove_device_service_survives_a_mesh_connection_failure(monkeypa
         await async_setup_entry(hass, entry)
     assert f"plejd.{SERVICE_REMOVE_DEVICE}" in hass.services._handlers
     for unload in unloads:
-        unload()
+        await _run_unload(unload)
     assert f"plejd.{SERVICE_REMOVE_DEVICE}" in hass.services._handlers
 
 
@@ -665,7 +673,7 @@ async def test_all_off_service_survives_entry_unload_cleanup(monkeypatch):
     await async_setup_entry(hass, entry)
     assert f"plejd.{SERVICE_ALL_OFF}" in hass.services._handlers
     for unload in unloads:
-        unload()
+        await _run_unload(unload)
     assert f"plejd.{SERVICE_ALL_OFF}" in hass.services._handlers
 
 
@@ -680,6 +688,7 @@ async def test_unload_callbacks_return_nothing_ha_would_try_to_schedule(monkeypa
     await async_setup_entry(hass, entry)
     results = [unload() for unload in unloads]
     assert [r for r in results if r is not None and not inspect.iscoroutine(r)] == []
+    await asyncio.gather(*(r for r in results if inspect.iscoroutine(r)))  # HA runs these as tasks
 
 
 async def test_setup_tells_an_open_dashboard_to_reload_rooms(monkeypatch):
@@ -741,7 +750,7 @@ async def test_update_room_service_survives_entry_unload_cleanup(monkeypatch):
     await async_setup_entry(hass, entry)
     assert f"plejd.{SERVICE_UPDATE_ROOM}" in hass.services._handlers
     for unload in unloads:
-        unload()
+        await _run_unload(unload)
     assert f"plejd.{SERVICE_UPDATE_ROOM}" in hass.services._handlers
 
 
@@ -815,7 +824,7 @@ async def test_remove_room_service_survives_entry_unload_cleanup(monkeypatch):
     await async_setup_entry(hass, entry)
     assert f"plejd.{SERVICE_REMOVE_ROOM}" in hass.services._handlers
     for unload in unloads:
-        unload()
+        await _run_unload(unload)
     assert f"plejd.{SERVICE_REMOVE_ROOM}" in hass.services._handlers
 
 
@@ -860,7 +869,7 @@ async def test_create_scene_service_survives_entry_unload_cleanup(monkeypatch):
     await async_setup_entry(hass, entry)
     assert f"plejd.{SERVICE_CREATE_SCENE}" in hass.services._handlers
     for unload in unloads:
-        unload()
+        await _run_unload(unload)
     assert f"plejd.{SERVICE_CREATE_SCENE}" in hass.services._handlers
 
 
@@ -901,7 +910,7 @@ async def test_update_scene_service_survives_entry_unload_cleanup(monkeypatch):
     await async_setup_entry(hass, entry)
     assert f"plejd.{SERVICE_UPDATE_SCENE}" in hass.services._handlers
     for unload in unloads:
-        unload()
+        await _run_unload(unload)
     assert f"plejd.{SERVICE_UPDATE_SCENE}" in hass.services._handlers
 
 
@@ -959,7 +968,7 @@ async def test_remove_scene_service_survives_entry_unload_cleanup(monkeypatch):
     await async_setup_entry(hass, entry)
     assert f"plejd.{SERVICE_REMOVE_SCENE}" in hass.services._handlers
     for unload in unloads:
-        unload()
+        await _run_unload(unload)
     assert f"plejd.{SERVICE_REMOVE_SCENE}" in hass.services._handlers
 
 
@@ -1001,7 +1010,7 @@ async def test_remove_device_service_survives_entry_unload_cleanup(monkeypatch):
     await async_setup_entry(hass, entry)
     assert f"plejd.{SERVICE_REMOVE_DEVICE}" in hass.services._handlers
     for unload in unloads:
-        unload()
+        await _run_unload(unload)
     assert f"plejd.{SERVICE_REMOVE_DEVICE}" in hass.services._handlers
 
 
@@ -1043,7 +1052,7 @@ async def test_move_device_to_room_service_survives_entry_unload_cleanup(monkeyp
     await async_setup_entry(hass, entry)
     assert f"plejd.{SERVICE_MOVE_DEVICE_TO_ROOM}" in hass.services._handlers
     for unload in unloads:
-        unload()
+        await _run_unload(unload)
     assert f"plejd.{SERVICE_MOVE_DEVICE_TO_ROOM}" in hass.services._handlers
 
 
@@ -1086,7 +1095,7 @@ async def test_create_schedule_service_survives_entry_unload_cleanup(monkeypatch
     await async_setup_entry(hass, entry)
     assert f"plejd.{SERVICE_CREATE_SCHEDULE}" in hass.services._handlers
     for unload in unloads:
-        unload()
+        await _run_unload(unload)
     assert f"plejd.{SERVICE_CREATE_SCHEDULE}" in hass.services._handlers
 
 
@@ -1148,7 +1157,7 @@ async def test_update_schedule_service_survives_entry_unload_cleanup(monkeypatch
     await async_setup_entry(hass, entry)
     assert f"plejd.{SERVICE_UPDATE_SCHEDULE}" in hass.services._handlers
     for unload in unloads:
-        unload()
+        await _run_unload(unload)
     assert f"plejd.{SERVICE_UPDATE_SCHEDULE}" in hass.services._handlers
 
 
@@ -1242,7 +1251,7 @@ async def test_remove_schedule_service_survives_entry_unload_cleanup(monkeypatch
     await async_setup_entry(hass, entry)
     assert f"plejd.{SERVICE_REMOVE_SCHEDULE}" in hass.services._handlers
     for unload in unloads:
-        unload()
+        await _run_unload(unload)
     assert f"plejd.{SERVICE_REMOVE_SCHEDULE}" in hass.services._handlers
 
 
@@ -1304,7 +1313,7 @@ async def test_unload_removes_panel(monkeypatch):
     entry.async_on_unload = unloads.append
     await async_setup_entry(hass, entry)
     for unload in unloads:
-        unload()
+        await _run_unload(unload)
     assert removed == [hass]  # sidebar entry removed on unload/reload
 
 
@@ -1351,7 +1360,7 @@ async def test_unload_cleans_up_bindings(monkeypatch):
     await async_setup_entry(hass, entry)
     assert DATA_BINDINGS in hass.data
     for unload in unloads:
-        unload()
+        await _run_unload(unload)
     assert DATA_BINDINGS not in hass.data
 
 
@@ -1381,7 +1390,7 @@ async def test_unload_cleans_up_schedule_entry(monkeypatch):
     await async_setup_entry(hass, entry)
     assert DATA_ENTRY in hass.data
     for unload in unloads:
-        unload()
+        await _run_unload(unload)
     assert DATA_ENTRY not in hass.data
 
 
@@ -1473,6 +1482,45 @@ async def test_unload_failure_keeps_holiday_mode_registered_for_a_retry(monkeypa
     assert _FakeHolidayMode.instances[-1].started is True
 
 
+async def test_activity_log_is_stopped_only_by_a_successful_unload(monkeypatch):
+    from plejd import activity
+
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    monkeypatch.setattr(plejd, "PlejdHolidayMode", _FakeHolidayMode)
+    _FakeCoordinator.instances.clear()
+    hass, entry = _hass(), _entry()
+    unloads: list = []
+    entry.async_on_unload = unloads.append
+    await async_setup_entry(hass, entry)
+    log = hass.data[activity.DATA_ACTIVITY]
+    for unload in unloads:  # older HA runs these even when the unload is refused
+        await _run_unload(unload)
+    hass.config_entries.unload_result = False
+    assert await async_unload_entry(hass, entry) is False
+    assert hass.data[activity.DATA_ACTIVITY] is log and log._unsubs  # still logging
+    assert log._entry.runtime_data is not None  # and still reaching the coordinator, without hass.data
+    hass.config_entries.unload_result = True
+    assert await async_unload_entry(hass, entry) is True
+    assert activity.DATA_ACTIVITY not in hass.data and not log._unsubs
+
+
+async def test_a_failed_activity_save_on_unload_still_shuts_the_coordinator_down(monkeypatch):
+    from plejd import activity
+
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    monkeypatch.setattr(plejd, "PlejdHolidayMode", _FakeHolidayMode)
+    _FakeCoordinator.instances.clear()
+    hass, entry = _hass(), _entry()
+    await async_setup_entry(hass, entry)
+
+    async def _disk_full():
+        raise OSError("disk full")
+
+    monkeypatch.setattr(hass.data[activity.DATA_ACTIVITY], "async_stop", _disk_full)
+    assert await async_unload_entry(hass, entry) is True
+    assert entry.runtime_data.shutdown is True
+
+
 async def test_unload_failure_does_not_resume_holiday_mode_that_was_already_off(monkeypatch):
     from plejd.holiday_mode import DATA_HOLIDAY_MODE
 
@@ -1519,7 +1567,7 @@ async def test_unload_cleans_up_remote_profiles(monkeypatch):
     await async_setup_entry(hass, entry)
     assert DATA_REMOTE_PROFILES in hass.data
     for unload in unloads:
-        unload()
+        await _run_unload(unload)
     assert DATA_REMOTE_PROFILES not in hass.data
 
 
@@ -1537,6 +1585,34 @@ async def test_setup_survives_remote_profile_load_failure(monkeypatch):
     monkeypatch.setattr(plejd, "PlejdRemoteProfiles", _BadProfiles)
     hass, entry = _hass(), _entry()
     assert await async_setup_entry(hass, entry) is True  # storage error must not abort setup
+
+
+async def test_setup_survives_activity_log_load_failure(monkeypatch):
+    from plejd import activity
+
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    _FakeCoordinator.instances.clear()
+
+    async def _corrupt(self):
+        raise ValueError("corrupt store")
+
+    monkeypatch.setattr(activity.PlejdActivityLog, "async_load", _corrupt)
+    hass, entry = _hass(), _entry()
+    assert await async_setup_entry(hass, entry) is True  # storage error must not abort setup
+    assert hass.data[activity.DATA_ACTIVITY].entries == []  # starts empty, still listening
+
+
+async def test_remove_entry_keeps_cleaning_up_when_the_log_cannot_be_deleted(monkeypatch):
+    from plejd import activity
+
+    async def _denied(hass, entry_id):
+        raise PermissionError("read-only")
+
+    monkeypatch.setattr(activity, "async_remove_store", _denied)
+    cleared = []
+    monkeypatch.setattr(plejd, "async_clear_malformed_site_issue", lambda hass, entry_id: cleared.append(entry_id))
+    await plejd.async_remove_entry(_hass(), _entry())
+    assert cleared  # the rest of the removal cleanup still ran
 
 
 async def test_remove_entry_clears_the_persistent_repair_issue():
