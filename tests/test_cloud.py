@@ -156,19 +156,21 @@ async def test_motion_sensor_room_comes_from_its_device_entry_or_its_own_record(
 
 
 def test_parse_site_scene_outputs_come_from_scene_steps():
-    steps = [
-        {"sceneId": "sc1", "deviceId": "d1", "output": 0, "dirtyRemoved": False},
-        {"sceneId": "sc1", "deviceId": "d1", "output": 0},  # a duplicate step
-        {"sceneId": "sc1", "deviceId": "d2", "output": 0, "dirtyRemoved": True},  # removed in the app
-        {"sceneId": "sc1", "deviceId": "gone", "output": 0},  # not an output on the site
-        {"sceneId": None, "deviceId": "d2", "output": 0},
-        "not-a-dict",
-    ]
-    assert [s.output_addresses for s in parse_site({**_SITE, "sceneSteps": steps}).scenes] == [[11]]
-    # A scene with no steps sets nothing; a missing or malformed list leaves membership unknown.
-    assert [s.output_addresses for s in parse_site({**_SITE, "sceneSteps": []}).scenes] == [[]]
+    def outputs(steps):
+        return [s.output_addresses for s in parse_site({**_SITE, "sceneSteps": steps}).scenes]
+
+    step = {"sceneId": "sc1", "deviceId": "d1", "output": 0, "dirty": False, "dirtyRemoved": False}
+    removed = {**step, "deviceId": "d2", "dirtyRemoved": True}  # a removal the mesh already has
+    assert outputs([step, dict(step), removed]) == [[11]]  # duplicates collapse
+    assert outputs([]) == [[]]  # a scene with no steps sets nothing
+    # Membership is unknown rather than incomplete when it can't be trusted:
+    assert outputs([step, {**removed, "dirty": True}]) == [None]  # an edit the mesh hasn't got yet
+    assert outputs([step, {**step, "deviceId": "gone"}]) == [None]  # an output we can't map
+    assert outputs([step, {"sceneId": "sc2", "deviceId": "gone"}]) == [[11]]  # ...only for its own scene
+    assert outputs([step, "not-a-dict"]) == [None]
+    assert outputs([step, {**step, "sceneId": None}]) == [None]
+    assert outputs({"x": 1}) == [None]
     assert [s.output_addresses for s in parse_site(_SITE).scenes] == [None]
-    assert [s.output_addresses for s in parse_site({**_SITE, "sceneSteps": {"x": 1}}).scenes] == [None]
 
 
 async def test_call_function_error_status_raises():

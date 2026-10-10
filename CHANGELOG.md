@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-10-10
+
+A **Log** tab on the dashboard: every light, switch and alarm change for the last
+30 days with where it came from, plus **Night watch** notifications for lights that
+go on at night.
+
 ### Added
 
 - **Log** tab on the dashboard: lights switched on or off or dimmed, and alarm-panel
@@ -19,6 +25,14 @@ All notable changes to this project are documented here. The format follows
 - **Night watch:** a notification (phones via notify services, and/or in Home
   Assistant) when a light goes on inside a night window; automations, scripts and
   Plejd schedules are skipped by default, alarm changes can be included.
+
+### Fixed
+
+- A scene run is credited only to the lights that belong to that scene (from the
+  site's scene steps), so a light switched by hand at the same moment isn't logged
+  as the scene (#148). Membership counts as unknown, and the scene stays a candidate,
+  while the app hasn't synced a scene edit to the mesh.
+- WMS-01 motion sensors are named by their Plejd title instead of "Motion sensor".
 
 ## [0.13.0] - 2026-10-10
 

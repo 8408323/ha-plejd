@@ -1010,24 +1010,36 @@ def parse_site(site: dict) -> PlejdCloudSite:
             faceplate_id=str(faceplate) if faceplate is not None else None,
         )
 
-    # sceneSteps (top level, one per scene output) say which outputs each scene sets. Left unknown (None)
-    # when the list is missing or malformed, so a scene is never wrongly ruled out as a change's origin.
+    # sceneSteps (top level, one per scene output) say which outputs each scene sets. Membership is left
+    # unknown (None) wherever it can't be trusted, so a scene is never wrongly ruled out as a change's origin:
+    # for every scene when the list is missing or has a record we can't attribute to a scene, and for one
+    # scene when a step is still dirty (edited in the cloud, not yet synced to the mesh by the app) or names
+    # an output we can't map.
     scene_outputs: dict[str, list[int]] | None = None
+    unknown_scenes: set[str] = set()
     if isinstance(raw_scene_steps, list):
         address_by_output = {(d.device_id, d.output_index): d.address for d in devices if d.address is not None}
         scene_outputs = {}
         for step in raw_scene_steps:
-            if not isinstance(step, dict) or step.get("dirtyRemoved") is True:
-                continue  # untrusted cloud data, or a step the app has removed
-            address = address_by_output.get((step.get("deviceId"), step.get("output")))
-            if isinstance(step.get("sceneId"), str) and address is not None:
-                scene_outputs.setdefault(step["sceneId"], []).append(address)
+            if not isinstance(step, dict) or not isinstance(step.get("sceneId"), str):
+                scene_outputs = None
+                break
+            if step.get("dirty") is True:
+                unknown_scenes.add(step["sceneId"])
+            elif step.get("dirtyRemoved") is not True:  # a removal the mesh already has drops out
+                address = address_by_output.get((step.get("deviceId"), step.get("output")))
+                if address is None:
+                    unknown_scenes.add(step["sceneId"])
+                else:
+                    scene_outputs.setdefault(step["sceneId"], []).append(address)
     scenes = [
         PlejdCloudScene(
             scene_id=sc["sceneId"],
             name=sc.get("title") or sc["sceneId"],
             index=int(idx),
-            output_addresses=None if scene_outputs is None else sorted(set(scene_outputs.get(sc["sceneId"], []))),
+            output_addresses=None
+            if scene_outputs is None or sc["sceneId"] in unknown_scenes
+            else sorted(set(scene_outputs.get(sc["sceneId"], []))),
         )
         for sc in raw_scenes
         if isinstance(sc, dict)
