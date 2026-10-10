@@ -815,3 +815,105 @@ async def test_a_switched_off_schedule_is_not_credited():
     hass.states.get("switch.schedule_workday").state = "off"
     fire(_change(_state("light.kontor", "on"), _state("light.kontor", "off", when=when)))
     assert [e["source"]["kind"] for e in hass.data[activity.DATA_ACTIVITY].entries] == ["plejd_schedule", "plejd_scene"]
+
+
+async def test_entries_older_than_30_days_are_dropped_on_load():
+    hass = _hass()
+    hass.data[("store", "plejd.activity.e1")] = {
+        "entries": [
+            {
+                "t": "2026-04-01T00:00:00+00:00",
+                "type": "state",
+                "entity_id": "light.kontor",
+                "name": "K",
+                "state": "on",
+                "source": {},
+            },
+            {
+                "t": "2026-05-30T00:00:00+00:00",
+                "type": "state",
+                "entity_id": "light.kontor",
+                "name": "K",
+                "state": "off",
+                "source": {},
+            },
+        ]
+    }
+    log = await _log(hass)  # "now" in the test stub is 2026-05-31
+    assert [e["state"] for e in log.entries] == ["off"]
+    assert [e["state"] for e in hass.data[("store", "plejd.activity.e1")]["entries"]] == ["off"]  # and saved
+
+
+async def test_a_plejd_scene_run_from_ha_is_credited_to_its_caller(monkeypatch):
+    clock = [100.0]
+    monkeypatch.setattr(activity.time, "monotonic", lambda: clock[0])
+    hass = await _log_hass(origin={"kind": "plejd_scene", "name": "Kväll", "index": 3})
+    hass.data[DATA_ENTRY].runtime_data.scenes = [types.SimpleNamespace(scene_id="sc1", index=3)]
+    reg = hass.entity_registry._entities
+    reg["scene.kvall"] = types.SimpleNamespace(unique_id="scene_sc1", platform="plejd")
+    reg["scene.other"] = types.SimpleNamespace(unique_id="x", platform="hue")
+    fire = hass.bus.listeners
+
+    def run_scene(ctx, target):
+        fire["call_service"](
+            types.SimpleNamespace(
+                context=ctx, data={"domain": "scene", "service": "turn_on", "service_data": {"entity_id": target}}
+            )
+        )
+
+    run_scene(_ctx(user_id="u1"), "scene.kvall")
+    assert _member(hass, "off", "on") == {"kind": "user", "user_id": "u1"}
+    run_scene(_ctx(), ["scene.kvall"])  # no HA source: the mesh's own scene label stays
+    run_scene(_ctx(user_id="u1"), ["scene.other", "scene.missing"])  # not Plejd scenes
+    clock[0] += 20  # the HA call is too old by now
+    assert _member(hass, "on", "off") == {"kind": "plejd_scene", "name": "Kväll"}
+
+
+async def test_a_scene_after_an_ha_call_is_still_checked_against_schedules(monkeypatch):
+    clock = [100.0]
+    monkeypatch.setattr(activity.time, "monotonic", lambda: clock[0])
+    hass = await _log_hass(mesh_after={100.0: {"kind": "plejd_scene", "name": "Morgon", "index": 3}})
+    hass.data[DATA_ENTRY].runtime_data.site_id = "S1"
+    hass.data[DATA_ENTRY].options = {
+        "schedules": [{"id": 1, "name": "Workday", "days": [0], "time": "07:30", "scene": 3}]
+    }
+    hass.bus.listeners["call_service"](
+        types.SimpleNamespace(
+            context=_ctx("c1", user_id="u1"), data={"domain": "light", "service": "turn_off", "service_data": {}}
+        )
+    )
+    when = datetime(2026, 10, 12, 5, 31, tzinfo=UTC)  # Monday 07:31 local
+    hass.bus.listeners["state_changed"](
+        _change(_state("light.kontor", "off"), _state("light.kontor", "on", _ctx("c1", user_id="u1"), when=when))
+    )
+    assert hass.data[activity.DATA_ACTIVITY].entries[-1]["source"] == {"kind": "plejd_schedule", "name": "Workday"}
+
+
+async def test_schedules_match_across_midnight_and_use_the_update_time():
+    hass = await _log_hass(origin={"kind": "plejd_scene", "name": "Natt", "index": 4})
+    hass.data[DATA_ENTRY].options = {
+        "schedules": [{"id": 2, "name": "Sunday night", "days": [6], "time": "23:59", "scene": 4}]
+    }
+    monday_0000 = datetime(2026, 10, 11, 22, 0, tzinfo=UTC)  # Monday 00:00 local, a minute after Sunday 23:59
+    st = _state("light.kontor", "on", when=monday_0000)
+    st.last_changed = datetime(2026, 10, 10, 12, 0, tzinfo=UTC)  # a dim: last_changed is when it went on, long before
+    hass.bus.listeners["state_changed"](_change(_state("light.kontor", "off"), st))
+    assert hass.data[activity.DATA_ACTIVITY].entries[-1]["source"] == {"kind": "plejd_schedule", "name": "Sunday night"}
+
+
+async def test_one_failing_notify_target_does_not_stop_the_others():
+    hass, tasks = await _alert_hass(targets=["mobile_app_pixel", "family"])
+    sent = []
+
+    async def _call(domain, service, data):
+        if service == "mobile_app_pixel":
+            raise RuntimeError("service not found")  # a removed phone
+        sent.append((domain, service))
+
+    hass.services.async_call = _call
+    night = datetime(2026, 10, 11, 0, 13, tzinfo=UTC)
+    hass.bus.listeners["state_changed"](
+        _change(_state("light.kontor", "off"), _state("light.kontor", "on", when=night))
+    )
+    await asyncio.gather(*tasks)
+    assert sent == [("notify", "family"), ("persistent_notification", "create")]

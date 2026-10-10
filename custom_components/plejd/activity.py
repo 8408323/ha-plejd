@@ -8,6 +8,7 @@ survives restarts and recorder purges.
 
 from __future__ import annotations
 
+import logging
 import time
 from collections import OrderedDict
 from datetime import UTC, datetime, timedelta
@@ -23,6 +24,8 @@ from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from .const import CATEGORY_LIGHT, CONF_ROOM_NAMES, CONF_SCHEDULES, DOMAIN
+
+_LOGGER = logging.getLogger(__name__)
 
 DATA_ACTIVITY = f"{DOMAIN}_activity"
 RETENTION = timedelta(days=30)
@@ -77,6 +80,7 @@ class PlejdActivityLog:
         # isn't logged, and the member changes it causes carry no context of their own.
         self._room_commands: dict[int, tuple[float, dict[str, Any], str | None]] = {}  # + the expected new state
         self._dims: dict[str, tuple[float, dict[str, Any]]] = {}  # entity_id -> (last step, its open dim entry)
+        self._scene_calls: dict[int, tuple[float, dict[str, Any]]] = {}  # Plejd scene index -> (when, HA source)
         self._alert_store: Store = Store(hass, 1, f"{_ALERT_STORE_KEY}.{entry.entry_id}")
         self.alerts: dict[str, Any] = dict(DEFAULT_ALERTS)
         self._unsubs: list = []
@@ -84,6 +88,10 @@ class PlejdActivityLog:
     async def async_load(self) -> None:
         self.entries = list((await self._store.async_load() or {}).get("entries", []))[-MAX_ENTRIES:]
         self._can_save = True
+        cutoff = _utc((dt_util.now() - RETENTION).isoformat())
+        if self.entries and _utc(self.entries[0]["t"]) < cutoff:
+            self.entries = [e for e in self.entries if _utc(e["t"]) >= cutoff]
+            self._save()
         self.alerts = {**DEFAULT_ALERTS, **(await self._alert_store.async_load() or {})}
 
     async def async_set_alerts(self, alerts: dict[str, Any]) -> None:
@@ -134,6 +142,13 @@ class PlejdActivityLog:
         self._calls.move_to_end(event.context.id)
         while len(self._calls) > _MAX_CALLS:
             self._calls.popitem(last=False)
+        if event.data.get("domain") == "scene" and event.data.get("service") == "turn_on":
+            # A Plejd scene run from HA: its outputs change without the call's context, and the mesh echo would
+            # otherwise be credited to "Plejd scene" instead of the person or automation that ran it.
+            if (source := self._ha_source(event.context)) is not None:
+                for index in self._plejd_scene_indexes(event.data.get("service_data") or {}):
+                    self._scene_calls[index] = (time.monotonic(), source)
+            return
         if event.data.get("domain") == DOMAIN and event.data.get("service") == "all_off":
             # plejd.all_off switches the outputs directly, so their changes carry no context of their own.
             if (source := self._ha_source(event.context)) is not None:
@@ -268,10 +283,14 @@ class PlejdActivityLog:
         what = "turned on" if entry["type"] == "state" else f"alarm: {entry['state'].replace('_', ' ')}"
         message = f"{entry['name']}{room} {what} at {local:%H:%M} — {describe_source(source)}"
         title = "Plejd night watch"
-        for target in cfg.get("targets") or []:
-            await self.hass.services.async_call("notify", target, {"title": title, "message": message})
+        calls = [("notify", target) for target in cfg.get("targets") or []]
         if cfg.get("persistent"):
-            await self.hass.services.async_call("persistent_notification", "create", {"title": title, "message": message})
+            calls.append(("persistent_notification", "create"))
+        for domain, service in calls:
+            try:  # one removed phone mustn't stop the alert reaching the others
+                await self.hass.services.async_call(domain, service, {"title": title, "message": message})
+            except Exception:  # noqa: BLE001 - report and carry on with the next target
+                _LOGGER.warning("Plejd night watch: could not notify %s.%s", domain, service, exc_info=True)
 
     def _plejd_output(self, entity_id: str, domain: str):
         """The Plejd output (cloud device) behind an entity; None for anything that isn't one."""
@@ -375,7 +394,7 @@ class PlejdActivityLog:
             coordinator = getattr(self._entry, "runtime_data", None)
             if address is not None and coordinator is not None and called is not None:
                 if origin := coordinator.toggle_origin(address, since=called, state=state.state):
-                    return origin
+                    return self._named_origin(origin, state)
             return ha
         if room_cmd:
             return dict(room_cmd[1])
@@ -384,32 +403,57 @@ class PlejdActivityLog:
             return {"kind": "alarm", "name": changed_by} if changed_by else {"kind": "external"}
         coordinator = getattr(self._entry, "runtime_data", None)
         origin = coordinator.toggle_origin(address, state=state.state) if coordinator is not None else None
-        if origin and origin["kind"] == "plejd_scene" and (schedule := self._schedule_for(origin["index"], state)):
-            return {"kind": "plejd_schedule", "name": schedule}
-        if origin:
-            origin = {k: v for k, v in origin.items() if k != "index"}
-        return origin or {"kind": "external"}
+        return self._named_origin(origin, state) if origin else {"kind": "external"}
+
+    def _plejd_scene_indexes(self, service_data: dict[str, Any]) -> list[int]:
+        """Mesh indexes of the Plejd scenes a scene.turn_on call targets by entity id."""
+        targets = service_data.get("entity_id") or []
+        targets = [targets] if isinstance(targets, str) else targets
+        registry = er.async_get(self.hass)
+        coordinator = getattr(self._entry, "runtime_data", None)
+        indexes = []
+        for entity_id in targets:
+            reg = registry.async_get(entity_id)
+            if reg is None or reg.platform != DOMAIN:
+                continue
+            for scene in getattr(coordinator, "scenes", []):
+                if reg.unique_id == f"scene_{scene.scene_id}":
+                    indexes.append(scene.index)
+        return indexes
+
+    def _named_origin(self, origin: dict[str, Any], state) -> dict[str, Any]:
+        """A mesh origin as logged: a scene run from HA or at a schedule's time gets that source instead."""
+        if origin["kind"] == "plejd_scene":
+            call = self._scene_calls.get(origin["index"])
+            if call and time.monotonic() - call[0] <= _ROOM_COMMAND_WINDOW:
+                return dict(call[1])
+            if schedule := self._schedule_for(origin["index"], state):
+                return {"kind": "plejd_schedule", "name": schedule}
+        return {k: v for k, v in origin.items() if k != "index"}
 
     def _schedule_enabled(self, schedule: dict[str, Any]) -> bool:
         """Whether a schedule's switch is on (switch.py's PlejdScheduleSwitch; unknown counts as on)."""
         site_id = getattr(getattr(self._entry, "runtime_data", None), "site_id", None)
-        entity_id = er.async_get(self.hass).async_get_entity_id("switch", DOMAIN, f"{site_id}_schedule_{schedule.get('id')}")
+        entity_id = er.async_get(self.hass).async_get_entity_id(
+            "switch", DOMAIN, f"{site_id}_schedule_{schedule.get('id')}"
+        )
         state = self.hass.states.get(entity_id) if entity_id else None
         return state is None or state.state != "off"
 
     def _schedule_for(self, scene_index: int, state) -> str | None:
         """The on-device schedule that runs this scene at about this time, if any."""
         entry = self._entry
-        local = dt_util.as_local(state.last_changed)
+        # last_updated: a dim keeps last_changed from when the light went on
+        local = dt_util.as_local(state.last_updated)
         for schedule in (getattr(entry, "options", None) or {}).get(CONF_SCHEDULES) or []:
-            if schedule.get("scene") != scene_index or local.weekday() not in schedule.get("days", []):
-                continue
-            if not self._schedule_enabled(schedule):
-                continue  # switched off: its time event is gone from the devices
+            if schedule.get("scene") != scene_index or not self._schedule_enabled(schedule):
+                continue  # another scene, or switched off (its time event is gone from the devices)
             hour, minute, *_ = (int(p) for p in str(schedule.get("time", "")).split(":") + ["0"])
-            planned = local.replace(hour=hour, minute=minute, second=0, microsecond=0)
-            if abs(local - planned) <= _SCHEDULE_SLACK:
-                return schedule.get("name")
+            # Yesterday's and tomorrow's runs too: 23:59 on Sunday can land at 00:00 on Monday.
+            for day in (-1, 0, 1):
+                planned = (local + timedelta(days=day)).replace(hour=hour, minute=minute, second=0, microsecond=0)
+                if planned.weekday() in schedule.get("days", []) and abs(local - planned) <= _SCHEDULE_SLACK:
+                    return schedule.get("name")
         return None
 
 

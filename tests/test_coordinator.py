@@ -3901,3 +3901,13 @@ def test_toggle_origin_since_also_applies_to_scenes_and_motion(monkeypatch):
     c._on_event(Command(address=33, command_type=0x10, command=coordinator_mod.CMD_OUTPUT_SET, data=b"\x00"))
     assert c.toggle_origin(5, since=100.0) is None  # both happened at the HA call, not after it
     assert c.toggle_origin(5, since=99.0) is not None
+
+
+def test_toggle_origin_uses_a_standalone_motion_sensors_own_room(monkeypatch):
+    from plejd.cloud import PlejdCloudMotion
+
+    clock = [100.0]
+    c, _ = _origin_coordinator(monkeypatch, clock)
+    c.motion = [PlejdCloudMotion("wms", "Hall motion", 33, room_id="r1")]  # no output entry for it at all
+    c._recent_motion[33] = 99.0
+    assert c.toggle_origin(5) == {"kind": "plejd_motion", "name": "Hall motion"}

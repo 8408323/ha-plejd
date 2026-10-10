@@ -133,6 +133,22 @@ async def test_get_sites_non_list_result_is_empty():
             assert await async_get_sites(s, "tok") == []
 
 
+async def test_motion_sensor_room_comes_from_its_device_entry_or_its_own_record():
+    import copy
+
+    site_raw = copy.deepcopy(_SITE)
+    site_raw["plejdDevices"][2]["roomId"] = "r9"  # standalone WMS-01: only plejdDevices knows its room
+    with aioresponses() as m:
+        m.post(_SITE_BY_ID, payload={"result": [site_raw]})
+        async with aiohttp.ClientSession() as s:
+            assert [m.room_id for m in (await async_get_site(s, "tok", "S1")).motion] == ["r9"]
+    site_raw["devices"].append({"deviceId": "w1", "title": "Hall motion", "roomId": "r2", "outputType": "SENSOR"})
+    with aioresponses() as m:
+        m.post(_SITE_BY_ID, payload={"result": [site_raw]})
+        async with aiohttp.ClientSession() as s:
+            assert [m.room_id for m in (await async_get_site(s, "tok", "S1")).motion] == ["r2"]
+
+
 async def test_call_function_error_status_raises():
     with aioresponses() as m:
         m.post(_SITE_LIST, status=500, payload={"error": "boom"})

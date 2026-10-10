@@ -1230,9 +1230,14 @@ function NightWatch({ hass }: Ctx) {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   useEffect(() => {
-    hass.callWS({ type: "plejd/activity/alerts/get" })
-      .then((r: any) => { setSaved(r.alerts); setDraft(r.alerts); setServices(r.notify_services); })
-      .catch((e: any) => setError(errMsg(e)));
+    let cancelled = false;
+    let timer = 0;
+    // Retried: during a Plejd reload the settings aren't back yet (not_loaded) for a moment.
+    const load = () => hass.callWS({ type: "plejd/activity/alerts/get" })
+      .then((r: any) => { if (!cancelled) { setSaved(r.alerts); setDraft(r.alerts); setServices(r.notify_services); setError(""); } })
+      .catch((e: any) => { if (!cancelled) { setError(errMsg(e)); timer = window.setTimeout(load, 5000); } });
+    load();
+    return () => { cancelled = true; clearTimeout(timer); };
   }, []);
   if (!draft || !saved) return <Card title={t.nw_title} wide>{error ? <p className="error">{error}</p> : <Empty text={t.loading} />}</Card>;
   const set = (patch: Partial<Alerts>) => { setDraft({ ...draft, ...patch }); setNotice(""); };

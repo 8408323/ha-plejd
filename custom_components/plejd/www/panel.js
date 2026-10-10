@@ -24608,9 +24608,14 @@ function yu({ hass: e }) {
 function bu({ hass: e }) {
 	let t = Rl(), [n, r] = (0, l.useState)(null), [i, a] = (0, l.useState)(null), [o, s] = (0, l.useState)([]), [c, u] = (0, l.useState)(!1), [d, f] = (0, l.useState)(""), [p, m] = (0, l.useState)("");
 	if ((0, l.useEffect)(() => {
-		e.callWS({ type: "plejd/activity/alerts/get" }).then((e) => {
-			r(e.alerts), a(e.alerts), s(e.notify_services);
-		}).catch((e) => f(zl(e)));
+		let t = !1, n = 0, i = () => e.callWS({ type: "plejd/activity/alerts/get" }).then((e) => {
+			t || (r(e.alerts), a(e.alerts), s(e.notify_services), f(""));
+		}).catch((e) => {
+			t || (f(zl(e)), n = window.setTimeout(i, 5e3));
+		});
+		return i(), () => {
+			t = !0, clearTimeout(n);
+		};
 	}, []), !i || !n) return /* @__PURE__ */ (0, $.jsx)(ql, {
 		title: t.nw_title,
 		wide: !0,

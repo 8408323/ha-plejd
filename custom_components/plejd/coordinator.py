@@ -400,7 +400,9 @@ class PlejdCoordinator:
         room_id = own_device.room_id if own_device else None
         for sensor in self.motion:
             at = self._recent_motion.get(sensor.address)
-            sensor_room = next((d.room_id for d in self.devices if d.device_id == sensor.device_id), None)
+            sensor_room = sensor.room_id or next(
+                (d.room_id for d in self.devices if d.device_id == sensor.device_id), None
+            )
             if (
                 at is not None
                 and now - at <= motion_window
