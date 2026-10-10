@@ -50,7 +50,10 @@ def _change(old, new):
     return types.SimpleNamespace(event_type="state_changed", data={"old_state": old, "new_state": new})
 
 
-def _hass(origin=None):
+def _hass(origin=None, mesh_after=None):
+    # mesh_after: {call time: origin} - what toggle_origin(since=...) finds after an HA call
+    mesh_after = mesh_after or {}
+
     def reg(uid, platform="plejd", **kw):
         defaults = {"config_entry_id": "e1", "device_id": None, "area_id": None, "labels": set()}
         return types.SimpleNamespace(unique_id=uid, platform=platform, **{**defaults, **kw})
@@ -66,11 +69,12 @@ def _hass(origin=None):
     )
     coordinator = types.SimpleNamespace(
         devices=[
-            types.SimpleNamespace(device_id="d1", output_index=0, address=42),
-            types.SimpleNamespace(device_id="d2", output_index=0, address=None),
+            types.SimpleNamespace(device_id="d1", output_index=0, address=42, category="light"),
+            types.SimpleNamespace(device_id="d2", output_index=0, address=None, category="light"),
+            types.SimpleNamespace(device_id="d3", output_index=0, address=43, category="relay"),
         ],
         rooms=[types.SimpleNamespace(room_id="r1", member_addresses=[42])],
-        toggle_origin=lambda address: origin,
+        toggle_origin=lambda address, since=None: origin if since is None else mesh_after.get(since),
     )
     users = {"u1": types.SimpleNamespace(name="Jonathan")}
 
@@ -127,8 +131,8 @@ async def test_ha_user_change_is_logged_with_the_user_name():
     ]
 
 
-async def _log_hass(origin=None):
-    hass = _hass(origin)
+async def _log_hass(origin=None, mesh_after=None):
+    hass = _hass(origin, mesh_after)
     await _log(hass)
     return hass
 
@@ -415,3 +419,77 @@ async def test_an_alarm_with_a_non_numeric_brightness_attribute_is_still_logged(
     )
     entry = hass.data[activity.DATA_ACTIVITY].entries[-1]
     assert entry["state"] == "armed_home" and "brightness" not in entry
+
+
+async def test_all_off_credits_only_light_outputs():
+    hass = await _log_hass()
+    hass.bus.listeners["call_service"](
+        types.SimpleNamespace(
+            context=_ctx(user_id="u1"), data={"domain": "plejd", "service": "all_off", "service_data": {}}
+        )
+    )
+    assert set(hass.data[activity.DATA_ACTIVITY]._room_commands) == {42}  # not the relay (43)
+
+
+async def test_a_room_command_is_used_up_even_by_a_transition_with_its_own_context(monkeypatch):
+    clock = [100.0]
+    monkeypatch.setattr(activity.time, "monotonic", lambda: clock[0])
+    hass = await _log_hass()
+    _room_call(hass, _ctx("room", user_id="u1"), entity_id="light.room_kontor")  # no-op: the member is on
+    hass.bus.listeners["state_changed"](
+        _change(_state("light.kontor", "on"), _state("light.kontor", "off", _ctx("direct", user_id="u2")))
+    )
+    assert _member(hass, "off", "on") == {"kind": "external"}  # not the stale room caller
+
+
+async def test_a_mesh_command_after_an_ha_call_beats_the_reused_context(monkeypatch):
+    clock = [100.0]
+    monkeypatch.setattr(activity.time, "monotonic", lambda: clock[0])
+    hass = await _log_hass(mesh_after={100.0: {"kind": "plejd_device"}})
+    fire = hass.bus.listeners
+    fire["call_service"](
+        types.SimpleNamespace(
+            context=_ctx("c1", user_id="u1"), data={"domain": "light", "service": "turn_on", "service_data": {}}
+        )
+    )
+    fire["state_changed"](
+        _change(_state("light.kontor", "off"), _state("light.kontor", "on", _ctx("c1", user_id="u1")))
+    )
+    # the same reused context, but the wall switch pressed after the call explains it
+    entries = hass.data[activity.DATA_ACTIVITY].entries
+    assert entries[-1]["source"] == {"kind": "plejd_device"}
+    hass2 = await _log_hass()  # no mesh command after the call: it was the HA user
+    hass2.bus.listeners["call_service"](
+        types.SimpleNamespace(
+            context=_ctx("c2", user_id="u1"), data={"domain": "light", "service": "turn_on", "service_data": {}}
+        )
+    )
+    hass2.bus.listeners["state_changed"](
+        _change(_state("light.kontor", "off"), _state("light.kontor", "on", _ctx("c2", user_id="u1")))
+    )
+    assert hass2.data[activity.DATA_ACTIVITY].entries[-1]["source"]["kind"] == "user"
+
+
+async def test_recorded_calls_are_bounded(monkeypatch):
+    monkeypatch.setattr(activity, "_MAX_CALLS", 2)
+    hass = await _log_hass()
+    for i in range(3):
+        hass.bus.listeners["call_service"](
+            types.SimpleNamespace(context=_ctx(f"c{i}"), data={"domain": "light", "service": "x", "service_data": {}})
+        )
+    assert list(hass.data[activity.DATA_ACTIVITY]._calls) == ["c1", "c2"]
+
+
+async def test_a_waiting_automation_keeps_its_name_across_a_reload():
+    hass = await _log_hass()
+    hass.bus.listeners["automation_triggered"](
+        types.SimpleNamespace(
+            event_type="automation_triggered", context=_ctx("run"), data={"name": "Kväll", "entity_id": "a.k"}
+        )
+    )
+    await hass.data[activity.DATA_ACTIVITY].async_stop()
+    await _log(hass)  # the reload's new log
+    hass.bus.listeners["state_changed"](
+        _change(_state("light.kontor", "off"), _state("light.kontor", "on", _ctx("run")))
+    )
+    assert hass.data[activity.DATA_ACTIVITY].entries[-1]["source"]["name"] == "Kväll"

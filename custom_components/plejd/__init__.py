@@ -499,7 +499,10 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if unload_ok:
         hass.data.pop(DATA_HOLIDAY_MODE, None)
         if (activity_log := hass.data.pop(activity.DATA_ACTIVITY, None)) is not None:
-            await activity_log.async_stop()
+            try:
+                await activity_log.async_stop()
+            except Exception:  # noqa: BLE001 - the log is optional; never leave the mesh connection running over it
+                _LOGGER.warning("Plejd: could not save the activity log on unload", exc_info=True)
         await entry.runtime_data.async_shutdown()
     elif was_holiday_mode_running:
         await holiday_mode.async_start()

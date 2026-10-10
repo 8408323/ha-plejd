@@ -20,7 +20,7 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.storage import Store
 
-from .const import DOMAIN
+from .const import CATEGORY_LIGHT, DOMAIN
 
 DATA_ACTIVITY = f"{DOMAIN}_activity"
 MAX_ENTRIES = 1000
@@ -31,6 +31,9 @@ _IGNORED_STATES = ("unavailable", "unknown")
 # Automation/script runs remembered for attribution: long enough for runs with delays/waits, bounded for memory.
 _RUN_TTL = 24 * 3600
 _MAX_CONTEXTS = 5000
+_DATA_RUNS = f"{DOMAIN}_activity_runs"
+_DATA_CALLS = f"{DOMAIN}_activity_calls"
+_MAX_CALLS = 500
 # How long after an HA command to a Plejd room its member lights' changes are credited to it.
 _ROOM_COMMAND_WINDOW = 10.0
 
@@ -45,7 +48,12 @@ class PlejdActivityLog:
         self._entry = entry
         self._store: Store = Store(hass, 1, f"{_STORE_KEY}.{entry.entry_id}")
         self.entries: list[dict[str, Any]] = []  # oldest first
-        self._runs: OrderedDict[str, tuple[float, dict[str, str]]] = OrderedDict()  # context id -> (started, run)
+        # context id -> (started, run). Kept in hass.data, not on this instance, so an automation that is still
+        # waiting while the integration reloads keeps its name when it acts afterwards.
+        self._runs: OrderedDict[str, tuple[float, dict[str, str]]] = hass.data.setdefault(_DATA_RUNS, OrderedDict())
+        # context id -> when HA sent a service call with it, to tell a fresh outside action from an old context
+        # HA keeps reusing on the entity for a few seconds after a call.
+        self._calls: OrderedDict[str, float] = hass.data.setdefault(_DATA_CALLS, OrderedDict())
         # Saving is off until the stored log has been read: after a failed read, saving would replace it.
         self._can_save = False
         # member mesh address -> (when, source) of an HA command sent to its Plejd room light. The room light
@@ -94,13 +102,17 @@ class PlejdActivityLog:
 
     @callback
     def _on_call_service(self, event) -> None:
+        self._calls[event.context.id] = time.monotonic()
+        self._calls.move_to_end(event.context.id)
+        while len(self._calls) > _MAX_CALLS:
+            self._calls.popitem(last=False)
         if event.data.get("domain") == DOMAIN and event.data.get("service") == "all_off":
             # plejd.all_off switches the outputs directly, so their changes carry no context of their own.
             if (source := self._ha_source(event.context)) is not None:
                 coordinator = getattr(self._entry, "runtime_data", None)
                 now = time.monotonic()
                 for device in getattr(coordinator, "devices", []):
-                    if device.address is not None:
+                    if device.address is not None and device.category == CATEGORY_LIGHT:  # all_off's own filter
                         self._room_commands[device.address] = (now, source, "off")
             return
         if event.data.get("domain") != "light":
@@ -231,12 +243,20 @@ class PlejdActivityLog:
         return None
 
     def _source(self, state, address: int | None) -> dict[str, Any]:
+        # A room command is used up by the member's first transition after it, whichever way that goes (and
+        # whatever else explains it): it credits that transition only if it's the one the command asked for.
+        cmd = self._room_commands.pop(address, None) if address is not None else None
         ha = self._ha_source(state.context)
         if ha:
+            # HA keeps a call's context on the entity for a few seconds and reuses it for later writes, so a
+            # wall switch or app pressed just after an HA command would wear that command's context. A mesh
+            # command seen after the HA call explains this transition better.
+            coordinator = getattr(self._entry, "runtime_data", None)
+            called = self._calls.get(state.context.id)
+            if address is not None and coordinator is not None and called is not None:
+                if origin := coordinator.toggle_origin(address, since=called):
+                    return origin
             return ha
-        # A room command is used up by the member's first transition after it, whichever way that goes: it
-        # credits that transition if it's the one the command asked for, and nothing later either way.
-        cmd = self._room_commands.pop(address, None) if address is not None else None
         if cmd and time.monotonic() - cmd[0] <= _ROOM_COMMAND_WINDOW and cmd[2] in (None, state.state):
             return dict(cmd[1])
         if address is None:  # an alarm panel: its own integration may know who changed it

@@ -3798,6 +3798,16 @@ def test_toggle_origin_ignores_malformed_toggle_frames(monkeypatch):
     assert c.toggle_origin(5) is None
 
 
+def test_toggle_origin_since_ignores_commands_from_before(monkeypatch):
+    clock = [100.0]
+    c, toggle = _origin_coordinator(monkeypatch, clock)
+    toggle(5)
+    assert c.toggle_origin(5, since=100.0) is None  # not newer than the HA call
+    clock[0] = 101.0
+    toggle(5)
+    assert c.toggle_origin(5, since=100.0) == {"kind": "plejd_device"}
+
+
 def test_toggle_origin_newest_command_wins(monkeypatch):
     clock = [100.0]
     c, toggle = _origin_coordinator(monkeypatch, clock)

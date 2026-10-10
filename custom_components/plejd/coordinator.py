@@ -337,7 +337,7 @@ class PlejdCoordinator:
 
         return _remove
 
-    def toggle_origin(self, output_address: int, window: float = 5.0) -> dict | None:
+    def toggle_origin(self, output_address: int, window: float = 5.0, since: float | None = None) -> dict | None:
         """Where a just-seen on/off of `output_address` came from, as far as the mesh shows it.
 
         The mesh carries no sender: an on/off (0x0097) addressed to a room's group came from a whole-room
@@ -349,7 +349,9 @@ class PlejdCoordinator:
 
         def seen(address: int) -> float | None:
             at = self._recent_toggles.get(address)
-            return at if at is not None and now - at <= window else None
+            if at is None or now - at > window or (since is not None and at <= since):
+                return None  # too old, or (with since) not newer than the command it would compete with
+            return at
 
         # Every command that could explain this change, newest first: a later command overrides an earlier one.
         candidates: list[tuple[float, dict]] = []
