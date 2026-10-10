@@ -1498,6 +1498,7 @@ async def test_activity_log_is_stopped_only_by_a_successful_unload(monkeypatch):
     hass.config_entries.unload_result = False
     assert await async_unload_entry(hass, entry) is False
     assert hass.data[activity.DATA_ACTIVITY] is log and log._unsubs  # still logging
+    assert log._entry.runtime_data is not None  # and still reaching the coordinator, without hass.data
     hass.config_entries.unload_result = True
     assert await async_unload_entry(hass, entry) is True
     assert activity.DATA_ACTIVITY not in hass.data and not log._unsubs

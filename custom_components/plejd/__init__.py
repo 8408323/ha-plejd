@@ -437,7 +437,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Optional like the bindings: a storage error mustn't stop setup. Stopped in async_unload_entry, and only
     # when the unload succeeds: older HA runs on_unload callbacks even after a refused unload, which would
     # leave a still-running integration without its log.
-    activity_log = activity.PlejdActivityLog(hass, entry.entry_id)
+    activity_log = activity.PlejdActivityLog(hass, entry)
     try:
         await activity_log.async_load()
     except Exception:  # noqa: BLE001 - optional; start with an empty log

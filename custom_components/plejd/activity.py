@@ -21,7 +21,6 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.storage import Store
 
 from .const import DOMAIN
-from .schedule_ws import DATA_ENTRY
 
 DATA_ACTIVITY = f"{DOMAIN}_activity"
 MAX_ENTRIES = 1000
@@ -39,9 +38,12 @@ _ROOM_COMMAND_WINDOW = 10.0
 class PlejdActivityLog:
     """Listens to state changes and keeps the newest MAX_ENTRIES of them."""
 
-    def __init__(self, hass: HomeAssistant, entry_id: str) -> None:
+    def __init__(self, hass: HomeAssistant, entry) -> None:
         self.hass = hass
-        self._store: Store = Store(hass, 1, f"{_STORE_KEY}.{entry_id}")
+        # Its own reference to the entry (and so the coordinator), not hass.data: older HA runs on_unload
+        # callbacks even when an unload is refused, which would drop that lookup from a still-running setup.
+        self._entry = entry
+        self._store: Store = Store(hass, 1, f"{_STORE_KEY}.{entry.entry_id}")
         self.entries: list[dict[str, Any]] = []  # oldest first
         self._runs: OrderedDict[str, tuple[float, dict[str, str]]] = OrderedDict()  # context id -> (started, run)
         # Saving is off until the stored log has been read: after a failed read, saving would replace it.
@@ -92,6 +94,15 @@ class PlejdActivityLog:
 
     @callback
     def _on_call_service(self, event) -> None:
+        if event.data.get("domain") == DOMAIN and event.data.get("service") == "all_off":
+            # plejd.all_off switches the outputs directly, so their changes carry no context of their own.
+            if (source := self._ha_source(event.context)) is not None:
+                coordinator = getattr(self._entry, "runtime_data", None)
+                now = time.monotonic()
+                for device in getattr(coordinator, "devices", []):
+                    if device.address is not None:
+                        self._room_commands[device.address] = (now, source, "off")
+            return
         if event.data.get("domain") != "light":
             return
         source = self._ha_source(event.context)
@@ -128,8 +139,8 @@ class PlejdActivityLog:
             "state": new.state,
             "source": self._source(new, address),
         }
-        if new.attributes.get("brightness") is not None:
-            entry["brightness"] = round(new.attributes["brightness"] / 255 * 100)
+        if address is not None and isinstance(brightness := new.attributes.get("brightness"), int | float):
+            entry["brightness"] = round(brightness / 255 * 100)
         self.entries.append(entry)
         del self.entries[:-MAX_ENTRIES]
         if self._can_save:
@@ -140,7 +151,7 @@ class PlejdActivityLog:
         if domain not in _TRACKED_PLEJD_DOMAINS:
             return None
         reg = er.async_get(self.hass).async_get(entity_id)
-        coordinator = getattr(self.hass.data.get(DATA_ENTRY), "runtime_data", None)
+        coordinator = getattr(self._entry, "runtime_data", None)
         if reg is None or reg.platform != DOMAIN or coordinator is None:
             return None
         for device in coordinator.devices:
@@ -155,7 +166,7 @@ class PlejdActivityLog:
         Matches each room light against the call's entity/device/area/floor/label targets itself rather than
         through HA's target helper, whose signature differs across the supported HA versions.
         """
-        coordinator = getattr(self.hass.data.get(DATA_ENTRY), "runtime_data", None)
+        coordinator = getattr(self._entry, "runtime_data", None)
         if coordinator is None:
             return []
 
@@ -183,9 +194,7 @@ class PlejdActivityLog:
             ids("label_id"),
         )
         registry = er.async_get(self.hass)
-        by_unique_id = {
-            e.unique_id: e for e in er.async_entries_for_config_entry(registry, self.hass.data[DATA_ENTRY].entry_id)
-        }
+        by_unique_id = {e.unique_id: e for e in er.async_entries_for_config_entry(registry, self._entry.entry_id)}
         members: list[int] = []
         for room in coordinator.rooms:
             reg = by_unique_id.get(f"room_{room.room_id}")
@@ -233,7 +242,7 @@ class PlejdActivityLog:
         if address is None:  # an alarm panel: its own integration may know who changed it
             changed_by = state.attributes.get("changed_by")
             return {"kind": "alarm", "name": changed_by} if changed_by else {"kind": "external"}
-        coordinator = getattr(self.hass.data.get(DATA_ENTRY), "runtime_data", None)
+        coordinator = getattr(self._entry, "runtime_data", None)
         origin = coordinator.toggle_origin(address) if coordinator is not None else None
         return origin or {"kind": "external"}
 

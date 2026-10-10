@@ -101,7 +101,7 @@ def _hass(origin=None):
 
 
 async def _log(hass):
-    log = activity.PlejdActivityLog(hass, "e1")
+    log = activity.PlejdActivityLog(hass, hass.data[DATA_ENTRY])
     await log.async_load()
     log.async_start()
     hass.data[activity.DATA_ACTIVITY] = log
@@ -196,7 +196,7 @@ async def test_noise_and_unrelated_entities_are_not_logged():
 
 async def test_without_a_loaded_coordinator_plejd_entities_are_skipped():
     hass = _hass()
-    hass.data[DATA_ENTRY] = None
+    hass.data[DATA_ENTRY].runtime_data = None
     log = await _log(hass)
     hass.bus.listeners["state_changed"](_change(_state("light.kontor", "off"), _state("light.kontor", "on")))
     assert log.entries == []
@@ -209,7 +209,7 @@ async def test_log_is_capped_persisted_and_reloaded(monkeypatch):
         old, new = ("off", "on") if i % 2 == 0 else ("on", "off")
         hass.bus.listeners["state_changed"](_change(_state("light.kontor", old), _state("light.kontor", new)))
     assert len(hass.data[activity.DATA_ACTIVITY].entries) == 3
-    reloaded = activity.PlejdActivityLog(hass, "e1")
+    reloaded = activity.PlejdActivityLog(hass, hass.data[DATA_ENTRY])
     await reloaded.async_load()
     assert reloaded.entries == hass.data[activity.DATA_ACTIVITY].entries
 
@@ -240,7 +240,7 @@ async def test_run_contexts_are_kept_for_a_day_and_bounded(monkeypatch):
 async def test_failed_load_never_overwrites_the_stored_log(monkeypatch):
     hass = _hass()
     hass.data[("store", "plejd.activity.e1")] = {"entries": [{"kept": True}]}
-    log = activity.PlejdActivityLog(hass, "e1")
+    log = activity.PlejdActivityLog(hass, hass.data[DATA_ENTRY])
 
     async def _fail():
         raise ValueError("newer storage version")
@@ -262,7 +262,7 @@ async def test_stop_removes_the_listeners_and_flushes_pending_entries():
     hass.bus.listeners["state_changed"](_change(_state("light.kontor", "off"), _state("light.kontor", "on")))
     await log.async_stop()
     assert hass.bus.listeners == {}
-    reloaded = activity.PlejdActivityLog(hass, "e1")  # what a reload's new log sees
+    reloaded = activity.PlejdActivityLog(hass, hass.data[DATA_ENTRY])  # what a reload's new log sees
     await reloaded.async_load()
     assert [e["state"] for e in reloaded.entries] == ["on"]
 
@@ -270,11 +270,11 @@ async def test_stop_removes_the_listeners_and_flushes_pending_entries():
 async def test_each_setup_has_its_own_log_and_removing_it_deletes_it():
     hass = await _log_hass()
     hass.bus.listeners["state_changed"](_change(_state("light.kontor", "off"), _state("light.kontor", "on")))
-    other = activity.PlejdActivityLog(hass, "e2")
+    other = activity.PlejdActivityLog(hass, types.SimpleNamespace(entry_id="e2"))
     await other.async_load()
     assert other.entries == []
     await activity.async_remove_store(hass, "e1")
-    gone = activity.PlejdActivityLog(hass, "e1")
+    gone = activity.PlejdActivityLog(hass, hass.data[DATA_ENTRY])
     await gone.async_load()
     assert gone.entries == []
 
@@ -383,7 +383,7 @@ async def test_room_calls_that_are_not_credited():
 
 async def test_room_commands_are_ignored_without_a_loaded_coordinator():
     hass = await _log_hass()
-    hass.data[DATA_ENTRY] = None
+    hass.data[DATA_ENTRY].runtime_data = None
     hass.bus.listeners["call_service"](
         types.SimpleNamespace(
             context=_ctx(user_id="u1"),
@@ -391,3 +391,27 @@ async def test_room_commands_are_ignored_without_a_loaded_coordinator():
         )
     )
     assert hass.data[activity.DATA_ACTIVITY]._room_commands == {}
+
+
+async def test_all_off_service_is_credited_to_whoever_called_it():
+    hass = await _log_hass()
+    hass.bus.listeners["call_service"](
+        types.SimpleNamespace(
+            context=_ctx(user_id="u1"), data={"domain": "plejd", "service": "all_off", "service_data": {}}
+        )
+    )
+    assert _member(hass, "on", "off") == {"kind": "user", "user_id": "u1"}
+    hass.bus.listeners["call_service"](  # called from outside HA (no user or run): nothing to credit
+        types.SimpleNamespace(context=_ctx(), data={"domain": "plejd", "service": "all_off", "service_data": {}})
+    )
+    assert _member(hass, "on", "off") == {"kind": "external"}
+
+
+async def test_an_alarm_with_a_non_numeric_brightness_attribute_is_still_logged():
+    hass = await _log_hass()
+    alarm = "alarm_control_panel.v"
+    hass.bus.listeners["state_changed"](
+        _change(_state(alarm, "disarmed"), _state(alarm, "armed_home", brightness="high"))
+    )
+    entry = hass.data[activity.DATA_ACTIVITY].entries[-1]
+    assert entry["state"] == "armed_home" and "brightness" not in entry
