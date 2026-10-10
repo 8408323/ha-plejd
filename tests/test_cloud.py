@@ -166,6 +166,8 @@ def test_parse_site_scene_outputs_come_from_scene_steps():
     # Membership is unknown rather than incomplete when it can't be trusted:
     assert outputs([step, {**removed, "dirty": True}]) == [None]  # an edit the mesh hasn't got yet
     assert outputs([step, {**step, "deviceId": "gone"}]) == [None]  # an output we can't map
+    for bad in ({"dirty": 1}, {"dirtyRemoved": "true"}, {"deviceId": ["d1"]}, {"output": {"0": 1}}, {"output": True}):
+        assert outputs([step, {**step, **bad}]) == [None], bad  # flags or keys of the wrong type
     assert outputs([step, {"sceneId": "sc2", "deviceId": "gone"}]) == [[11]]  # ...only for its own scene
     assert outputs([step, "not-a-dict"]) == [None]
     assert outputs([step, {**step, "sceneId": None}]) == [None]

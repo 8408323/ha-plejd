@@ -1024,11 +1024,17 @@ def parse_site(site: dict) -> PlejdCloudSite:
             if not isinstance(step, dict) or not isinstance(step.get("sceneId"), str):
                 scene_outputs = None
                 break
-            if step.get("dirty") is True:
-                unknown_scenes.add(step["sceneId"])
-            elif step.get("dirtyRemoved") is not True:  # a removal the mesh already has drops out
-                address = address_by_output.get((step.get("deviceId"), step.get("output")))
-                if address is None:
+            dirty, removed = step.get("dirty", False), step.get("dirtyRemoved", False)
+            device_id, output = step.get("deviceId"), step.get("output")
+            if (
+                dirty is not False
+                or not isinstance(removed, bool)
+                or not isinstance(device_id, str)
+                or type(output) is not int
+            ):
+                unknown_scenes.add(step["sceneId"])  # pending in the app, or fields we can't trust
+            elif not removed:  # a removal the mesh already has drops out
+                if (address := address_by_output.get((device_id, output))) is None:
                     unknown_scenes.add(step["sceneId"])
                 else:
                     scene_outputs.setdefault(step["sceneId"], []).append(address)
