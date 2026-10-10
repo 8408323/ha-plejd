@@ -74,15 +74,16 @@ def _hass(origin=None, mesh_after=None):
         defaults = {"config_entry_id": "e1", "device_id": None, "area_id": None, "labels": set()}
         return types.SimpleNamespace(unique_id=uid, platform=platform, **{**defaults, **kw})
 
-    registry = er.EntityRegistry(
-        {
-            "light.kontor": reg("d1"),
-            "light.room_kontor": reg("room_r1", entity_id="light.room_kontor", device_id="dev_room"),
-            "light.other_brand": reg("x1", platform="hue"),
-            "switch.relay": reg("d2"),
-            "cover.blind": reg("d1"),
-        }
-    )
+    entries = {
+        "light.kontor": reg("d1"),
+        "light.room_kontor": reg("room_r1", device_id="dev_room"),
+        "light.other_brand": reg("x1", platform="hue"),
+        "switch.relay": reg("d2"),
+        "cover.blind": reg("d1"),
+    }
+    for entity_id, entry in entries.items():
+        entry.entity_id = entity_id
+    registry = er.EntityRegistry(entries)
     coordinator = types.SimpleNamespace(
         devices=[
             types.SimpleNamespace(device_id="d1", output_index=0, address=42, category="light", room_id="r1"),
@@ -867,8 +868,9 @@ async def test_a_plejd_scene_run_from_ha_is_credited_to_its_caller(monkeypatch):
     hass = await _log_hass(origin=origin)
     hass.data[DATA_ENTRY].runtime_data.scenes = [types.SimpleNamespace(scene_id="sc1", index=3)]
     reg = hass.entity_registry._entities
-    reg["scene.kvall"] = types.SimpleNamespace(unique_id="scene_sc1", platform="plejd")
-    reg["scene.other"] = types.SimpleNamespace(unique_id="x", platform="hue")
+    scene_reg = {"config_entry_id": "e1", "device_id": None, "area_id": None, "labels": set()}
+    reg["scene.kvall"] = types.SimpleNamespace(unique_id="scene_sc1", entity_id="scene.kvall", **scene_reg)
+    reg["scene.other"] = types.SimpleNamespace(unique_id="x", entity_id="scene.other", **scene_reg)
     fire = hass.bus.listeners
 
     def run_scene(ctx, target):
@@ -888,6 +890,16 @@ async def test_a_plejd_scene_run_from_ha_is_credited_to_its_caller(monkeypatch):
     run_scene(_ctx(user_id="u1"), ["scene.other", "scene.missing"])  # not Plejd scenes
     origin["at"] = 99.0  # a firing from before the call
     assert _member(hass, "on", "off") == {"kind": "plejd_scene", "name": "Kväll"}
+    reg["scene.kvall"].area_id = "vardagsrum"
+    clock[0] = 200.0
+    origin["at"] = 200.5
+    hass.bus.listeners["call_service"](
+        types.SimpleNamespace(
+            context=_ctx(user_id="u1"),
+            data={"domain": "scene", "service": "turn_on", "service_data": {"area_id": "vardagsrum"}},
+        )
+    )
+    assert _member(hass, "off", "on") == {"kind": "user", "user_id": "u1"}  # targeted through its area
 
 
 async def test_a_scene_after_an_ha_call_is_still_checked_against_schedules(monkeypatch):
@@ -922,7 +934,7 @@ async def test_schedules_match_across_midnight_and_use_the_update_time():
     assert hass.data[activity.DATA_ACTIVITY].entries[-1]["source"] == {"kind": "plejd_schedule", "name": "Sunday night"}
 
 
-async def test_one_failing_notify_target_does_not_stop_the_others():
+async def test_one_failing_notify_target_does_not_stop_the_others(caplog):
     hass, tasks = await _alert_hass(targets=["mobile_app_pixel", "family"])
     sent = []
 
@@ -938,3 +950,5 @@ async def test_one_failing_notify_target_does_not_stop_the_others():
     )
     await asyncio.gather(*tasks)
     assert sent == [("notify", "family"), ("persistent_notification", "create")]
+    assert "could not deliver to one target (RuntimeError)" in caplog.text
+    assert "pixel" not in caplog.text  # the phone's name stays out of the log

@@ -296,8 +296,9 @@ class PlejdActivityLog:
         for domain, service in calls:
             try:  # one removed phone mustn't stop the alert reaching the others
                 await self.hass.services.async_call(domain, service, {"title": title, "message": message})
-            except Exception:  # noqa: BLE001 - report and carry on with the next target
-                _LOGGER.warning("Plejd night watch: could not notify %s.%s", domain, service, exc_info=True)
+            except Exception as err:  # noqa: BLE001 - report and carry on with the next target
+                # The service name and the exception text usually carry a person's and phone's name.
+                _LOGGER.warning("Plejd night watch: could not deliver to one target (%s)", type(err).__name__)
 
     def _plejd_output(self, entity_id: str, domain: str):
         """The Plejd output (cloud device) behind an entity; None for anything that isn't one."""
@@ -314,14 +315,25 @@ class PlejdActivityLog:
         return None  # e.g. a room-group light, which only mirrors its member lights
 
     def _targeted_room_members(self, service_data: dict[str, Any]) -> list[int]:
-        """Member addresses of every Plejd room light a light service call targets.
-
-        Matches each room light against the call's entity/device/area/floor/label targets itself rather than
-        through HA's target helper, whose signature differs across the supported HA versions.
-        """
+        """Member addresses of every Plejd room light a light service call targets."""
         coordinator = getattr(self._entry, "runtime_data", None)
         if coordinator is None:
             return []
+        is_targeted = self._target_matcher(service_data)
+        registry = er.async_get(self.hass)
+        by_unique_id = {e.unique_id: e for e in er.async_entries_for_config_entry(registry, self._entry.entry_id)}
+        members: list[int] = []
+        for room in coordinator.rooms:
+            if (reg := by_unique_id.get(f"room_{room.room_id}")) is not None and is_targeted(reg):
+                members.extend(room.member_addresses)
+        return members
+
+    def _target_matcher(self, service_data: dict[str, Any]):
+        """Whether a registry entry is among a service call's entity/device/area/floor/label targets.
+
+        Matches entries itself rather than through HA's target helper, whose signature differs across the
+        supported HA versions.
+        """
 
         def ids(key: str) -> set[str]:
             value = service_data.get(key) or []
@@ -346,13 +358,8 @@ class PlejdActivityLog:
             ids("floor_id"),
             ids("label_id"),
         )
-        registry = er.async_get(self.hass)
-        by_unique_id = {e.unique_id: e for e in er.async_entries_for_config_entry(registry, self._entry.entry_id)}
-        members: list[int] = []
-        for room in coordinator.rooms:
-            reg = by_unique_id.get(f"room_{room.room_id}")
-            if reg is None:
-                continue
+
+        def is_targeted(reg) -> bool:
             # Mirrors HA's target expansion: the entity's own area, else its device's; labels on the entity,
             # its device or its area; and the floor of that area.
             device = dr.async_get(self.hass).async_get(reg.device_id) if reg.device_id else None
@@ -363,16 +370,16 @@ class PlejdActivityLog:
                 | set(getattr(device, "labels", ()) or ())
                 | set(getattr(area, "labels", ()) or ())
             )
-            if (
-                "all" in entity_ids  # entity_id: all targets every light
+            return bool(
+                "all" in entity_ids  # entity_id: all targets every entity of the domain
                 or reg.entity_id in entity_ids
                 or (reg.device_id and reg.device_id in device_ids)
                 or (area_id and area_id in area_ids)
                 or (getattr(area, "floor_id", None) in floor_ids)
                 or labels & label_ids
-            ):
-                members.extend(room.member_addresses)
-        return members
+            )
+
+        return is_targeted
 
     def _ha_source(self, ctx) -> dict[str, Any] | None:
         """The automation/script run or user behind an HA context; None when it didn't come from HA."""
@@ -413,20 +420,19 @@ class PlejdActivityLog:
         return self._named_origin(origin, state) if origin else {"kind": "external"}
 
     def _plejd_scene_indexes(self, service_data: dict[str, Any]) -> list[int]:
-        """Mesh indexes of the Plejd scenes a scene.turn_on call targets by entity id."""
-        targets = service_data.get("entity_id") or []
-        targets = [targets] if isinstance(targets, str) else targets
-        registry = er.async_get(self.hass)
+        """Mesh indexes of the Plejd scenes a scene.turn_on call targets."""
         coordinator = getattr(self._entry, "runtime_data", None)
-        indexes = []
-        for entity_id in targets:
-            reg = registry.async_get(entity_id)
-            if reg is None or reg.platform != DOMAIN:
-                continue
-            for scene in getattr(coordinator, "scenes", []):
-                if reg.unique_id == f"scene_{scene.scene_id}":
-                    indexes.append(scene.index)
-        return indexes
+        is_targeted = self._target_matcher(service_data)
+        by_unique_id = {
+            e.unique_id: e
+            for e in er.async_entries_for_config_entry(er.async_get(self.hass), self._entry.entry_id)
+            if e.entity_id.startswith("scene.")
+        }
+        return [
+            scene.index
+            for scene in getattr(coordinator, "scenes", [])
+            if (reg := by_unique_id.get(f"scene_{scene.scene_id}")) is not None and is_targeted(reg)
+        ]
 
     def _named_origin(self, origin: dict[str, Any], state) -> dict[str, Any]:
         """A mesh origin as logged: a scene run from HA or at a schedule's time gets that source instead."""
