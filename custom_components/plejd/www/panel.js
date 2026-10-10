@@ -24360,8 +24360,8 @@ function yu({ hass: e }) {
 		from: "23:00",
 		to: "06:00"
 	}), C = Object.values(e.states).filter((t) => t.entity_id.startsWith("alarm_control_panel.") || ["light", "switch"].some((e) => t.entity_id.startsWith(`${e}.`)) && Hl(e, t)).map((e) => `${e.entity_id}:${e.state}:${e.attributes.brightness ?? ""}`).join("|"), w = (() => {
-		let e = /* @__PURE__ */ new Date();
-		return c === "today" ? e.setHours(0, 0, 0, 0) : e.setDate(e.getDate() - gu[c]), e.setDate(e.getDate() - d), e;
+		let e = c === "24h" ? /* @__PURE__ */ new Date(Date.now() - 864e5) : /* @__PURE__ */ new Date();
+		return c === "today" ? e.setHours(0, 0, 0, 0) : c !== "24h" && e.setDate(e.getDate() - gu[c]), e.setDate(e.getDate() - d), e;
 	})(), T = w.toISOString().slice(0, 13);
 	(0, l.useEffect)(() => {
 		let t = !1, n = 0, i = () => e.callWS({

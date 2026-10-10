@@ -213,7 +213,7 @@ class PlejdActivityLog:
             "state": "on",
             "from": before,
             "to": after,
-            "source": self._ha_source(new.context) or {"kind": "external"},
+            "source": self._source(new, output.address),
         }
         if room := self._room_name(output):
             entry["room"] = room
@@ -250,25 +250,28 @@ class PlejdActivityLog:
             return
         if entry["type"] == "alarm" and not cfg.get("alarm"):
             return
-        if entry["type"] == "state" and entry["state"] != "on":
-            return
+        if entry["type"] == "state" and (entry["state"] != "on" or not entry["entity_id"].startswith("light.")):
+            return  # a light going on; a Plejd relay (switch.*) may drive anything
         if entry["source"]["kind"] in (cfg.get("ignore") or []):
             return
         local = dt_util.as_local(datetime.fromisoformat(entry["t"]))
         if not _in_window(local.strftime("%H:%M"), cfg.get("start", "23:00"), cfg.get("end", "06:00")):
             return
+        self.hass.async_create_task(self._async_send_alert(entry, local, cfg))
+
+    async def _async_send_alert(self, entry: dict[str, Any], local: datetime, cfg: dict[str, Any]) -> None:
+        source = entry["source"]
+        if user_id := source.get("user_id"):  # stored as an id; the message needs the person's name
+            user = await self.hass.auth.async_get_user(user_id)
+            source = {**source, "name": user.name if user else "someone"}
         room = f" ({entry['room']})" if entry.get("room") else ""
         what = "turned on" if entry["type"] == "state" else f"alarm: {entry['state'].replace('_', ' ')}"
-        message = f"{entry['name']}{room} {what} at {local:%H:%M} — {describe_source(entry['source'])}"
+        message = f"{entry['name']}{room} {what} at {local:%H:%M} — {describe_source(source)}"
         title = "Plejd night watch"
         for target in cfg.get("targets") or []:
-            self.hass.async_create_task(
-                self.hass.services.async_call("notify", target, {"title": title, "message": message})
-            )
+            await self.hass.services.async_call("notify", target, {"title": title, "message": message})
         if cfg.get("persistent"):
-            self.hass.async_create_task(
-                self.hass.services.async_call("persistent_notification", "create", {"title": title, "message": message})
-            )
+            await self.hass.services.async_call("persistent_notification", "create", {"title": title, "message": message})
 
     def _plejd_output(self, entity_id: str, domain: str):
         """The Plejd output (cloud device) behind an entity; None for anything that isn't one."""
@@ -387,6 +390,13 @@ class PlejdActivityLog:
             origin = {k: v for k, v in origin.items() if k != "index"}
         return origin or {"kind": "external"}
 
+    def _schedule_enabled(self, schedule: dict[str, Any]) -> bool:
+        """Whether a schedule's switch is on (switch.py's PlejdScheduleSwitch; unknown counts as on)."""
+        site_id = getattr(getattr(self._entry, "runtime_data", None), "site_id", None)
+        entity_id = er.async_get(self.hass).async_get_entity_id("switch", DOMAIN, f"{site_id}_schedule_{schedule.get('id')}")
+        state = self.hass.states.get(entity_id) if entity_id else None
+        return state is None or state.state != "off"
+
     def _schedule_for(self, scene_index: int, state) -> str | None:
         """The on-device schedule that runs this scene at about this time, if any."""
         entry = self._entry
@@ -394,6 +404,8 @@ class PlejdActivityLog:
         for schedule in (getattr(entry, "options", None) or {}).get(CONF_SCHEDULES) or []:
             if schedule.get("scene") != scene_index or local.weekday() not in schedule.get("days", []):
                 continue
+            if not self._schedule_enabled(schedule):
+                continue  # switched off: its time event is gone from the devices
             hour, minute, *_ = (int(p) for p in str(schedule.get("time", "")).split(":") + ["0"])
             planned = local.replace(hour=hour, minute=minute, second=0, microsecond=0)
             if abs(local - planned) <= _SCHEDULE_SLACK:

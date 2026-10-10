@@ -1087,9 +1087,10 @@ function ActivityLog({ hass }: Ctx) {
     .filter((s) => s.entity_id.startsWith("alarm_control_panel.") || (["light", "switch"].some((d) => s.entity_id.startsWith(`${d}.`)) && isPlejd(hass, s)))
     .map((s) => `${s.entity_id}:${s.state}:${s.attributes.brightness ?? ""}`).join("|");
   const start = (() => {
-    const d = new Date();
+    // 24h is elapsed time (a DST night has 23 or 25 hours); today/7d/30d are calendar days
+    const d = range === "24h" ? new Date(Date.now() - 24 * 3600e3) : new Date();
     if (range === "today") d.setHours(0, 0, 0, 0);
-    else d.setDate(d.getDate() - LOG_RANGES[range]);
+    else if (range !== "24h") d.setDate(d.getDate() - LOG_RANGES[range]);
     d.setDate(d.getDate() - extraDays);
     return d;
   })();

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import types
 from datetime import UTC, datetime
 
@@ -97,6 +98,7 @@ def _hass(origin=None, mesh_after=None):
         return users.get(user_id)
 
     group_states = {
+        "switch.schedule_workday": types.SimpleNamespace(state="on"),
         "group.downstairs": types.SimpleNamespace(attributes={"entity_id": ["group.inner", "light.other"]}),
         "group.inner": types.SimpleNamespace(attributes={"entity_id": ["light.room_kontor", "group.downstairs"]}),
     }
@@ -645,8 +647,7 @@ async def test_night_watch_notifies_about_a_light_going_on_in_the_window():
     fire = hass.bus.listeners["state_changed"]
     night = datetime(2026, 10, 11, 0, 13, tzinfo=UTC)  # 02:13 local
     fire(_change(_state("light.kontor", "off"), _state("light.kontor", "on", when=night)))
-    for task in tasks:
-        await task
+    await asyncio.gather(*tasks)
     assert hass.services.calls == [
         (
             "notify",
@@ -690,8 +691,7 @@ async def test_night_watch_can_include_the_alarm():
     hass.bus.listeners["state_changed"](
         _change(_state(alarm, "armed_away"), _state(alarm, "disarmed", when=night, changed_by="Sofia"))
     )
-    for task in tasks:
-        await task
+    await asyncio.gather(*tasks)
     assert hass.services.calls == [
         (
             "persistent_notification",
@@ -761,3 +761,57 @@ async def test_a_light_without_a_room_has_no_room_field():
     hass.data[DATA_ENTRY].runtime_data.devices[0].room_id = None
     hass.bus.listeners["state_changed"](_change(_state("light.kontor", "off"), _state("light.kontor", "on")))
     assert "room" not in hass.data[activity.DATA_ACTIVITY].entries[-1]
+
+
+async def test_a_dim_from_plejd_gets_its_mesh_source(monkeypatch):
+    clock = [100.0]
+    monkeypatch.setattr(activity.time, "monotonic", lambda: clock[0])
+    hass = await _log_hass(origin={"kind": "plejd_scene", "name": "Kväll", "index": 9})
+    hass.bus.listeners["state_changed"](
+        _change(_state("light.kontor", "on", brightness=51), _state("light.kontor", "on", brightness=204))
+    )
+    assert hass.data[activity.DATA_ACTIVITY].entries[-1]["source"] == {"kind": "plejd_scene", "name": "Kväll"}
+
+
+async def test_night_watch_names_the_ha_user():
+    hass, tasks = await _alert_hass(persistent=False)
+    night = datetime(2026, 10, 11, 0, 13, tzinfo=UTC)
+    hass.bus.listeners["state_changed"](
+        _change(_state("light.kontor", "off"), _state("light.kontor", "on", _ctx(user_id="u1"), when=night))
+    )
+    hass.bus.listeners["state_changed"](
+        _change(_state("light.kontor", "off"), _state("light.kontor", "on", _ctx(user_id="gone"), when=night))
+    )
+    await asyncio.gather(*tasks)
+    assert [c[2]["message"] for c in hass.services.calls] == [
+        "Kontor (Kontor) turned on at 02:13 — Jonathan via Home Assistant",
+        "Kontor (Kontor) turned on at 02:13 — someone via Home Assistant",
+    ]
+
+
+async def test_night_watch_ignores_plejd_relays():
+    hass, tasks = await _alert_hass()
+    hass.entity_registry._entities["switch.pump"] = types.SimpleNamespace(
+        unique_id="d3", platform="plejd", config_entry_id="e1", device_id=None, area_id=None, labels=set()
+    )
+    night = datetime(2026, 10, 11, 0, 13, tzinfo=UTC)
+    hass.bus.listeners["state_changed"](_change(_state("switch.pump", "off"), _state("switch.pump", "on", when=night)))
+    assert hass.data[activity.DATA_ACTIVITY].entries[-1]["entity_id"] == "switch.pump"  # logged...
+    assert tasks == []  # ...but no "light turned on" alert
+
+
+async def test_a_switched_off_schedule_is_not_credited():
+    when = datetime(2026, 10, 12, 5, 31, tzinfo=UTC)  # Monday 07:31 local
+    hass = await _log_hass(origin={"kind": "plejd_scene", "name": "Morgon", "index": 3})
+    hass.data[DATA_ENTRY].runtime_data.site_id = "S1"
+    hass.data[DATA_ENTRY].options = {
+        "schedules": [{"id": 7, "name": "Workday", "days": [0], "time": "07:30", "scene": 3}]
+    }
+    hass.entity_registry._entities["switch.schedule_workday"] = types.SimpleNamespace(
+        unique_id="S1_schedule_7", platform="plejd", config_entry_id="e1", device_id=None, area_id=None, labels=set()
+    )
+    fire = hass.bus.listeners["state_changed"]
+    fire(_change(_state("light.kontor", "off"), _state("light.kontor", "on", when=when)))
+    hass.states.get("switch.schedule_workday").state = "off"
+    fire(_change(_state("light.kontor", "on"), _state("light.kontor", "off", when=when)))
+    assert [e["source"]["kind"] for e in hass.data[activity.DATA_ACTIVITY].entries] == ["plejd_schedule", "plejd_scene"]
