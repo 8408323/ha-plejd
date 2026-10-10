@@ -347,22 +347,24 @@ class PlejdCoordinator:
         """
         now = time.monotonic()
 
-        def recent(address: int) -> bool:
-            seen = self._recent_toggles.get(address)
-            return seen is not None and now - seen <= window
+        def seen(address: int) -> float | None:
+            at = self._recent_toggles.get(address)
+            return at if at is not None and now - at <= window else None
 
+        # Every command that could explain this change, newest first: a later command overrides an earlier one.
+        candidates: list[tuple[float, dict]] = []
         for room in self.rooms:
-            if output_address in room.member_addresses and recent(room.address):
-                return {"kind": "plejd_room", "name": room.name}
-        if recent(output_address):
-            return {"kind": "plejd_device"}
-        # Last resort: a separate remote/wall switch pressed just before. Plejd doesn't say which outputs
-        # a button drives, so this is a best guess.
+            if output_address in room.member_addresses and (at := seen(room.address)) is not None:
+                candidates.append((at, {"kind": "plejd_room", "name": room.name}))
+        if (at := seen(output_address)) is not None:
+            candidates.append((at, {"kind": "plejd_device"}))
+        # A separate remote/wall switch pressed just before. Plejd doesn't say which outputs a button
+        # drives, so this is a best guess (and it only wins when it is the newest command).
         own_device = next((d.device_id for d in self.devices if d.address == output_address), None)
         for button in self.inputs:
-            if button.device_id != own_device and recent(button.address):
-                return {"kind": "plejd_input", "name": button.name}
-        return None
+            if button.device_id != own_device and (at := seen(button.address)) is not None:
+                candidates.append((at, {"kind": "plejd_input", "name": button.name}))
+        return max(candidates, key=lambda c: c[0])[1] if candidates else None
 
     def faults_for(self, address: int) -> frozenset[str]:
         """Active fault-flag names last reported by a device (empty if none/unknown)."""
@@ -374,14 +376,8 @@ class PlejdCoordinator:
 
     @callback
     def _on_event(self, command: Command) -> None:
-        # Every incoming mesh command, for working out where a change came from (debug only).
-        _LOGGER.debug(
-            "rx addr=%d type=0x%02x cmd=0x%04x data=%s",
-            command.address,
-            command.command_type,
-            command.command,
-            command.data.hex(),
-        )
+        # Every incoming mesh command's kind and target (never the payload), for tracing where a change came from.
+        _LOGGER.debug("rx addr=%d cmd=0x%04x len=%d", command.address, command.command, len(command.data))
         if command.command in (CMD_GROUP_STATE_AND_LEVEL, CMD_OUTPUT_STATE_AND_LEVEL):
             if command.command == CMD_GROUP_STATE_AND_LEVEL:
                 self._fan_group_state_to_members(command)

@@ -80,7 +80,7 @@ def _hass(origin=None):
 
 
 async def _log(hass):
-    log = activity.PlejdActivityLog(hass)
+    log = activity.PlejdActivityLog(hass, "e1")
     await log.async_load()
     log.async_start()
     hass.data[activity.DATA_ACTIVITY] = log
@@ -187,7 +187,7 @@ async def test_log_is_capped_persisted_and_reloaded(monkeypatch):
         old, new = ("off", "on") if i % 2 == 0 else ("on", "off")
         hass.bus.listeners["state_changed"](_change(_state("light.kontor", old), _state("light.kontor", new)))
     assert len(hass.data[activity.DATA_ACTIVITY].entries) == 3
-    reloaded = activity.PlejdActivityLog(hass)
+    reloaded = activity.PlejdActivityLog(hass, "e1")
     await reloaded.async_load()
     assert reloaded.entries == hass.data[activity.DATA_ACTIVITY].entries
 
@@ -202,10 +202,43 @@ async def test_run_contexts_are_bounded(monkeypatch):
     assert list(hass.data[activity.DATA_ACTIVITY]._runs) == ["r1", "r2"]
 
 
-async def test_stop_removes_the_listeners():
+async def test_stop_removes_the_listeners_and_flushes_pending_entries():
     hass = await _log_hass()
-    hass.data[activity.DATA_ACTIVITY].async_stop()
+    log = hass.data[activity.DATA_ACTIVITY]
+    log._store.async_delay_save = lambda *a, **k: None  # a delayed save that hasn't run yet
+    hass.bus.listeners["state_changed"](_change(_state("light.kontor", "off"), _state("light.kontor", "on")))
+    await log.async_stop()
     assert hass.bus.listeners == {}
+    reloaded = activity.PlejdActivityLog(hass, "e1")  # what a reload's new log sees
+    await reloaded.async_load()
+    assert [e["state"] for e in reloaded.entries] == ["on"]
+
+
+async def test_each_setup_has_its_own_log_and_removing_it_deletes_it():
+    hass = await _log_hass()
+    hass.bus.listeners["state_changed"](_change(_state("light.kontor", "off"), _state("light.kontor", "on")))
+    other = activity.PlejdActivityLog(hass, "e2")
+    await other.async_load()
+    assert other.entries == []
+    await activity.async_remove_store(hass, "e1")
+    gone = activity.PlejdActivityLog(hass, "e1")
+    await gone.async_load()
+    assert gone.entries == []
+
+
+async def test_a_script_called_by_an_automation_keeps_the_automation_as_source():
+    hass = await _log_hass()
+    fire = hass.bus.listeners
+    fire["automation_triggered"](
+        types.SimpleNamespace(
+            event_type="automation_triggered", context=_ctx("run"), data={"name": "Kväll", "entity_id": "automation.k"}
+        )
+    )
+    fire["script_started"](
+        types.SimpleNamespace(event_type="script_started", context=_ctx("run"), data={"entity_id": "script.s"})
+    )
+    fire["state_changed"](_change(_state("light.kontor", "off"), _state("light.kontor", "on", _ctx("run"))))
+    assert hass.data[activity.DATA_ACTIVITY].entries[-1]["source"]["kind"] == "automation"
 
 
 async def test_list_errors_when_not_loaded_and_keeps_unknown_user_ids():

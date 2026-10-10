@@ -22,7 +22,7 @@ from .schedule_ws import DATA_ENTRY
 
 DATA_ACTIVITY = f"{DOMAIN}_activity"
 MAX_ENTRIES = 1000
-_STORE_KEY = f"{DOMAIN}.activity"
+_STORE_KEY = f"{DOMAIN}.activity"  # + ".<entry_id>": one log per Plejd setup
 _TRACKED_PLEJD_DOMAINS = ("light", "switch", "cover")
 _IGNORED_STATES = ("unavailable", "unknown")
 _MAX_CONTEXTS = 200  # recent automation/script runs remembered for attribution
@@ -31,9 +31,9 @@ _MAX_CONTEXTS = 200  # recent automation/script runs remembered for attribution
 class PlejdActivityLog:
     """Listens to state changes and keeps the newest MAX_ENTRIES of them."""
 
-    def __init__(self, hass: HomeAssistant) -> None:
+    def __init__(self, hass: HomeAssistant, entry_id: str) -> None:
         self.hass = hass
-        self._store: Store = Store(hass, 1, _STORE_KEY)
+        self._store: Store = Store(hass, 1, f"{_STORE_KEY}.{entry_id}")
         self.entries: list[dict[str, Any]] = []  # oldest first
         self._runs: OrderedDict[str, dict[str, str]] = OrderedDict()  # context id -> automation/script
         self._unsubs: list = []
@@ -50,15 +50,18 @@ class PlejdActivityLog:
             bus.async_listen("script_started", self._on_run),
         ]
 
-    @callback
-    def async_stop(self) -> None:
+    async def async_stop(self) -> None:
+        """Stop listening and write out what's pending, so a reload's new log loads everything."""
         for unsub in self._unsubs:
             unsub()
         self._unsubs = []
+        await self._store.async_save({"entries": self.entries})
 
     @callback
     def _on_run(self, event) -> None:
         kind = "automation" if event.event_type == "automation_triggered" else "script"
+        if event.context.id in self._runs:
+            return  # a script called by an automation runs in its context: the automation stays the source
         self._runs[event.context.id] = {
             "kind": kind,
             "name": event.data.get("name") or event.data.get("entity_id", ""),
@@ -153,3 +156,8 @@ async def ws_list(hass: HomeAssistant, connection, msg) -> None:
 
 def async_register(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_list)
+
+
+async def async_remove_store(hass: HomeAssistant, entry_id: str) -> None:
+    """Delete a removed Plejd setup's log, so a later setup doesn't inherit it."""
+    await Store(hass, 1, f"{_STORE_KEY}.{entry_id}").async_remove()

@@ -413,7 +413,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     entry.async_on_unload(dim_bindings.shutdown)
 
     # Activity log for the dashboard's Log tab. Optional like the bindings: a storage error mustn't stop setup.
-    activity_log = activity.PlejdActivityLog(hass)
+    activity_log = activity.PlejdActivityLog(hass, entry.entry_id)
     try:
         await activity_log.async_load()
     except Exception:  # noqa: BLE001 - optional; start with an empty log
@@ -505,6 +505,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Clean up state that outlives the entry itself."""
+    await activity.async_remove_store(hass, entry.entry_id)
     # The malformed-cloud repair issue is persistent, so nothing else would ever delete it
     # once the entry is gone: its only other clear paths are a healthy poll or a successful
     # reconfigure, neither of which can happen after removal. Without this the user is left

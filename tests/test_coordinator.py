@@ -3788,6 +3788,18 @@ def test_toggle_origin_separate_remote_is_a_best_guess(monkeypatch):
     assert c.toggle_origin(5) == {"kind": "plejd_input", "name": "Hall switch"}
 
 
+def test_toggle_origin_newest_command_wins(monkeypatch):
+    clock = [100.0]
+    c, toggle = _origin_coordinator(monkeypatch, clock)
+    toggle(41)  # room command...
+    clock[0] = 103.0
+    toggle(5)  # ...then one straight to the light: that one explains the change
+    assert c.toggle_origin(5) == {"kind": "plejd_device"}
+    clock[0] = 104.0
+    toggle(60)  # and a remote pressed after both
+    assert c.toggle_origin(5) == {"kind": "plejd_input", "name": "Hall switch"}
+
+
 def test_toggle_origin_ignores_old_commands_and_unknown_addresses(monkeypatch):
     clock = [100.0]
     c, toggle = _origin_coordinator(monkeypatch, clock)
