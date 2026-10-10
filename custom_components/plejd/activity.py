@@ -30,6 +30,8 @@ _IGNORED_STATES = ("unavailable", "unknown")
 # Automation/script runs remembered for attribution: long enough for runs with delays/waits, bounded for memory.
 _RUN_TTL = 24 * 3600
 _MAX_CONTEXTS = 5000
+# How long after an HA command to a Plejd room its member lights' changes are credited to it.
+_ROOM_COMMAND_WINDOW = 10.0
 
 
 class PlejdActivityLog:
@@ -42,6 +44,9 @@ class PlejdActivityLog:
         self._runs: OrderedDict[str, tuple[float, dict[str, str]]] = OrderedDict()  # context id -> (started, run)
         # Saving is off until the stored log has been read: after a failed read, saving would replace it.
         self._can_save = False
+        # member mesh address -> (when, source) of an HA command sent to its Plejd room light. The room light
+        # isn't logged, and the member changes it causes carry no context of their own.
+        self._room_commands: dict[int, tuple[float, dict[str, Any]]] = {}
         self._unsubs: list = []
 
     async def async_load(self) -> None:
@@ -55,6 +60,7 @@ class PlejdActivityLog:
             bus.async_listen("state_changed", self._on_state_changed),
             bus.async_listen("automation_triggered", self._on_run),
             bus.async_listen("script_started", self._on_run),
+            bus.async_listen("call_service", self._on_call_service),
         ]
 
     async def async_stop(self) -> None:
@@ -81,6 +87,19 @@ class PlejdActivityLog:
         )
         while self._runs and (len(self._runs) > _MAX_CONTEXTS or now - next(iter(self._runs.values()))[0] > _RUN_TTL):
             self._runs.popitem(last=False)
+
+    @callback
+    def _on_call_service(self, event) -> None:
+        if event.data.get("domain") != "light":
+            return
+        targets = (event.data.get("service_data") or {}).get("entity_id") or []
+        source = self._ha_source(event.context)
+        if source is None:
+            return
+        now = time.monotonic()
+        for entity_id in [targets] if isinstance(targets, str) else targets:
+            for address in self._room_members(entity_id):
+                self._room_commands[address] = (now, source)
 
     @callback
     def _on_state_changed(self, event) -> None:
@@ -124,13 +143,31 @@ class PlejdActivityLog:
                 return device.address
         return None  # e.g. a room-group light, which only mirrors its member lights
 
-    def _source(self, state, address: int | None) -> dict[str, Any]:
-        ctx = state.context
+    def _room_members(self, entity_id: str) -> list[int]:
+        """Member mesh addresses of a Plejd room light; empty for any other entity."""
+        reg = er.async_get(self.hass).async_get(entity_id)
+        coordinator = getattr(self.hass.data.get(DATA_ENTRY), "runtime_data", None)
+        if reg is None or reg.platform != DOMAIN or coordinator is None:
+            return []
+        room = next((r for r in coordinator.rooms if reg.unique_id == f"room_{r.room_id}"), None)
+        return list(room.member_addresses) if room else []
+
+    def _ha_source(self, ctx) -> dict[str, Any] | None:
+        """The automation/script run or user behind an HA context; None when it didn't come from HA."""
         run = self._runs.get(ctx.id) or (self._runs.get(ctx.parent_id) if ctx.parent_id else None)
         if run:
             return dict(run[1])
         if ctx.user_id:
             return {"kind": "user", "user_id": ctx.user_id}
+        return None
+
+    def _source(self, state, address: int | None) -> dict[str, Any]:
+        ha = self._ha_source(state.context)
+        if ha:
+            return ha
+        if address is not None and (cmd := self._room_commands.get(address)):
+            if time.monotonic() - cmd[0] <= _ROOM_COMMAND_WINDOW:
+                return dict(cmd[1])
         if address is None:  # an alarm panel: its own integration may know who changed it
             changed_by = state.attributes.get("changed_by")
             return {"kind": "alarm", "name": changed_by} if changed_by else {"kind": "external"}

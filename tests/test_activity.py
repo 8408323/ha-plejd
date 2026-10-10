@@ -66,6 +66,7 @@ def _hass(origin=None):
             types.SimpleNamespace(device_id="d1", output_index=0, address=42),
             types.SimpleNamespace(device_id="d2", output_index=0, address=None),
         ],
+        rooms=[types.SimpleNamespace(room_id="r1", member_addresses=[42])],
         toggle_origin=lambda address: origin,
     )
     users = {"u1": types.SimpleNamespace(name="Jonathan")}
@@ -293,3 +294,42 @@ def test_async_register_registers_the_command():
     hass = types.SimpleNamespace(data={})
     activity.async_register(hass)
     assert activity.ws_list in hass.data["ws_commands"]
+
+
+async def test_room_command_from_ha_is_credited_to_its_member_lights(monkeypatch):
+    clock = [100.0]
+    monkeypatch.setattr(activity.time, "monotonic", lambda: clock[0])
+    hass = await _log_hass()
+    fire = hass.bus.listeners
+
+    def call(entity_id, ctx, domain="light"):
+        fire["call_service"](
+            types.SimpleNamespace(
+                context=ctx, data={"domain": domain, "service": "turn_on", "service_data": {"entity_id": entity_id}}
+            )
+        )
+
+    call("light.room_kontor", _ctx("c1", user_id="u1"))  # the room switch in HA, as a string target...
+    fire["state_changed"](_change(_state("light.kontor", "off"), _state("light.kontor", "on")))  # member, no context
+    clock[0] += 20  # ...and long after, a change from outside is not credited to it
+    fire["state_changed"](_change(_state("light.kontor", "on"), _state("light.kontor", "off")))
+    call(["light.room_kontor"], _ctx("c2"))  # a room command with no HA source (e.g. from another integration)
+    call(["light.kontor", "light.unregistered"], _ctx("c3", user_id="u1"))  # not a room
+    call("light.room_kontor", _ctx("c4", user_id="u1"), domain="switch")  # not a light call
+    fire["state_changed"](_change(_state("light.kontor", "off"), _state("light.kontor", "on")))
+    assert [e["source"] for e in hass.data[activity.DATA_ACTIVITY].entries] == [
+        {"kind": "user", "user_id": "u1"},
+        {"kind": "external"},
+        {"kind": "external"},
+    ]
+
+
+async def test_room_commands_are_ignored_without_a_loaded_coordinator():
+    hass = await _log_hass()
+    hass.data[DATA_ENTRY] = None
+    hass.bus.listeners["call_service"](
+        types.SimpleNamespace(
+            context=_ctx(user_id="u1"), data={"domain": "light", "service_data": {"entity_id": "light.room_kontor"}}
+        )
+    )
+    assert hass.data[activity.DATA_ACTIVITY]._room_commands == {}
