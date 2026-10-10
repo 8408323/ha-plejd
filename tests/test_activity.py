@@ -51,11 +51,14 @@ def _change(old, new):
 
 
 def _hass(origin=None):
-    reg = lambda uid, platform="plejd": types.SimpleNamespace(unique_id=uid, platform=platform)  # noqa: E731
+    def reg(uid, platform="plejd", **kw):
+        defaults = {"config_entry_id": "e1", "device_id": None, "area_id": None, "labels": set()}
+        return types.SimpleNamespace(unique_id=uid, platform=platform, **{**defaults, **kw})
+
     registry = er.EntityRegistry(
         {
             "light.kontor": reg("d1"),
-            "light.room_kontor": reg("room_r1"),
+            "light.room_kontor": reg("room_r1", entity_id="light.room_kontor", device_id="dev_room"),
             "light.other_brand": reg("x1", platform="hue"),
             "switch.relay": reg("d2"),
             "cover.blind": reg("d1"),
@@ -75,7 +78,10 @@ def _hass(origin=None):
         return users.get(user_id)
 
     return types.SimpleNamespace(
-        data={DATA_ENTRY: types.SimpleNamespace(runtime_data=coordinator)},
+        data={DATA_ENTRY: types.SimpleNamespace(runtime_data=coordinator, entry_id="e1")},
+        device_registry=types.SimpleNamespace(
+            async_get=lambda device_id: types.SimpleNamespace(area_id="kontor") if device_id == "dev_room" else None
+        ),
         bus=_Bus(),
         entity_registry=registry,
         auth=types.SimpleNamespace(async_get_user=_get_user),
@@ -296,32 +302,57 @@ def test_async_register_registers_the_command():
     assert activity.ws_list in hass.data["ws_commands"]
 
 
-async def test_room_command_from_ha_is_credited_to_its_member_lights(monkeypatch):
+def _room_call(hass, ctx, service="turn_on", domain="light", **target):
+    hass.bus.listeners["call_service"](
+        types.SimpleNamespace(context=ctx, data={"domain": domain, "service": service, "service_data": target})
+    )
+
+
+def _member(hass, old, new):
+    hass.bus.listeners["state_changed"](_change(_state("light.kontor", old), _state("light.kontor", new)))
+    return hass.data[activity.DATA_ACTIVITY].entries[-1]["source"]
+
+
+async def test_room_command_from_ha_is_credited_to_the_one_transition_it_caused(monkeypatch):
     clock = [100.0]
     monkeypatch.setattr(activity.time, "monotonic", lambda: clock[0])
     hass = await _log_hass()
-    fire = hass.bus.listeners
+    _room_call(hass, _ctx(user_id="u1"), entity_id="light.room_kontor")
+    assert _member(hass, "off", "on") == {"kind": "user", "user_id": "u1"}
+    assert _member(hass, "on", "off") == {"kind": "external"}  # consumed: a second change isn't credited
 
-    def call(entity_id, ctx, domain="light"):
-        fire["call_service"](
-            types.SimpleNamespace(
-                context=ctx, data={"domain": domain, "service": "turn_on", "service_data": {"entity_id": entity_id}}
-            )
-        )
+    _room_call(hass, _ctx(user_id="u1"), service="turn_on", entity_id=["light.room_kontor"])
+    assert _member(hass, "on", "off") == {"kind": "external"}  # wrong direction for turn_on
+    clock[0] += 20
+    assert _member(hass, "off", "on") == {"kind": "external"}  # outside the window
 
-    call("light.room_kontor", _ctx("c1", user_id="u1"))  # the room switch in HA, as a string target...
-    fire["state_changed"](_change(_state("light.kontor", "off"), _state("light.kontor", "on")))  # member, no context
-    clock[0] += 20  # ...and long after, a change from outside is not credited to it
-    fire["state_changed"](_change(_state("light.kontor", "on"), _state("light.kontor", "off")))
-    call(["light.room_kontor"], _ctx("c2"))  # a room command with no HA source (e.g. from another integration)
-    call(["light.kontor", "light.unregistered"], _ctx("c3", user_id="u1"))  # not a room
-    call("light.room_kontor", _ctx("c4", user_id="u1"), domain="switch")  # not a light call
-    fire["state_changed"](_change(_state("light.kontor", "off"), _state("light.kontor", "on")))
-    assert [e["source"] for e in hass.data[activity.DATA_ACTIVITY].entries] == [
-        {"kind": "user", "user_id": "u1"},
-        {"kind": "external"},
-        {"kind": "external"},
-    ]
+    _room_call(hass, _ctx(user_id="u1"), service="toggle", entity_id="light.room_kontor")
+    assert _member(hass, "on", "off") == {"kind": "user", "user_id": "u1"}  # toggle: either direction
+
+
+async def test_room_command_targeted_by_device_area_or_label_is_credited():
+    hass = await _log_hass()
+    reg = hass.entity_registry.async_get("light.room_kontor")
+    reg.labels = {"evening"}
+    for target in ({"device_id": "dev_room"}, {"area_id": ["kontor"]}, {"label_id": "evening"}):
+        _room_call(hass, _ctx(user_id="u1"), **target)
+        assert _member(hass, "off", "on") == {"kind": "user", "user_id": "u1"}, target
+        _member(hass, "on", "off")
+    reg.area_id = "office"  # an entity's own area wins over its device's
+    _room_call(hass, _ctx(user_id="u1"), area_id="kontor")
+    assert _member(hass, "off", "on") == {"kind": "external"}
+
+
+async def test_room_calls_that_are_not_credited():
+    hass = await _log_hass()
+    _room_call(hass, _ctx(), entity_id="light.room_kontor")  # no HA source
+    _room_call(hass, _ctx(user_id="u1"), entity_id=["light.kontor", "light.unregistered"])  # not a room
+    _room_call(hass, _ctx(user_id="u1"), domain="switch", entity_id="light.room_kontor")  # not a light call
+    _room_call(hass, _ctx(user_id="u1"), area_id="elsewhere")  # targets something else
+    assert _member(hass, "off", "on") == {"kind": "external"}
+    hass.entity_registry._entities.pop("light.room_kontor")  # room light not registered
+    _room_call(hass, _ctx(user_id="u1"), device_id="dev_room")
+    assert _member(hass, "on", "off") == {"kind": "external"}
 
 
 async def test_room_commands_are_ignored_without_a_loaded_coordinator():

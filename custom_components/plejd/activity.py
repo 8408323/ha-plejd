@@ -15,6 +15,7 @@ from typing import Any
 import voluptuous as vol
 from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.storage import Store
 
@@ -46,7 +47,7 @@ class PlejdActivityLog:
         self._can_save = False
         # member mesh address -> (when, source) of an HA command sent to its Plejd room light. The room light
         # isn't logged, and the member changes it causes carry no context of their own.
-        self._room_commands: dict[int, tuple[float, dict[str, Any]]] = {}
+        self._room_commands: dict[int, tuple[float, dict[str, Any], str | None]] = {}  # + the expected new state
         self._unsubs: list = []
 
     async def async_load(self) -> None:
@@ -92,14 +93,14 @@ class PlejdActivityLog:
     def _on_call_service(self, event) -> None:
         if event.data.get("domain") != "light":
             return
-        targets = (event.data.get("service_data") or {}).get("entity_id") or []
         source = self._ha_source(event.context)
         if source is None:
             return
+        # turn_on/turn_off say which transition they cause; toggle can go either way
+        expected = {"turn_on": "on", "turn_off": "off"}.get(event.data.get("service"))
         now = time.monotonic()
-        for entity_id in [targets] if isinstance(targets, str) else targets:
-            for address in self._room_members(entity_id):
-                self._room_commands[address] = (now, source)
+        for address in self._targeted_room_members(event.data.get("service_data") or {}):
+            self._room_commands[address] = (now, source, expected)
 
     @callback
     def _on_state_changed(self, event) -> None:
@@ -143,14 +144,44 @@ class PlejdActivityLog:
                 return device.address
         return None  # e.g. a room-group light, which only mirrors its member lights
 
-    def _room_members(self, entity_id: str) -> list[int]:
-        """Member mesh addresses of a Plejd room light; empty for any other entity."""
-        reg = er.async_get(self.hass).async_get(entity_id)
+    def _targeted_room_members(self, service_data: dict[str, Any]) -> list[int]:
+        """Member addresses of every Plejd room light a light service call targets.
+
+        Matches each room light against the call's entity_id/device_id/area_id/label_id itself rather than
+        through HA's target helper, whose signature differs across the supported HA versions.
+        """
         coordinator = getattr(self.hass.data.get(DATA_ENTRY), "runtime_data", None)
-        if reg is None or reg.platform != DOMAIN or coordinator is None:
+        if coordinator is None:
             return []
-        room = next((r for r in coordinator.rooms if reg.unique_id == f"room_{r.room_id}"), None)
-        return list(room.member_addresses) if room else []
+
+        def ids(key: str) -> set[str]:
+            value = service_data.get(key) or []
+            return {value} if isinstance(value, str) else set(value)
+
+        entity_ids, device_ids, area_ids, label_ids = (
+            ids("entity_id"),
+            ids("device_id"),
+            ids("area_id"),
+            ids("label_id"),
+        )
+        registry = er.async_get(self.hass)
+        by_unique_id = {
+            e.unique_id: e for e in er.async_entries_for_config_entry(registry, self.hass.data[DATA_ENTRY].entry_id)
+        }
+        members: list[int] = []
+        for room in coordinator.rooms:
+            reg = by_unique_id.get(f"room_{room.room_id}")
+            if reg is None:
+                continue
+            area = reg.area_id or getattr(dr.async_get(self.hass).async_get(reg.device_id or ""), "area_id", None)
+            if (
+                reg.entity_id in entity_ids
+                or (reg.device_id and reg.device_id in device_ids)
+                or (area and area in area_ids)
+                or set(getattr(reg, "labels", ()) or ()) & label_ids
+            ):
+                members.extend(room.member_addresses)
+        return members
 
     def _ha_source(self, ctx) -> dict[str, Any] | None:
         """The automation/script run or user behind an HA context; None when it didn't come from HA."""
@@ -165,9 +196,10 @@ class PlejdActivityLog:
         ha = self._ha_source(state.context)
         if ha:
             return ha
-        if address is not None and (cmd := self._room_commands.get(address)):
-            if time.monotonic() - cmd[0] <= _ROOM_COMMAND_WINDOW:
-                return dict(cmd[1])
+        cmd = self._room_commands.get(address) if address is not None else None
+        if cmd and time.monotonic() - cmd[0] <= _ROOM_COMMAND_WINDOW and cmd[2] in (None, state.state):
+            del self._room_commands[address]  # credits only the one transition the command caused
+            return dict(cmd[1])
         if address is None:  # an alarm panel: its own integration may know who changed it
             changed_by = state.attributes.get("changed_by")
             return {"kind": "alarm", "name": changed_by} if changed_by else {"kind": "external"}
