@@ -3846,3 +3846,68 @@ def test_toggle_origin_ignores_old_commands_and_unknown_addresses(monkeypatch):
     clock[0] = 106.0  # past the 5 s window
     assert c.toggle_origin(5) is None
     assert c.toggle_origin(99) is None
+
+
+def test_toggle_origin_scene_and_motion(monkeypatch):
+    import dataclasses
+
+    from plejd.cloud import PlejdCloudMotion, PlejdCloudScene
+    from plejd.protocol import Command
+
+    clock = [100.0]
+    c, _ = _origin_coordinator(monkeypatch, clock)
+    c.scenes = [PlejdCloudScene("s1", "Kväll", 3)]
+    c.motion = [PlejdCloudMotion("wms", "Hall motion", 33)]
+    c._motion_addresses = {33}
+    c.devices.append(
+        dataclasses.replace(c.devices[0], device_id="wms", address=None, category="motion")
+    )  # same room r1
+
+    def event(cmd, address, data):
+        c._on_event(Command(address=address, command_type=0x10, command=cmd, data=data))
+
+    event(coordinator_mod.CMD_SCENE, 0, b"\x83")  # the power-off form of scene 3
+    assert c.toggle_origin(5) == {"kind": "plejd_scene", "name": "Kväll", "index": 3, "at": 100.0}
+    event(coordinator_mod.CMD_SCENE, 0, b"\x09")  # an unknown scene index
+    assert c.toggle_origin(5)["name"] == "#9"
+    clock[0] = 110.0  # scene too old; motion now
+    monkeypatch.setattr(
+        coordinator_mod, "decode_motion", lambda cmd: types.SimpleNamespace(address=33, motion=True, lux=None)
+    )
+    event(coordinator_mod.CMD_OUTPUT_SET, 33, b"\x00")
+    clock[0] = 150.0  # within the 60 s motion window
+    assert c.toggle_origin(5) == {"kind": "plejd_motion", "name": "Hall motion"}
+    assert c.toggle_origin(99) is None  # an address with no device/room
+    clock[0] = 200.0
+    assert c.toggle_origin(5) is None
+
+
+def test_toggle_origin_since_also_applies_to_scenes_and_motion(monkeypatch):
+    import dataclasses
+
+    from plejd.cloud import PlejdCloudMotion, PlejdCloudScene
+    from plejd.protocol import Command
+
+    clock = [100.0]
+    c, _ = _origin_coordinator(monkeypatch, clock)
+    c.scenes = [PlejdCloudScene("s1", "Kväll", 3)]
+    c.motion = [PlejdCloudMotion("wms", "Hall motion", 33)]
+    c._motion_addresses = {33}
+    c.devices.append(dataclasses.replace(c.devices[0], device_id="wms", address=None, category="motion"))
+    monkeypatch.setattr(
+        coordinator_mod, "decode_motion", lambda cmd: types.SimpleNamespace(address=33, motion=True, lux=None)
+    )
+    c._on_event(Command(address=0, command_type=0x10, command=coordinator_mod.CMD_SCENE, data=b"\x03"))
+    c._on_event(Command(address=33, command_type=0x10, command=coordinator_mod.CMD_OUTPUT_SET, data=b"\x00"))
+    assert c.toggle_origin(5, since=100.0) is None  # both happened at the HA call, not after it
+    assert c.toggle_origin(5, since=99.0) is not None
+
+
+def test_toggle_origin_uses_a_standalone_motion_sensors_own_room(monkeypatch):
+    from plejd.cloud import PlejdCloudMotion
+
+    clock = [100.0]
+    c, _ = _origin_coordinator(monkeypatch, clock)
+    c.motion = [PlejdCloudMotion("wms", "Hall motion", 33, room_id="r1")]  # no output entry for it at all
+    c._recent_motion[33] = 99.0
+    assert c.toggle_origin(5) == {"kind": "plejd_motion", "name": "Hall motion"}

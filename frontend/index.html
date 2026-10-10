@@ -50,6 +50,19 @@ const rename = (match, name) => {
   return {};
 };
 let layoutFail = Number(new URLSearchParams(location.search).get("layoutfail") || 0);
+const ago = (h, m = 0) => new Date(Date.now() - (h * 60 + m) * 60000).toISOString();
+const activity = [
+  { t: ago(0, 3), type: "state", entity_id: "light.kitchen", name: "Taklampa", room: "Kök", state: "on", brightness: 80, source: { kind: "user", name: "Jonathan" } },
+  { t: ago(0, 9), type: "dim", entity_id: "light.kok_strip", name: "Bänklist", room: "Kök", state: "on", from: 20, to: 80, source: { kind: "external" } },
+  { t: ago(1), type: "state", entity_id: "light.golv", name: "Golvlampa", room: "Vardagsrum", state: "off", source: { kind: "automation", name: "Kvällsljus av", trigger: "time" } },
+  { t: ago(3), type: "state", entity_id: "light.golv", name: "Golvlampa", room: "Vardagsrum", state: "on", source: { kind: "plejd_schedule", name: "Kväll" } },
+  { t: ago(5), type: "alarm", entity_id: "alarm_control_panel.verisure_alarm", name: "Verisure alarm", state: "disarmed", source: { kind: "alarm", name: "Sofia" } },
+  { t: ago(20, 30), type: "state", entity_id: "light.hall", name: "Hall", room: "Hall", state: "on", source: { kind: "plejd_motion", name: "Hall motion" } },
+  { t: ago(26), type: "state", entity_id: "light.kitchen", name: "Taklampa", room: "Kök", state: "on", source: { kind: "plejd_room", name: "Kök" } },
+  { t: ago(50), type: "state", entity_id: "light.vagg", name: "Vägglampa", room: "Vardagsrum", state: "on", source: { kind: "plejd_input", name: "Vardagsrum vägg" } },
+  { t: ago(120), type: "state", entity_id: "light.bord", name: "Bordslampa", room: "Vardagsrum", state: "off", source: { kind: "plejd_device" } },
+];
+let alerts = { enabled: false, start: "23:00", end: "06:00", targets: [], persistent: true, ignore: ["automation", "script", "plejd_schedule"], alarm: false };
 let roomsFail = Number(new URLSearchParams(location.search).get("roomsfail") || 0);
 let styles = { "light.kok_spot": "spot", "light.kok_o": "pendant", "light.kok_strip": "strip", "light.golv": "floor", "light.bord": "table", "light.vagg": "wall", "light.kitchen": "ceiling" };
 const ws = {
@@ -82,6 +95,10 @@ const ws = {
   "plejd/device_triggers": (m) => ({ device_kind: "remote", triggers: ["dim_up", "dim_down", "release", "press"].map((type) => ({ device_id: m.device_id, type })) }),
   "config/area_registry/list": () => Object.values(hass.areas),
   "config/device_registry/list": () => Object.values(hass.devices),
+  // Log tab: a few days of made-up activity, newest first
+  "plejd/activity/list": (m) => ({ entries: activity.filter((e) => !m.start || e.t >= m.start), oldest: activity.at(-1)?.t ?? null }),
+  "plejd/activity/alerts/get": () => ({ alerts, notify_services: ["mobile_app_jonathans_iphone", "mobile_app_sofias_pixel"] }),
+  "plejd/activity/alerts/set": (m) => (alerts = m.alerts, { alerts }),
   "plejd/settings/get": () => settings,
   "plejd/settings/set": ({ type, id, ...m }) => (settings = { ...settings, ...m }, {}),
   "plejd/devices/scan": () => ({ bluetooth: true, devices: [{ address: "AA:BB:CC:DD:EE:01", name: "", rssi: -61, hardware_id: "36", model: "DIM-01", firmware_build_time: 0 }], room_categories: ["LivingRoom", "Kitchen", "Other"] }),

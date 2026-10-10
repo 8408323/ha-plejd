@@ -8,12 +8,17 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
-- **Log** tab on the dashboard: every on/off of a Plejd light or switch and
-  every alarm-panel change, newest first, with its source: a person or an automation
-  or script in Home Assistant, a whole-room command (the Plejd app), a Plejd remote
-  or wall switch (best guess), or "outside Home Assistant". Alarm changes name who
-  changed them when the alarm integration reports it (e.g. Verisure's `changed_by`).
-  Kept in Home Assistant's storage (last 1000 changes), so it survives restarts.
+- **Log** tab on the dashboard: lights switched on or off or dimmed, and alarm-panel
+  changes, with their Plejd room and their source: a person, automation (with its
+  trigger) or script in Home Assistant; a whole-room command (the Plejd app); a
+  Plejd remote or wall switch, motion sensor, scene or on-device schedule; or
+  "outside Home Assistant". A dim is one entry from start to end level (it ends when
+  the level has been still for 3 s). Alarm changes name who changed them when the
+  alarm integration reports it (e.g. Verisure's `changed_by`). Kept for 30 days.
+  Search, filters (type, source, room, period, time-of-day window) and "load earlier".
+- **Night watch:** a notification (phones via notify services, and/or in Home
+  Assistant) when a light goes on inside a night window; automations, scripts and
+  Plejd schedules are skipped by default, alarm changes can be included.
 
 ## [0.13.0] - 2026-10-10
 

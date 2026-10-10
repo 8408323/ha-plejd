@@ -111,6 +111,7 @@ class PlejdCloudMotion:
     device_id: str
     name: str
     address: int
+    room_id: str | None = None  # kept here: a standalone WMS-01 has no output entry to look its room up in
 
 
 @dataclass
@@ -967,7 +968,24 @@ def parse_site(site: dict) -> PlejdCloudSite:
                 continue  # untrusted cloud data: a non-string id would also break the sort below
             addr = device_address.get(device_id)
             if addr is not None:
-                motion.append(PlejdCloudMotion(device_id=device_id, name="Motion sensor", address=int(addr)))
+                room = next(
+                    (
+                        r
+                        for i in raw_devices
+                        if isinstance(i, dict)
+                        and i.get("deviceId") == device_id
+                        and isinstance(r := i.get("roomId"), str)
+                    ),
+                    phys.get("roomId"),
+                )
+                motion.append(
+                    PlejdCloudMotion(
+                        device_id=device_id,
+                        name=name_by_device.get(device_id) or "Motion sensor",
+                        address=int(addr),
+                        room_id=room if isinstance(room, str) else None,
+                    )
+                )
 
     # Installed firmware for every physical device (outputs, sensors, gateway alike),
     # so the update platform can cover them all — not just controllable outputs.

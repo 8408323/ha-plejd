@@ -9069,9 +9069,49 @@ var e = (e, t) => () => (t || (e((t = { exports: {} }).exports, t), e = null), t
 			down: "Down"
 		},
 		trigger_button: "Button {n}",
+		nw_schedules: "Plejd schedules",
+		log_search: "Search light, room or source",
+		log_type: "Type",
+		log_onoff: "On/off",
+		log_dim: "Dimming",
+		log_source: "Source",
+		log_room: "Room",
+		log_any: "Any",
+		log_range: "Period",
+		range_today: "Today",
+		range_24h: "24 hours",
+		range_7d: "7 days",
+		range_30d: "30 days",
+		log_between: "Only between",
+		log_and: "and",
+		log_earlier: "Load earlier",
+		log_count: "{n} events",
+		log_dimmed: "dimmed {from}% → {to}%",
+		log_trigger: "triggered by {trigger}",
+		src_plejd_scene: "Plejd scene: {name}",
+		src_plejd_schedule: "Plejd schedule: {name}",
+		src_plejd_motion: "Plejd motion sensor: {name} (likely)",
+		srcgrp_ha: "Home Assistant (person)",
+		srcgrp_auto: "Automation or script",
+		srcgrp_app: "Plejd app / Google Home",
+		srcgrp_switch: "Switch or remote",
+		srcgrp_motion: "Motion sensor",
+		srcgrp_scene: "Plejd scene or schedule",
+		srcgrp_alarm: "Alarm",
+		srcgrp_ext: "Outside Home Assistant",
+		nw_title: "Night watch",
+		nw_lead: "Get a notification when a light goes on during the night. Automations, scripts and Plejd schedules are planned, so they don't alert unless you tick them.",
+		nw_enabled: "Notify me",
+		nw_from: "From",
+		nw_to: "To",
+		nw_targets: "Send to",
+		nw_persistent: "Also as a notification in Home Assistant",
+		nw_alarm: "Also alarm changes",
+		nw_also: "Also alert for",
+		nw_none: "No phones or notify services found.",
 		tab_log: "Log",
 		log_title: "Activity",
-		log_lead: "Every on/off of a Plejd light and every alarm change, newest first, with where it came from as far as it can be told.",
+		log_lead: "Lights switched on or off or dimmed, and alarm changes, with where they came from as far as it can be told. Kept for 30 days.",
 		log_all: "All",
 		log_lights: "Lights",
 		log_alarm: "Alarm",
@@ -9360,9 +9400,49 @@ var e = (e, t) => () => (t || (e((t = { exports: {} }).exports, t), e = null), t
 			down: "Ner"
 		},
 		trigger_button: "Knapp {n}",
+		nw_schedules: "Plejd-scheman",
+		log_search: "Sök lampa, rum eller källa",
+		log_type: "Typ",
+		log_onoff: "På/av",
+		log_dim: "Dimring",
+		log_source: "Källa",
+		log_room: "Rum",
+		log_any: "Alla",
+		log_range: "Period",
+		range_today: "Idag",
+		range_24h: "24 timmar",
+		range_7d: "7 dagar",
+		range_30d: "30 dagar",
+		log_between: "Bara mellan",
+		log_and: "och",
+		log_earlier: "Visa tidigare",
+		log_count: "{n} händelser",
+		log_dimmed: "dimrad {from}% → {to}%",
+		log_trigger: "utlöst av {trigger}",
+		src_plejd_scene: "Plejd-scen: {name}",
+		src_plejd_schedule: "Plejd-schema: {name}",
+		src_plejd_motion: "Plejd-rörelsesensor: {name} (troligen)",
+		srcgrp_ha: "Home Assistant (person)",
+		srcgrp_auto: "Automation eller skript",
+		srcgrp_app: "Plejd-appen / Google Home",
+		srcgrp_switch: "Strömbrytare eller fjärrkontroll",
+		srcgrp_motion: "Rörelsesensor",
+		srcgrp_scene: "Plejd-scen eller -schema",
+		srcgrp_alarm: "Larm",
+		srcgrp_ext: "Utanför Home Assistant",
+		nw_title: "Nattvakt",
+		nw_lead: "Få en avisering när en lampa tänds under natten. Automationer, skript och Plejd-scheman är planerade och larmar inte om du inte kryssar i dem.",
+		nw_enabled: "Avisera mig",
+		nw_from: "Från",
+		nw_to: "Till",
+		nw_targets: "Skicka till",
+		nw_persistent: "Även som avisering i Home Assistant",
+		nw_alarm: "Även ändringar av larmet",
+		nw_also: "Larma även för",
+		nw_none: "Inga telefoner eller aviseringstjänster hittades.",
 		tab_log: "Logg",
 		log_title: "Aktivitet",
-		log_lead: "Varje tändning och släckning av en Plejd-lampa och varje ändring av larmet, nyast först, med varifrån det kom så långt det går att avgöra.",
+		log_lead: "Lampor som tänts, släckts eller dimrats och ändringar av larmet, med varifrån de kom så långt det går att avgöra. Sparas i 30 dagar.",
 		log_all: "Allt",
 		log_lights: "Lampor",
 		log_alarm: "Larm",
@@ -9651,9 +9731,49 @@ var e = (e, t) => () => (t || (e((t = { exports: {} }).exports, t), e = null), t
 			down: "Ned"
 		},
 		trigger_button: "Knapp {n}",
+		nw_schedules: "Plejd-tidsplaner",
+		log_search: "Søk etter lys, rom eller kilde",
+		log_type: "Type",
+		log_onoff: "På/av",
+		log_dim: "Dimming",
+		log_source: "Kilde",
+		log_room: "Rom",
+		log_any: "Alle",
+		log_range: "Periode",
+		range_today: "I dag",
+		range_24h: "24 timer",
+		range_7d: "7 dager",
+		range_30d: "30 dager",
+		log_between: "Bare mellom",
+		log_and: "og",
+		log_earlier: "Vis tidligere",
+		log_count: "{n} hendelser",
+		log_dimmed: "dimmet {from}% → {to}%",
+		log_trigger: "utløst av {trigger}",
+		src_plejd_scene: "Plejd-scene: {name}",
+		src_plejd_schedule: "Plejd-tidsplan: {name}",
+		src_plejd_motion: "Plejd-bevegelsessensor: {name} (sannsynligvis)",
+		srcgrp_ha: "Home Assistant (person)",
+		srcgrp_auto: "Automasjon eller skript",
+		srcgrp_app: "Plejd-appen / Google Home",
+		srcgrp_switch: "Bryter eller fjernkontroll",
+		srcgrp_motion: "Bevegelsessensor",
+		srcgrp_scene: "Plejd-scene eller -tidsplan",
+		srcgrp_alarm: "Alarm",
+		srcgrp_ext: "Utenfor Home Assistant",
+		nw_title: "Nattevakt",
+		nw_lead: "Få et varsel når et lys slås på om natten. Automasjoner, skript og Plejd-tidsplaner er planlagt og varsler ikke med mindre du krysser av for dem.",
+		nw_enabled: "Varsle meg",
+		nw_from: "Fra",
+		nw_to: "Til",
+		nw_targets: "Send til",
+		nw_persistent: "Også som varsel i Home Assistant",
+		nw_alarm: "Også endringer av alarmen",
+		nw_also: "Varsle også for",
+		nw_none: "Fant ingen telefoner eller varslingstjenester.",
 		tab_log: "Logg",
 		log_title: "Aktivitet",
-		log_lead: "Hver gang et Plejd-lys slås av eller på og hver endring av alarmen, nyeste først, med hvor det kom fra så langt det lar seg avgjøre.",
+		log_lead: "Lys som er slått på, av eller dimmet, og endringer av alarmen, med hvor de kom fra så langt det lar seg avgjøre. Lagres i 30 dager.",
 		log_all: "Alt",
 		log_lights: "Lys",
 		log_alarm: "Alarm",
@@ -9942,9 +10062,49 @@ var e = (e, t) => () => (t || (e((t = { exports: {} }).exports, t), e = null), t
 			down: "Ned"
 		},
 		trigger_button: "Knap {n}",
+		nw_schedules: "Plejd-tidsplaner",
+		log_search: "Søg efter lys, rum eller kilde",
+		log_type: "Type",
+		log_onoff: "Tænd/sluk",
+		log_dim: "Dæmpning",
+		log_source: "Kilde",
+		log_room: "Rum",
+		log_any: "Alle",
+		log_range: "Periode",
+		range_today: "I dag",
+		range_24h: "24 timer",
+		range_7d: "7 dage",
+		range_30d: "30 dage",
+		log_between: "Kun mellem",
+		log_and: "og",
+		log_earlier: "Vis tidligere",
+		log_count: "{n} hændelser",
+		log_dimmed: "dæmpet {from}% → {to}%",
+		log_trigger: "udløst af {trigger}",
+		src_plejd_scene: "Plejd-scene: {name}",
+		src_plejd_schedule: "Plejd-tidsplan: {name}",
+		src_plejd_motion: "Plejd-bevægelsessensor: {name} (sandsynligvis)",
+		srcgrp_ha: "Home Assistant (person)",
+		srcgrp_auto: "Automatisering eller script",
+		srcgrp_app: "Plejd-appen / Google Home",
+		srcgrp_switch: "Kontakt eller fjernbetjening",
+		srcgrp_motion: "Bevægelsessensor",
+		srcgrp_scene: "Plejd-scene eller -tidsplan",
+		srcgrp_alarm: "Alarm",
+		srcgrp_ext: "Uden for Home Assistant",
+		nw_title: "Nattevagt",
+		nw_lead: "Få en notifikation, når et lys tændes om natten. Automatiseringer, scripts og Plejd-tidsplaner er planlagte og giver ikke besked, medmindre du sætter flueben ved dem.",
+		nw_enabled: "Giv mig besked",
+		nw_from: "Fra",
+		nw_to: "Til",
+		nw_targets: "Send til",
+		nw_persistent: "Også som notifikation i Home Assistant",
+		nw_alarm: "Også ændringer af alarmen",
+		nw_also: "Giv også besked ved",
+		nw_none: "Ingen telefoner eller notifikationstjenester fundet.",
 		tab_log: "Log",
 		log_title: "Aktivitet",
-		log_lead: "Hver gang et Plejd-lys tændes eller slukkes og hver ændring af alarmen, nyeste først, med hvor det kom fra, så vidt det kan afgøres.",
+		log_lead: "Lys der er tændt, slukket eller dæmpet, og ændringer af alarmen, med hvor de kom fra, så vidt det kan afgøres. Gemmes i 30 dage.",
 		log_all: "Alt",
 		log_lights: "Lys",
 		log_alarm: "Alarm",
@@ -10233,9 +10393,49 @@ var e = (e, t) => () => (t || (e((t = { exports: {} }).exports, t), e = null), t
 			down: "Alas"
 		},
 		trigger_button: "Painike {n}",
+		nw_schedules: "Plejd-aikataulut",
+		log_search: "Hae valoa, huonetta tai lähdettä",
+		log_type: "Tyyppi",
+		log_onoff: "Päälle/pois",
+		log_dim: "Himmennys",
+		log_source: "Lähde",
+		log_room: "Huone",
+		log_any: "Kaikki",
+		log_range: "Aikaväli",
+		range_today: "Tänään",
+		range_24h: "24 tuntia",
+		range_7d: "7 päivää",
+		range_30d: "30 päivää",
+		log_between: "Vain välillä",
+		log_and: "ja",
+		log_earlier: "Näytä aiemmat",
+		log_count: "{n} tapahtumaa",
+		log_dimmed: "himmennetty {from}% → {to}%",
+		log_trigger: "laukaisija: {trigger}",
+		src_plejd_scene: "Plejd-tilannevalaistus: {name}",
+		src_plejd_schedule: "Plejd-aikataulu: {name}",
+		src_plejd_motion: "Plejd-liiketunnistin: {name} (todennäköisesti)",
+		srcgrp_ha: "Home Assistant (henkilö)",
+		srcgrp_auto: "Automaatio tai skripti",
+		srcgrp_app: "Plejd-sovellus / Google Home",
+		srcgrp_switch: "Kytkin tai kaukosäädin",
+		srcgrp_motion: "Liiketunnistin",
+		srcgrp_scene: "Plejd-tilannevalaistus tai -aikataulu",
+		srcgrp_alarm: "Hälytys",
+		srcgrp_ext: "Home Assistantin ulkopuolelta",
+		nw_title: "Yövartija",
+		nw_lead: "Saat ilmoituksen, kun valo syttyy yöllä. Automaatiot, skriptit ja Plejd-aikataulut ovat suunniteltuja, joten niistä ei ilmoiteta, ellet valitse niitä.",
+		nw_enabled: "Ilmoita minulle",
+		nw_from: "Alkaen",
+		nw_to: "Asti",
+		nw_targets: "Lähetä",
+		nw_persistent: "Myös ilmoituksena Home Assistantissa",
+		nw_alarm: "Myös hälytyksen muutokset",
+		nw_also: "Ilmoita myös",
+		nw_none: "Puhelimia tai ilmoituspalveluja ei löytynyt.",
 		tab_log: "Loki",
 		log_title: "Tapahtumat",
-		log_lead: "Jokainen Plejd-valon sytytys ja sammutus sekä hälytyksen muutos, uusimmat ensin, ja mistä se tuli sikäli kuin sen voi päätellä.",
+		log_lead: "Sytytetyt, sammutetut ja himmennetyt valot sekä hälytyksen muutokset, ja mistä ne tulivat sikäli kuin sen voi päätellä. Säilytetään 30 päivää.",
 		log_all: "Kaikki",
 		log_lights: "Valot",
 		log_alarm: "Hälytys",
@@ -10524,9 +10724,49 @@ var e = (e, t) => () => (t || (e((t = { exports: {} }).exports, t), e = null), t
 			down: "Niður"
 		},
 		trigger_button: "Hnappur {n}",
+		nw_schedules: "Plejd-tímaáætlanir",
+		log_search: "Leita að ljósi, herbergi eða uppruna",
+		log_type: "Tegund",
+		log_onoff: "Kveikt/slökkt",
+		log_dim: "Deyfing",
+		log_source: "Uppruni",
+		log_room: "Herbergi",
+		log_any: "Allt",
+		log_range: "Tímabil",
+		range_today: "Í dag",
+		range_24h: "24 klst.",
+		range_7d: "7 dagar",
+		range_30d: "30 dagar",
+		log_between: "Aðeins milli",
+		log_and: "og",
+		log_earlier: "Sýna eldra",
+		log_count: "{n} atvik",
+		log_dimmed: "deyft {from}% → {to}%",
+		log_trigger: "ræst af {trigger}",
+		src_plejd_scene: "Plejd-sena: {name}",
+		src_plejd_schedule: "Plejd-tímaáætlun: {name}",
+		src_plejd_motion: "Plejd-hreyfiskynjari: {name} (líklega)",
+		srcgrp_ha: "Home Assistant (manneskja)",
+		srcgrp_auto: "Sjálfvirkni eða skrifta",
+		srcgrp_app: "Plejd-appið / Google Home",
+		srcgrp_switch: "Rofi eða fjarstýring",
+		srcgrp_motion: "Hreyfiskynjari",
+		srcgrp_scene: "Plejd-sena eða -tímaáætlun",
+		srcgrp_alarm: "Þjófavörn",
+		srcgrp_ext: "Utan Home Assistant",
+		nw_title: "Næturvakt",
+		nw_lead: "Fáðu tilkynningu þegar kviknar á ljósi um nótt. Sjálfvirkni, skriftur og Plejd-tímaáætlanir eru skipulagðar og láta ekki vita nema þú hakir við þær.",
+		nw_enabled: "Láttu mig vita",
+		nw_from: "Frá",
+		nw_to: "Til",
+		nw_targets: "Senda til",
+		nw_persistent: "Líka sem tilkynning í Home Assistant",
+		nw_alarm: "Líka breytingar á þjófavörn",
+		nw_also: "Láta líka vita um",
+		nw_none: "Engir símar eða tilkynningaþjónustur fundust.",
 		tab_log: "Atvikaskrá",
 		log_title: "Virkni",
-		log_lead: "Hvert sinn sem kveikt eða slökkt er á Plejd-ljósi og hver breyting á þjófavörninni, nýjast fyrst, með upprunanum eftir því sem hægt er að segja til um hann.",
+		log_lead: "Ljós sem kveikt var eða slökkt á eða deyfð, og breytingar á þjófavörninni, með upprunanum eftir því sem hægt er að segja til um hann. Geymt í 30 daga.",
 		log_all: "Allt",
 		log_lights: "Ljós",
 		log_alarm: "Þjófavörn",
@@ -22619,7 +22859,7 @@ function Kl({ hass: e, narrow: t }) {
 				}),
 				n === "log" && /* @__PURE__ */ (0, $.jsx)("div", {
 					className: "grid",
-					children: /* @__PURE__ */ (0, $.jsx)(_u, { ...m })
+					children: /* @__PURE__ */ (0, $.jsx)(yu, { ...m })
 				}),
 				n === "settings" && /* @__PURE__ */ (0, $.jsxs)("div", {
 					className: "grid",
@@ -24095,55 +24335,113 @@ function hu({ lang: e, setLang: t }) {
 		})
 	});
 }
-var gu = [
-	"all",
-	"lights",
-	"alarm"
-];
-function _u({ hass: e }) {
-	let t = Rl(), [n, r] = (0, l.useState)(null), [i, a] = (0, l.useState)(""), [o, s] = (0, l.useState)("all"), c = Object.values(e.states).filter((t) => t.entity_id.startsWith("alarm_control_panel.") || [
-		"light",
-		"switch",
-		"cover"
-	].some((e) => t.entity_id.startsWith(`${e}.`)) && Hl(e, t)).map((e) => `${e.entity_id}:${e.state}`).join("|");
+var gu = {
+	today: 0,
+	"24h": 1,
+	"7d": 7,
+	"30d": 30
+}, _u = {
+	ha: ["user"],
+	auto: ["automation", "script"],
+	app: ["plejd_room", "plejd_device"],
+	switch: ["plejd_input"],
+	motion: ["plejd_motion"],
+	scene: ["plejd_scene", "plejd_schedule"],
+	alarm: ["alarm"],
+	ext: ["external"]
+}, vu = (e) => e.type ?? (e.entity_id.startsWith("alarm_control_panel.") ? "alarm" : "state");
+function yu({ hass: e }) {
+	let t = Rl(), [n, r] = (0, l.useState)(null), [i, a] = (0, l.useState)(!1), [o, s] = (0, l.useState)(""), [c, u] = (0, l.useState)("24h"), [d, f] = (0, l.useState)(0), [p, m] = (0, l.useState)(""), [h, g] = (0, l.useState)({
+		state: !0,
+		dim: !0,
+		alarm: !0
+	}), [_, v] = (0, l.useState)(""), [y, b] = (0, l.useState)(""), [x, S] = (0, l.useState)({
+		on: !1,
+		from: "23:00",
+		to: "06:00"
+	}), [, C] = (0, l.useState)(0);
+	(0, l.useEffect)(() => {
+		let e = window.setInterval(() => C((e) => e + 1), 6e4);
+		return () => clearInterval(e);
+	}, []);
+	let w = Object.values(e.states).filter((t) => t.entity_id.startsWith("alarm_control_panel.") || ["light", "switch"].some((e) => t.entity_id.startsWith(`${e}.`)) && Hl(e, t)).map((e) => `${e.entity_id}:${e.state}:${e.attributes.brightness ?? ""}`).join("|"), T = (() => {
+		let e = c === "24h" ? /* @__PURE__ */ new Date(Date.now() - 864e5) : /* @__PURE__ */ new Date();
+		return c === "today" ? e.setHours(0, 0, 0, 0) : c !== "24h" && e.setDate(e.getDate() - gu[c]), e.setDate(e.getDate() - d), e;
+	})(), E = T.toISOString().slice(0, 13);
 	(0, l.useEffect)(() => {
 		let t = !1, n = 0, i = () => e.callWS({
 			type: "plejd/activity/list",
-			limit: 1e3
+			start: T.toISOString(),
+			limit: 5e4
 		}).then((e) => {
-			t || (r(e.entries), a(""));
+			t || (r(e.entries), a(!!e.oldest && new Date(e.oldest) < T), s(""));
 		}).catch((e) => {
-			t || (a(zl(e)), n = window.setTimeout(i, 5e3));
+			t || (s(zl(e)), n = window.setTimeout(i, 5e3));
 		});
 		return i(), () => {
 			t = !0, clearTimeout(n);
 		};
-	}, [c]);
-	let u = t.lang === "nb" ? "nb-NO" : t.lang, d = e.locale?.time_format, f = d === "24" ? { hourCycle: "h23" } : d === "12" ? { hourCycle: "h12" } : {}, p = (e) => Tl({
-		user: t.src_user,
-		automation: t.src_automation,
-		script: t.src_script,
-		plejd_room: t.src_plejd_room,
-		plejd_device: t.src_plejd_device,
-		plejd_input: t.src_plejd_input,
-		alarm: t.src_alarm
-	}[e.kind] ?? t.src_external, { name: e.name ?? "" }), m = (e) => e.entity_id.startsWith("alarm_control_panel.") ? t.alarm_states[e.state] ?? e.state : e.state === "on" ? e.brightness == null ? t.state_on : `${t.state_on} · ${e.brightness}%` : e.state === "off" ? t.state_off : e.state, h = (e) => {
+	}, [w, E]);
+	let D = t.lang === "nb" ? "nb-NO" : t.lang, O = e.locale?.time_format, k = O === "24" ? { hourCycle: "h23" } : O === "12" ? { hourCycle: "h12" } : {}, A = (e) => {
+		let n = Tl({
+			user: t.src_user,
+			automation: t.src_automation,
+			script: t.src_script,
+			plejd_room: t.src_plejd_room,
+			plejd_device: t.src_plejd_device,
+			plejd_input: t.src_plejd_input,
+			alarm: t.src_alarm,
+			plejd_scene: t.src_plejd_scene,
+			plejd_schedule: t.src_plejd_schedule,
+			plejd_motion: t.src_plejd_motion
+		}[e.kind] ?? t.src_external, { name: e.name ?? "" });
+		return e.trigger ? `${n} · ${Tl(t.log_trigger, { trigger: e.trigger })}` : n;
+	}, j = (e) => {
+		let n = vu(e);
+		return n === "alarm" ? t.alarm_states[e.state] ?? e.state : n === "dim" ? Tl(t.log_dimmed, {
+			from: e.from ?? "?",
+			to: e.to ?? "?"
+		}) : e.state === "on" ? e.brightness == null ? t.state_on : `${t.state_on} · ${e.brightness}%` : e.state === "off" ? t.state_off : e.state;
+	}, ee = (e) => {
 		let n = /* @__PURE__ */ new Date();
 		n.setHours(0, 0, 0, 0);
 		let r = new Date(e);
 		r.setHours(0, 0, 0, 0);
 		let i = Math.round((n.getTime() - r.getTime()) / 864e5);
-		return i === 0 ? t.log_today : i === 1 ? t.log_yesterday : e.toLocaleDateString(u, {
+		return i === 0 ? t.log_today : i === 1 ? t.log_yesterday : e.toLocaleDateString(D, {
 			weekday: "long",
 			day: "numeric",
 			month: "long"
 		});
-	}, g = (n ?? []).filter((e) => o === "all" || o === "alarm" === e.entity_id.startsWith("alarm_control_panel.")), _ = [];
-	for (let e of g) {
-		let t = h(new Date(e.t));
-		_.at(-1)?.[0] !== t && _.push([t, []]), _.at(-1)[1].push(e);
+	}, M = (e) => `${String(e.getHours()).padStart(2, "0")}:${String(e.getMinutes()).padStart(2, "0")}`, N = (e) => {
+		let t = M(e), { from: n, to: r } = x;
+		return n <= r ? t >= n && t < r : t >= n || t < r;
+	}, P = n ?? [], te = [...new Set(P.map((e) => e.room).filter(Boolean))].sort(), ne = p.trim().toLowerCase(), re = P.filter((e) => new Date(e.t) >= T && h[vu(e)] && (!_ || _u[_].includes(e.source.kind)) && (!y || e.room === y) && (!x.on || N(new Date(e.t))) && (!ne || [
+		e.name,
+		e.room,
+		A(e.source),
+		j(e)
+	].some((e) => e?.toLowerCase().includes(ne)))), ie = [];
+	for (let e of re) {
+		let t = ee(new Date(e.t));
+		ie.at(-1)?.[0] !== t && ie.push([t, []]), ie.at(-1)[1].push(e);
 	}
-	return /* @__PURE__ */ (0, $.jsxs)(ql, {
+	let ae = {
+		ha: t.srcgrp_ha,
+		auto: t.srcgrp_auto,
+		app: t.srcgrp_app,
+		switch: t.srcgrp_switch,
+		motion: t.srcgrp_motion,
+		scene: t.srcgrp_scene,
+		alarm: t.srcgrp_alarm,
+		ext: t.srcgrp_ext
+	}, oe = {
+		today: t.range_today,
+		"24h": t.range_24h,
+		"7d": t.range_7d,
+		"30d": t.range_30d
+	}, se = Math.max(0, 30 - gu[c]);
+	return /* @__PURE__ */ (0, $.jsxs)($.Fragment, { children: [/* @__PURE__ */ (0, $.jsxs)(ql, {
 		title: t.log_title,
 		wide: !0,
 		children: [
@@ -24151,44 +24449,134 @@ function _u({ hass: e }) {
 				className: "lead",
 				children: t.log_lead
 			}),
-			/* @__PURE__ */ (0, $.jsx)("div", {
-				className: "seg",
-				role: "radiogroup",
-				"aria-label": t.log_title,
-				style: {
-					marginLeft: 0,
-					marginBottom: 12
-				},
-				children: gu.map((e) => /* @__PURE__ */ (0, $.jsx)("button", {
-					role: "radio",
-					"aria-checked": o === e,
-					className: o === e ? "on" : "",
-					onClick: () => s(e),
-					children: {
-						all: t.log_all,
-						lights: t.log_lights,
-						alarm: t.log_alarm
-					}[e]
-				}, e))
+			/* @__PURE__ */ (0, $.jsxs)("div", {
+				className: "log-filters",
+				children: [
+					/* @__PURE__ */ (0, $.jsx)("input", {
+						type: "search",
+						className: "log-search",
+						placeholder: t.log_search,
+						"aria-label": t.log_search,
+						value: p,
+						onChange: (e) => m(e.target.value)
+					}),
+					/* @__PURE__ */ (0, $.jsx)("div", {
+						className: "seg",
+						role: "radiogroup",
+						"aria-label": t.log_range,
+						children: Object.keys(gu).map((e) => /* @__PURE__ */ (0, $.jsx)("button", {
+							role: "radio",
+							"aria-checked": c === e,
+							className: c === e ? "on" : "",
+							onClick: () => {
+								u(e), f(0);
+							},
+							children: oe[e]
+						}, e))
+					}),
+					/* @__PURE__ */ (0, $.jsx)("div", {
+						className: "checks",
+						role: "group",
+						"aria-label": t.log_type,
+						children: [
+							["state", t.log_onoff],
+							["dim", t.log_dim],
+							["alarm", t.log_alarm]
+						].map(([e, t]) => /* @__PURE__ */ (0, $.jsxs)("label", { children: [/* @__PURE__ */ (0, $.jsx)("input", {
+							type: "checkbox",
+							checked: h[e],
+							onChange: (t) => g({
+								...h,
+								[e]: t.target.checked
+							})
+						}), t] }, e))
+					}),
+					/* @__PURE__ */ (0, $.jsxs)("label", {
+						className: "f",
+						children: [/* @__PURE__ */ (0, $.jsx)("span", { children: t.log_source }), /* @__PURE__ */ (0, $.jsxs)("select", {
+							value: _,
+							onChange: (e) => v(e.target.value),
+							children: [/* @__PURE__ */ (0, $.jsx)("option", {
+								value: "",
+								children: t.log_any
+							}), Object.keys(_u).map((e) => /* @__PURE__ */ (0, $.jsx)("option", {
+								value: e,
+								children: ae[e]
+							}, e))]
+						})]
+					}),
+					/* @__PURE__ */ (0, $.jsxs)("label", {
+						className: "f",
+						children: [/* @__PURE__ */ (0, $.jsx)("span", { children: t.log_room }), /* @__PURE__ */ (0, $.jsxs)("select", {
+							value: y,
+							onChange: (e) => b(e.target.value),
+							children: [/* @__PURE__ */ (0, $.jsx)("option", {
+								value: "",
+								children: t.log_any
+							}), te.map((e) => /* @__PURE__ */ (0, $.jsx)("option", {
+								value: e,
+								children: e
+							}, e))]
+						})]
+					}),
+					/* @__PURE__ */ (0, $.jsxs)("div", {
+						className: "log-between",
+						children: [
+							/* @__PURE__ */ (0, $.jsxs)("label", { children: [/* @__PURE__ */ (0, $.jsx)("input", {
+								type: "checkbox",
+								checked: x.on,
+								onChange: (e) => S({
+									...x,
+									on: e.target.checked
+								})
+							}), t.log_between] }),
+							/* @__PURE__ */ (0, $.jsx)("input", {
+								type: "time",
+								value: x.from,
+								disabled: !x.on,
+								"aria-label": t.nw_from,
+								onChange: (e) => S({
+									...x,
+									from: e.target.value
+								})
+							}),
+							/* @__PURE__ */ (0, $.jsx)("span", { children: t.log_and }),
+							/* @__PURE__ */ (0, $.jsx)("input", {
+								type: "time",
+								value: x.to,
+								disabled: !x.on,
+								"aria-label": t.nw_to,
+								onChange: (e) => S({
+									...x,
+									to: e.target.value
+								})
+							})
+						]
+					})
+				]
 			}),
-			i && /* @__PURE__ */ (0, $.jsx)("p", {
+			/* @__PURE__ */ (0, $.jsx)("p", {
+				className: "muted",
+				children: Tl(t.log_count, { n: re.length })
+			}),
+			o && /* @__PURE__ */ (0, $.jsx)("p", {
 				className: "error",
-				children: i
+				children: o
 			}),
-			n === null && !i && /* @__PURE__ */ (0, $.jsx)(Jl, { text: t.loading }),
-			n !== null && !g.length && /* @__PURE__ */ (0, $.jsx)(Jl, { text: t.log_empty }),
-			_.map(([e, t]) => /* @__PURE__ */ (0, $.jsxs)("div", {
+			n === null && !o && /* @__PURE__ */ (0, $.jsx)(Jl, { text: t.loading }),
+			n !== null && !re.length && /* @__PURE__ */ (0, $.jsx)(Jl, { text: t.log_empty }),
+			ie.map(([e, t]) => /* @__PURE__ */ (0, $.jsxs)("div", {
 				className: "log-day",
 				children: [/* @__PURE__ */ (0, $.jsx)("h3", { children: e }), t.map((e, t) => /* @__PURE__ */ (0, $.jsxs)("div", {
-					className: "row line log-row",
+					className: `row line log-row log-${vu(e)}`,
 					children: [
 						/* @__PURE__ */ (0, $.jsx)("span", {
 							className: "log-time",
-							children: new Date(e.t).toLocaleTimeString(u, {
+							children: new Date(e.t).toLocaleTimeString(D, {
 								hour: "2-digit",
 								minute: "2-digit",
 								second: "2-digit",
-								...f
+								...k
 							})
 						}),
 						/* @__PURE__ */ (0, $.jsx)("span", { className: `dot ${e.state === "on" || e.state.startsWith("armed") || e.state === "triggered" ? "on" : ""}` }),
@@ -24196,23 +24584,178 @@ function _u({ hass: e }) {
 							className: "grow",
 							children: [
 								/* @__PURE__ */ (0, $.jsx)("strong", { children: e.name }),
+								e.room && /* @__PURE__ */ (0, $.jsxs)("span", {
+									className: "muted",
+									children: [" · ", e.room]
+								}),
 								" · ",
-								m(e)
+								j(e)
 							]
 						}),
 						/* @__PURE__ */ (0, $.jsx)("span", {
 							className: `muted log-src src-${e.source.kind}`,
-							children: p(e.source)
+							children: A(e.source)
 						})
 					]
 				}, `${e.t}-${e.entity_id}-${t}`))]
-			}, e))
+			}, e)),
+			i && d < se && /* @__PURE__ */ (0, $.jsx)("div", {
+				className: "actions",
+				children: /* @__PURE__ */ (0, $.jsx)("button", {
+					className: "btn ghost",
+					onClick: () => f(d + 1),
+					children: t.log_earlier
+				})
+			})
+		]
+	}), /* @__PURE__ */ (0, $.jsx)(bu, { hass: e })] });
+}
+function bu({ hass: e }) {
+	let t = Rl(), [n, r] = (0, l.useState)(null), [i, a] = (0, l.useState)(null), [o, s] = (0, l.useState)([]), [c, u] = (0, l.useState)(!1), [d, f] = (0, l.useState)(""), [p, m] = (0, l.useState)("");
+	if ((0, l.useEffect)(() => {
+		let t = !1, n = 0, i = () => e.callWS({ type: "plejd/activity/alerts/get" }).then((e) => {
+			t || (r(e.alerts), a(e.alerts), s(e.notify_services), f(""));
+		}).catch((e) => {
+			t || (f(zl(e)), n = window.setTimeout(i, 5e3));
+		});
+		return i(), () => {
+			t = !0, clearTimeout(n);
+		};
+	}, []), !i || !n) return /* @__PURE__ */ (0, $.jsx)(ql, {
+		title: t.nw_title,
+		wide: !0,
+		children: d ? /* @__PURE__ */ (0, $.jsx)("p", {
+			className: "error",
+			children: d
+		}) : /* @__PURE__ */ (0, $.jsx)(Jl, { text: t.loading })
+	});
+	let h = (e) => {
+		a({
+			...i,
+			...e
+		}), m("");
+	}, g = JSON.stringify(i) !== JSON.stringify(n), _ = async () => {
+		u(!0), f(""), m("");
+		try {
+			let n = await e.callWS({
+				type: "plejd/activity/alerts/set",
+				alerts: i
+			});
+			r(n.alerts), a(n.alerts), m(t.saved);
+		} catch (e) {
+			f(zl(e));
+		} finally {
+			u(!1);
+		}
+	}, v = {
+		automation: t.srcgrp_auto,
+		script: t.srcgrp_auto,
+		plejd_schedule: t.nw_schedules
+	}, y = (e, t, n) => n ? [.../* @__PURE__ */ new Set([...e, t])] : e.filter((e) => e !== t);
+	return /* @__PURE__ */ (0, $.jsxs)(ql, {
+		title: t.nw_title,
+		wide: !0,
+		children: [
+			/* @__PURE__ */ (0, $.jsx)("p", {
+				className: "lead",
+				children: t.nw_lead
+			}),
+			/* @__PURE__ */ (0, $.jsx)("label", {
+				className: "checks",
+				children: /* @__PURE__ */ (0, $.jsxs)("span", { children: [
+					/* @__PURE__ */ (0, $.jsx)("input", {
+						type: "checkbox",
+						checked: i.enabled,
+						onChange: (e) => h({ enabled: e.target.checked })
+					}),
+					" ",
+					t.nw_enabled
+				] })
+			}),
+			/* @__PURE__ */ (0, $.jsxs)("div", {
+				className: "fields",
+				children: [/* @__PURE__ */ (0, $.jsxs)("label", {
+					className: "f",
+					children: [/* @__PURE__ */ (0, $.jsx)("span", { children: t.nw_from }), /* @__PURE__ */ (0, $.jsx)("input", {
+						type: "time",
+						value: i.start,
+						onChange: (e) => h({ start: e.target.value })
+					})]
+				}), /* @__PURE__ */ (0, $.jsxs)("label", {
+					className: "f",
+					children: [/* @__PURE__ */ (0, $.jsx)("span", { children: t.nw_to }), /* @__PURE__ */ (0, $.jsx)("input", {
+						type: "time",
+						value: i.end,
+						onChange: (e) => h({ end: e.target.value })
+					})]
+				})]
+			}),
+			/* @__PURE__ */ (0, $.jsx)("span", {
+				className: "label",
+				style: { marginTop: 10 },
+				children: t.nw_targets
+			}),
+			/* @__PURE__ */ (0, $.jsxs)("div", {
+				className: "checks col",
+				children: [
+					[...o, ...n.targets.filter((e) => !o.includes(e))].map((e) => /* @__PURE__ */ (0, $.jsxs)("label", { children: [
+						/* @__PURE__ */ (0, $.jsx)("input", {
+							type: "checkbox",
+							checked: i.targets.includes(e),
+							onChange: (t) => h({ targets: y(i.targets, e, t.target.checked) })
+						}),
+						e.replace(/^mobile_app_/, "📱 ").replace(/_/g, " "),
+						!o.includes(e) && ` (${t.state_unavailable})`
+					] }, e)),
+					!o.length && /* @__PURE__ */ (0, $.jsx)(Jl, { text: t.nw_none }),
+					/* @__PURE__ */ (0, $.jsxs)("label", { children: [/* @__PURE__ */ (0, $.jsx)("input", {
+						type: "checkbox",
+						checked: i.persistent,
+						onChange: (e) => h({ persistent: e.target.checked })
+					}), t.nw_persistent] })
+				]
+			}),
+			/* @__PURE__ */ (0, $.jsx)("span", {
+				className: "label",
+				style: { marginTop: 10 },
+				children: t.nw_also
+			}),
+			/* @__PURE__ */ (0, $.jsxs)("div", {
+				className: "checks",
+				children: [/* @__PURE__ */ (0, $.jsxs)("label", { children: [/* @__PURE__ */ (0, $.jsx)("input", {
+					type: "checkbox",
+					checked: i.alarm,
+					onChange: (e) => h({ alarm: e.target.checked })
+				}), t.nw_alarm] }), ["automation", "plejd_schedule"].map((e) => /* @__PURE__ */ (0, $.jsxs)("label", { children: [/* @__PURE__ */ (0, $.jsx)("input", {
+					type: "checkbox",
+					checked: !i.ignore.includes(e),
+					onChange: (t) => {
+						h({ ignore: (e === "automation" ? ["automation", "script"] : [e]).reduce((e, n) => y(e, n, !t.target.checked), i.ignore) });
+					}
+				}), v[e]] }, e))]
+			}),
+			d ? /* @__PURE__ */ (0, $.jsx)("p", {
+				className: "error",
+				children: d
+			}) : p && /* @__PURE__ */ (0, $.jsx)("p", {
+				className: "notice",
+				children: p
+			}),
+			/* @__PURE__ */ (0, $.jsx)("div", {
+				className: "actions",
+				children: /* @__PURE__ */ (0, $.jsx)("button", {
+					className: "btn",
+					disabled: c || !g,
+					onClick: _,
+					children: c ? t.saving : t.save
+				})
+			})
 		]
 	});
 }
 //#endregion
 //#region src/styles.css?inline
-var vu = ":host{--pl-bg:var(--primary-background-color,#f4f6f9);--pl-card:var(--card-background-color,#fff);--pl-text:var(--primary-text-color,#1d2330);--pl-muted:var(--secondary-text-color,#6b7484);--pl-line:color-mix(in srgb, var(--pl-muted) 18%, transparent);--pl-field:var(--secondary-background-color,#fafafa);--pl-accent:var(--primary-color,#03a9f4);--pl-on:var(--state-light-active-color,#fdd835);--pl-neg:var(--error-color,#db4437);--pl-radius:16px;display:block}*{box-sizing:border-box}.page{max-width:1180px;min-height:100vh;color:var(--pl-text);font:14px/1.45 var(--paper-font-body1_-_font-family,Inter, Roboto, system-ui, sans-serif);background:var(--pl-bg);margin:0 auto;padding:20px 28px 56px}.page.narrow{padding:10px 10px 40px}header{z-index:2;background:var(--pl-bg);flex-wrap:wrap;justify-content:space-between;align-items:center;gap:12px;margin:-20px -28px 18px;padding:20px 28px 12px;display:flex;position:sticky;top:0}.narrow header{margin:-10px -10px 14px;padding:10px 10px 8px}h1{letter-spacing:-.02em;margin:0;font-size:26px;font-weight:600}h2{margin:0;font-size:15px;font-weight:600}h3{margin:0 0 10px;font-size:13.5px;font-weight:600}.tabs{background:var(--pl-card);border:1px solid var(--pl-line);border-radius:999px;gap:2px;max-width:100%;padding:4px;display:inline-flex;overflow-x:auto}.tabs button{color:var(--pl-muted);font:inherit;cursor:pointer;white-space:nowrap;background:0 0;border:0;border-radius:999px;padding:7px 14px;font-weight:500}.tabs button:hover{color:var(--pl-text)}.tabs button.on{background:var(--pl-accent);color:var(--text-primary-color,#fff)}.grid{grid-template-columns:repeat(auto-fit,minmax(340px,1fr));align-items:start;gap:16px;display:grid}.narrow .grid{grid-template-columns:1fr}.card{background:var(--pl-card);border-radius:var(--pl-radius);border:1px solid var(--pl-line);min-width:0;padding:18px;box-shadow:0 1px 2px #0000000a,0 8px 24px -12px #0000001f}.card.wide{grid-column:1/-1}.rooms{grid-column:1/-1;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));align-items:start;gap:16px;display:grid}.rooms>.card.wide{grid-column:1/-1}.room{padding:14px 14px 10px}.room.size-2{grid-column:span 2}.room.size-3{grid-column:1/-1}.narrow .room.size-2,.narrow .room.size-3{grid-column:auto}@media (width<=720px){.room.size-2{grid-column:auto}}.rooms-bar{flex-wrap:wrap;grid-column:1/-1;align-items:center;gap:10px;display:flex}.rooms-bar .muted{flex-basis:100%;order:3}.room.editing{outline:1px dashed color-mix(in srgb, var(--pl-accent) 55%, transparent);outline-offset:-1px;cursor:grab}.room.dragging{opacity:.45}.handle{color:var(--pl-muted);cursor:grab;-webkit-user-select:none;user-select:none;font-size:16px}.edit-tools{align-items:center;gap:4px;display:flex}.seg{border:1px solid var(--pl-line);border-radius:8px;margin-left:4px;display:inline-flex;overflow:hidden}.seg button{color:var(--pl-muted);font:inherit;cursor:pointer;background:0 0;border:0;padding:4px 9px;font-size:12px}.seg button.on{background:var(--pl-accent);color:var(--text-primary-color,#fff)}input.name-input{padding:5px 8px;font-weight:600}input.name-input.small{margin-bottom:2px;padding:4px 6px;font-size:12px;font-weight:500}button.icon:disabled{opacity:.3;cursor:default}input[type=range].idle{opacity:.35}.room-head{align-items:center;gap:10px;margin-bottom:8px;display:flex}.room-head h2{line-height:1.2}.room-control{align-items:center;gap:10px;display:flex}.room-control input[type=range]{width:90px;margin:0}button.icon{color:var(--pl-muted);cursor:pointer;background:0 0;border:0;border-radius:8px;padding:4px 7px;font-size:15px}button.icon.on,button.icon:hover{color:var(--pl-accent);background:color-mix(in srgb, var(--pl-accent) 12%, transparent)}.tiles{grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:8px;display:grid}.tile{text-align:center;background:color-mix(in srgb, var(--pl-muted) 6%, transparent);border-radius:12px;min-width:0;padding:6px 6px 8px}.tile.lit{background:radial-gradient(circle at 50% 35%, color-mix(in srgb, var(--pl-on) 22%, transparent), transparent 70%), color-mix(in srgb, var(--pl-muted) 6%, transparent)}.tile .lamp{cursor:pointer;aspect-ratio:1;background:0 0;border:0;width:100%;padding:0;display:block}.tile .lamp:disabled{cursor:not-allowed}.tile .lamp img{object-fit:contain;width:100%;height:100%;display:block}.tile-name{white-space:nowrap;text-overflow:ellipsis;font-size:12.5px;font-weight:500;overflow:hidden}.tile input[type=range]{margin-top:4px}.tile select{margin-top:4px;padding:4px 6px;font-size:12px}.card-head{justify-content:space-between;align-items:baseline;gap:10px;margin-bottom:8px;display:flex}.count,.muted{color:var(--pl-muted)}.muted{font-size:12.5px}.lead{color:var(--pl-muted);margin:0 0 12px}.error{color:var(--pl-neg);margin:10px 0 0}.notice{color:var(--pl-muted);margin:10px 0 0}.row{border-bottom:1px solid var(--pl-line);padding:10px 2px}.row:last-child{border-bottom:0}.line{align-items:center;gap:12px;display:flex}.grow{flex:1;min-width:0}.click{cursor:pointer}.off{opacity:.5;cursor:not-allowed}.dot{background:var(--disabled-text-color,#9e9e9e);border-radius:50%;flex:none;width:10px;height:10px}.dot.on{background:var(--pl-on)}.dot.bad{background:var(--pl-neg)}.switch{cursor:pointer;background:var(--disabled-text-color,#9e9e9e);border:0;border-radius:10px;flex:none;width:34px;height:20px;padding:0;position:relative}.switch.on{background:var(--pl-accent)}.switch:after{content:\"\";background:#fff;border-radius:50%;width:16px;height:16px;transition:left .15s;position:absolute;top:2px;left:2px;box-shadow:0 1px 2px #0000004d}.switch.on:after{left:16px}.switch:disabled{opacity:.5;cursor:not-allowed}input[type=range]{width:100%;accent-color:var(--pl-accent);margin-top:6px}.line input[type=range]{flex:1;margin:0}button.btn{font:inherit;cursor:pointer;background:var(--pl-accent);color:var(--text-primary-color,#fff);border:0;border-radius:8px;padding:8px 14px}button.btn.ghost{background:var(--pl-muted)}button.btn.danger{background:var(--pl-neg)}button.btn.small{padding:4px 12px}button.btn:disabled{opacity:.5;cursor:not-allowed}.temp{text-align:center;min-width:56px}.form{border-top:1px solid var(--pl-line);margin-top:14px;padding-top:12px}.fields{grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-top:10px;display:grid}.fields.press{grid-template-columns:1fr 1fr auto;align-items:end}label.f{display:block}label.f>span,.label{color:var(--pl-muted);margin:0 0 4px;font-size:12px;display:block}input:not([type]),input[type=text],input[type=time],input[type=number],select,textarea{border:1px solid var(--pl-line);background:var(--pl-field);width:100%;color:var(--pl-text);font:inherit;border-radius:8px;padding:8px 10px}textarea{min-height:56px;font-family:monospace}.box{border:1px solid var(--pl-line);border-radius:8px;margin-top:8px;padding:10px}.checks{flex-wrap:wrap;gap:12px;display:flex}.checks label{align-items:center;gap:4px;display:flex}.checks.col{flex-direction:column;gap:4px;max-height:240px;overflow-y:auto}.actions{justify-content:flex-end;gap:8px;margin-top:14px;display:flex}.log-day h3{color:var(--pl-muted);text-transform:capitalize;margin:14px 0 4px}.log-time{font-variant-numeric:tabular-nums;color:var(--pl-muted);min-width:64px}.log-row .grow{text-overflow:ellipsis;white-space:nowrap;overflow:hidden}.log-src{text-align:right}.narrow .log-row{flex-wrap:wrap}.narrow .log-src{text-align:left;flex-basis:100%;padding-left:76px}", yu = class extends HTMLElement {
+var xu = ":host{--pl-bg:var(--primary-background-color,#f4f6f9);--pl-card:var(--card-background-color,#fff);--pl-text:var(--primary-text-color,#1d2330);--pl-muted:var(--secondary-text-color,#6b7484);--pl-line:color-mix(in srgb, var(--pl-muted) 18%, transparent);--pl-field:var(--secondary-background-color,#fafafa);--pl-accent:var(--primary-color,#03a9f4);--pl-on:var(--state-light-active-color,#fdd835);--pl-neg:var(--error-color,#db4437);--pl-radius:16px;display:block}*{box-sizing:border-box}.page{max-width:1180px;min-height:100vh;color:var(--pl-text);font:14px/1.45 var(--paper-font-body1_-_font-family,Inter, Roboto, system-ui, sans-serif);background:var(--pl-bg);margin:0 auto;padding:20px 28px 56px}.page.narrow{padding:10px 10px 40px}header{z-index:2;background:var(--pl-bg);flex-wrap:wrap;justify-content:space-between;align-items:center;gap:12px;margin:-20px -28px 18px;padding:20px 28px 12px;display:flex;position:sticky;top:0}.narrow header{margin:-10px -10px 14px;padding:10px 10px 8px}h1{letter-spacing:-.02em;margin:0;font-size:26px;font-weight:600}h2{margin:0;font-size:15px;font-weight:600}h3{margin:0 0 10px;font-size:13.5px;font-weight:600}.tabs{background:var(--pl-card);border:1px solid var(--pl-line);border-radius:999px;gap:2px;max-width:100%;padding:4px;display:inline-flex;overflow-x:auto}.tabs button{color:var(--pl-muted);font:inherit;cursor:pointer;white-space:nowrap;background:0 0;border:0;border-radius:999px;padding:7px 14px;font-weight:500}.tabs button:hover{color:var(--pl-text)}.tabs button.on{background:var(--pl-accent);color:var(--text-primary-color,#fff)}.grid{grid-template-columns:repeat(auto-fit,minmax(340px,1fr));align-items:start;gap:16px;display:grid}.narrow .grid{grid-template-columns:1fr}.card{background:var(--pl-card);border-radius:var(--pl-radius);border:1px solid var(--pl-line);min-width:0;padding:18px;box-shadow:0 1px 2px #0000000a,0 8px 24px -12px #0000001f}.card.wide{grid-column:1/-1}.rooms{grid-column:1/-1;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));align-items:start;gap:16px;display:grid}.rooms>.card.wide{grid-column:1/-1}.room{padding:14px 14px 10px}.room.size-2{grid-column:span 2}.room.size-3{grid-column:1/-1}.narrow .room.size-2,.narrow .room.size-3{grid-column:auto}@media (width<=720px){.room.size-2{grid-column:auto}}.rooms-bar{flex-wrap:wrap;grid-column:1/-1;align-items:center;gap:10px;display:flex}.rooms-bar .muted{flex-basis:100%;order:3}.room.editing{outline:1px dashed color-mix(in srgb, var(--pl-accent) 55%, transparent);outline-offset:-1px;cursor:grab}.room.dragging{opacity:.45}.handle{color:var(--pl-muted);cursor:grab;-webkit-user-select:none;user-select:none;font-size:16px}.edit-tools{align-items:center;gap:4px;display:flex}.seg{border:1px solid var(--pl-line);border-radius:8px;margin-left:4px;display:inline-flex;overflow:hidden}.seg button{color:var(--pl-muted);font:inherit;cursor:pointer;background:0 0;border:0;padding:4px 9px;font-size:12px}.seg button.on{background:var(--pl-accent);color:var(--text-primary-color,#fff)}input.name-input{padding:5px 8px;font-weight:600}input.name-input.small{margin-bottom:2px;padding:4px 6px;font-size:12px;font-weight:500}button.icon:disabled{opacity:.3;cursor:default}input[type=range].idle{opacity:.35}.room-head{align-items:center;gap:10px;margin-bottom:8px;display:flex}.room-head h2{line-height:1.2}.room-control{align-items:center;gap:10px;display:flex}.room-control input[type=range]{width:90px;margin:0}button.icon{color:var(--pl-muted);cursor:pointer;background:0 0;border:0;border-radius:8px;padding:4px 7px;font-size:15px}button.icon.on,button.icon:hover{color:var(--pl-accent);background:color-mix(in srgb, var(--pl-accent) 12%, transparent)}.tiles{grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:8px;display:grid}.tile{text-align:center;background:color-mix(in srgb, var(--pl-muted) 6%, transparent);border-radius:12px;min-width:0;padding:6px 6px 8px}.tile.lit{background:radial-gradient(circle at 50% 35%, color-mix(in srgb, var(--pl-on) 22%, transparent), transparent 70%), color-mix(in srgb, var(--pl-muted) 6%, transparent)}.tile .lamp{cursor:pointer;aspect-ratio:1;background:0 0;border:0;width:100%;padding:0;display:block}.tile .lamp:disabled{cursor:not-allowed}.tile .lamp img{object-fit:contain;width:100%;height:100%;display:block}.tile-name{white-space:nowrap;text-overflow:ellipsis;font-size:12.5px;font-weight:500;overflow:hidden}.tile input[type=range]{margin-top:4px}.tile select{margin-top:4px;padding:4px 6px;font-size:12px}.card-head{justify-content:space-between;align-items:baseline;gap:10px;margin-bottom:8px;display:flex}.count,.muted{color:var(--pl-muted)}.muted{font-size:12.5px}.lead{color:var(--pl-muted);margin:0 0 12px}.error{color:var(--pl-neg);margin:10px 0 0}.notice{color:var(--pl-muted);margin:10px 0 0}.row{border-bottom:1px solid var(--pl-line);padding:10px 2px}.row:last-child{border-bottom:0}.line{align-items:center;gap:12px;display:flex}.grow{flex:1;min-width:0}.click{cursor:pointer}.off{opacity:.5;cursor:not-allowed}.dot{background:var(--disabled-text-color,#9e9e9e);border-radius:50%;flex:none;width:10px;height:10px}.dot.on{background:var(--pl-on)}.dot.bad{background:var(--pl-neg)}.switch{cursor:pointer;background:var(--disabled-text-color,#9e9e9e);border:0;border-radius:10px;flex:none;width:34px;height:20px;padding:0;position:relative}.switch.on{background:var(--pl-accent)}.switch:after{content:\"\";background:#fff;border-radius:50%;width:16px;height:16px;transition:left .15s;position:absolute;top:2px;left:2px;box-shadow:0 1px 2px #0000004d}.switch.on:after{left:16px}.switch:disabled{opacity:.5;cursor:not-allowed}input[type=range]{width:100%;accent-color:var(--pl-accent);margin-top:6px}.line input[type=range]{flex:1;margin:0}button.btn{font:inherit;cursor:pointer;background:var(--pl-accent);color:var(--text-primary-color,#fff);border:0;border-radius:8px;padding:8px 14px}button.btn.ghost{background:var(--pl-muted)}button.btn.danger{background:var(--pl-neg)}button.btn.small{padding:4px 12px}button.btn:disabled{opacity:.5;cursor:not-allowed}.temp{text-align:center;min-width:56px}.form{border-top:1px solid var(--pl-line);margin-top:14px;padding-top:12px}.fields{grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-top:10px;display:grid}.fields.press{grid-template-columns:1fr 1fr auto;align-items:end}label.f{display:block}label.f>span,.label{color:var(--pl-muted);margin:0 0 4px;font-size:12px;display:block}input:not([type]),input[type=text],input[type=search],input[type=time],input[type=number],select,textarea{border:1px solid var(--pl-line);background:var(--pl-field);width:100%;color:var(--pl-text);font:inherit;border-radius:8px;padding:8px 10px}textarea{min-height:56px;font-family:monospace}.box{border:1px solid var(--pl-line);border-radius:8px;margin-top:8px;padding:10px}.checks{flex-wrap:wrap;gap:12px;display:flex}.checks label{align-items:center;gap:4px;display:flex}.checks.col{flex-direction:column;gap:4px;max-height:240px;overflow-y:auto}.actions{justify-content:flex-end;gap:8px;margin-top:14px;display:flex}.log-day h3{color:var(--pl-muted);text-transform:capitalize;margin:14px 0 4px}.log-time{font-variant-numeric:tabular-nums;color:var(--pl-muted);min-width:64px}.log-row .grow{text-overflow:ellipsis;white-space:nowrap;overflow:hidden}.log-src{text-align:right}.narrow .log-row{flex-wrap:wrap}.narrow .log-src{text-align:left;flex-basis:100%;padding-left:76px}.log-filters{flex-wrap:wrap;align-items:center;gap:10px 14px;margin-bottom:8px;display:flex}.log-filters .f{align-items:center;gap:6px;min-width:170px;display:flex}.log-filters .f>span{white-space:nowrap;margin:0}.log-search{flex:100%}.log-between{align-items:center;gap:6px;display:flex}.log-between label{align-items:center;gap:4px;display:flex}.log-between input[type=time]{width:auto}.log-dim .dot{background:color-mix(in srgb, var(--pl-on) 55%, transparent)}", Su = class extends HTMLElement {
 	root;
 	_hass;
 	_narrow = !1;
@@ -24227,7 +24770,7 @@ var vu = ":host{--pl-bg:var(--primary-background-color,#f4f6f9);--pl-card:var(--
 		let e = this.shadowRoot ?? this.attachShadow({ mode: "open" });
 		e.replaceChildren();
 		let t = document.createElement("style");
-		t.textContent = vu;
+		t.textContent = xu;
 		let n = document.createElement("div");
 		e.append(t, n), this.root = (0, u.createRoot)(n), this.render();
 	}
@@ -24241,5 +24784,5 @@ var vu = ":host{--pl-bg:var(--primary-background-color,#f4f6f9);--pl-card:var(--
 		}));
 	}
 };
-customElements.get("plejd-panel") ? location.reload() : customElements.define("plejd-panel", yu);
+customElements.get("plejd-panel") ? location.reload() : customElements.define("plejd-panel", Su);
 //#endregion

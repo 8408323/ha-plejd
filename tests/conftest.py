@@ -370,6 +370,7 @@ except ImportError:
         return _datetime.datetime(2026, 5, 31, 12, 0, 0, tzinfo=_datetime.timezone(_datetime.timedelta(hours=2)))
 
     _dt.now = _now  # type: ignore[attr-defined]
+    _dt.as_local = lambda value: value.astimezone(_now().tzinfo)  # type: ignore[attr-defined]
     _util.dt = _dt  # type: ignore[attr-defined]
     sys.modules.setdefault("homeassistant.util", _util)
     sys.modules.setdefault("homeassistant.util.dt", _dt)
@@ -531,6 +532,18 @@ except ImportError:
 
         def async_get(self, entity_id):
             return self._entities.get(entity_id)
+
+        def async_get_entity_id(self, domain, platform, unique_id):
+            return next(
+                (
+                    entity_id
+                    for entity_id, e in self._entities.items()
+                    if entity_id.startswith(f"{domain}.")
+                    and getattr(e, "platform", None) == platform
+                    and getattr(e, "unique_id", None) == unique_id
+                ),
+                None,
+            )
 
     def _er_async_get(hass):
         return getattr(hass, "entity_registry", None) or _EntityRegistry()
