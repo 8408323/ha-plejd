@@ -80,7 +80,14 @@ def _hass(origin=None):
     return types.SimpleNamespace(
         data={DATA_ENTRY: types.SimpleNamespace(runtime_data=coordinator, entry_id="e1")},
         device_registry=types.SimpleNamespace(
-            async_get=lambda device_id: types.SimpleNamespace(area_id="kontor") if device_id == "dev_room" else None
+            async_get=lambda device_id: (
+                types.SimpleNamespace(area_id="kontor", labels={"dev-label"}) if device_id == "dev_room" else None
+            )
+        ),
+        area_registry=types.SimpleNamespace(
+            async_get_area=lambda area_id: (
+                types.SimpleNamespace(floor_id="upstairs", labels={"area-label"}) if area_id == "kontor" else None
+            )
         ),
         bus=_Bus(),
         entity_registry=registry,
@@ -334,7 +341,14 @@ async def test_room_command_targeted_by_device_area_or_label_is_credited():
     hass = await _log_hass()
     reg = hass.entity_registry.async_get("light.room_kontor")
     reg.labels = {"evening"}
-    for target in ({"device_id": "dev_room"}, {"area_id": ["kontor"]}, {"label_id": "evening"}):
+    for target in (
+        {"device_id": "dev_room"},
+        {"area_id": ["kontor"]},
+        {"floor_id": "upstairs"},
+        {"label_id": "evening"},  # on the entity
+        {"label_id": "dev-label"},  # on its device
+        {"label_id": "area-label"},  # on its area
+    ):
         _room_call(hass, _ctx(user_id="u1"), **target)
         assert _member(hass, "off", "on") == {"kind": "user", "user_id": "u1"}, target
         _member(hass, "on", "off")
@@ -349,6 +363,7 @@ async def test_room_calls_that_are_not_credited():
     _room_call(hass, _ctx(user_id="u1"), entity_id=["light.kontor", "light.unregistered"])  # not a room
     _room_call(hass, _ctx(user_id="u1"), domain="switch", entity_id="light.room_kontor")  # not a light call
     _room_call(hass, _ctx(user_id="u1"), area_id="elsewhere")  # targets something else
+    _room_call(hass, _ctx(user_id="u1"), service="stop_dim", entity_id="light.room_kontor")  # switches nothing
     assert _member(hass, "off", "on") == {"kind": "external"}
     hass.entity_registry._entities.pop("light.room_kontor")  # room light not registered
     _room_call(hass, _ctx(user_id="u1"), device_id="dev_room")
@@ -360,7 +375,8 @@ async def test_room_commands_are_ignored_without_a_loaded_coordinator():
     hass.data[DATA_ENTRY] = None
     hass.bus.listeners["call_service"](
         types.SimpleNamespace(
-            context=_ctx(user_id="u1"), data={"domain": "light", "service_data": {"entity_id": "light.room_kontor"}}
+            context=_ctx(user_id="u1"),
+            data={"domain": "light", "service": "turn_on", "service_data": {"entity_id": "light.room_kontor"}},
         )
     )
     assert hass.data[activity.DATA_ACTIVITY]._room_commands == {}

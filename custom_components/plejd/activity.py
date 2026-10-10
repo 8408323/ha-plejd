@@ -15,6 +15,7 @@ from typing import Any
 import voluptuous as vol
 from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.storage import Store
@@ -96,8 +97,12 @@ class PlejdActivityLog:
         source = self._ha_source(event.context)
         if source is None:
             return
-        # turn_on/turn_off say which transition they cause; toggle can go either way
-        expected = {"turn_on": "on", "turn_off": "off"}.get(event.data.get("service"))
+        # Only these switch a light: turn_on/turn_off say which way, toggle can go either way. Anything else
+        # (start_dim/stop_dim, ...) causes no on/off transition and must not be credited with one.
+        service = event.data.get("service")
+        if service not in ("turn_on", "turn_off", "toggle"):
+            return
+        expected = {"turn_on": "on", "turn_off": "off"}.get(service)
         now = time.monotonic()
         for address in self._targeted_room_members(event.data.get("service_data") or {}):
             self._room_commands[address] = (now, source, expected)
@@ -147,7 +152,7 @@ class PlejdActivityLog:
     def _targeted_room_members(self, service_data: dict[str, Any]) -> list[int]:
         """Member addresses of every Plejd room light a light service call targets.
 
-        Matches each room light against the call's entity_id/device_id/area_id/label_id itself rather than
+        Matches each room light against the call's entity/device/area/floor/label targets itself rather than
         through HA's target helper, whose signature differs across the supported HA versions.
         """
         coordinator = getattr(self.hass.data.get(DATA_ENTRY), "runtime_data", None)
@@ -158,10 +163,11 @@ class PlejdActivityLog:
             value = service_data.get(key) or []
             return {value} if isinstance(value, str) else set(value)
 
-        entity_ids, device_ids, area_ids, label_ids = (
+        entity_ids, device_ids, area_ids, floor_ids, label_ids = (
             ids("entity_id"),
             ids("device_id"),
             ids("area_id"),
+            ids("floor_id"),
             ids("label_id"),
         )
         registry = er.async_get(self.hass)
@@ -173,12 +179,22 @@ class PlejdActivityLog:
             reg = by_unique_id.get(f"room_{room.room_id}")
             if reg is None:
                 continue
-            area = reg.area_id or getattr(dr.async_get(self.hass).async_get(reg.device_id or ""), "area_id", None)
+            # Mirrors HA's target expansion: the entity's own area, else its device's; labels on the entity,
+            # its device or its area; and the floor of that area.
+            device = dr.async_get(self.hass).async_get(reg.device_id) if reg.device_id else None
+            area_id = reg.area_id or getattr(device, "area_id", None)
+            area = ar.async_get(self.hass).async_get_area(area_id) if area_id else None
+            labels = (
+                set(reg.labels or ())
+                | set(getattr(device, "labels", ()) or ())
+                | set(getattr(area, "labels", ()) or ())
+            )
             if (
                 reg.entity_id in entity_ids
                 or (reg.device_id and reg.device_id in device_ids)
-                or (area and area in area_ids)
-                or set(getattr(reg, "labels", ()) or ()) & label_ids
+                or (area_id and area_id in area_ids)
+                or (getattr(area, "floor_id", None) in floor_ids)
+                or labels & label_ids
             ):
                 members.extend(room.member_addresses)
         return members
