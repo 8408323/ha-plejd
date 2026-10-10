@@ -1265,8 +1265,8 @@ function NightWatch({ hass }: Ctx) {
       </div>
       <span className="label" style={{ marginTop: 10 }}>{t.nw_targets}</span>
       <div className="checks col">
-        {services.map((svc) => (
-          <label key={svc}><input type="checkbox" checked={draft.targets.includes(svc)} onChange={(e) => set({ targets: toggleIn(draft.targets, svc, e.target.checked) })} />{svc.replace(/^mobile_app_/, "📱 ").replace(/_/g, " ")}</label>
+        {[...services, ...saved.targets.filter((svc) => !services.includes(svc))].map((svc) => (
+          <label key={svc}><input type="checkbox" checked={draft.targets.includes(svc)} onChange={(e) => set({ targets: toggleIn(draft.targets, svc, e.target.checked) })} />{svc.replace(/^mobile_app_/, "📱 ").replace(/_/g, " ")}{!services.includes(svc) && ` (${t.state_unavailable})`}</label>
         ))}
         {!services.length && <Empty text={t.nw_none} />}
         <label><input type="checkbox" checked={draft.persistent} onChange={(e) => set({ persistent: e.target.checked })} />{t.nw_persistent}</label>

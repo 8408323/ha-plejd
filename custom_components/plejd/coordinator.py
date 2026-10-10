@@ -395,7 +395,12 @@ class PlejdCoordinator:
         ):
             index = self._recent_scene[1]
             name = next((s.name for s in self.scenes if s.index == index), f"#{index}")
-            candidates.append((self._recent_scene[0], {"kind": "plejd_scene", "name": name, "index": index}))
+            candidates.append(
+                (
+                    self._recent_scene[0],
+                    {"kind": "plejd_scene", "name": name, "index": index, "at": self._recent_scene[0]},
+                )
+            )
         # A Plejd motion sensor in the same room that saw motion shortly before (its own rule switched the light).
         room_id = own_device.room_id if own_device else None
         for sensor in self.motion:
@@ -437,7 +442,7 @@ class PlejdCoordinator:
             for cb in list(self._button_listeners):
                 cb(command.address, pressed)
         elif command.command == CMD_SCENE and command.data[:1]:
-            self._recent_scene = (time.monotonic(), command.data[0])
+            self._recent_scene = (time.monotonic(), command.data[0] & 0x7F)  # +0x80 marks a power-off scene
         elif command.command == CMD_OUTPUT_SET and command.address in self._motion_addresses:
             event = decode_motion(command)
             if event is not None:

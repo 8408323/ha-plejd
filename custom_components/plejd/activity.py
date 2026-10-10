@@ -80,7 +80,8 @@ class PlejdActivityLog:
         # isn't logged, and the member changes it causes carry no context of their own.
         self._room_commands: dict[int, tuple[float, dict[str, Any], str | None]] = {}  # + the expected new state
         self._dims: dict[str, tuple[float, dict[str, Any]]] = {}  # entity_id -> (last step, its open dim entry)
-        self._scene_calls: dict[int, tuple[float, dict[str, Any]]] = {}  # Plejd scene index -> (when, HA source)
+        # Plejd scene index -> [when called, HA source, when the scene it caused fired]
+        self._scene_calls: dict[int, list[Any]] = {}
         self._alert_store: Store = Store(hass, 1, f"{_ALERT_STORE_KEY}.{entry.entry_id}")
         self.alerts: dict[str, Any] = dict(DEFAULT_ALERTS)
         self._unsubs: list = []
@@ -147,7 +148,7 @@ class PlejdActivityLog:
             # otherwise be credited to "Plejd scene" instead of the person or automation that ran it.
             if (source := self._ha_source(event.context)) is not None:
                 for index in self._plejd_scene_indexes(event.data.get("service_data") or {}):
-                    self._scene_calls[index] = (time.monotonic(), source)
+                    self._scene_calls[index] = [time.monotonic(), source, None]
             return
         if event.data.get("domain") == DOMAIN and event.data.get("service") == "all_off":
             # plejd.all_off switches the outputs directly, so their changes carry no context of their own.
@@ -237,12 +238,18 @@ class PlejdActivityLog:
 
     def _add(self, entry: dict[str, Any]) -> None:
         self.entries.append(entry)
+        self.prune()
+        self._save()
+
+    def prune(self) -> None:
+        """Drop entries past the retention window or over the size cap."""
         cutoff = (dt_util.now() - RETENTION).isoformat()
         drop = 0
         while drop < len(self.entries) and _utc(self.entries[drop]["t"]) < _utc(cutoff):
             drop += 1
-        del self.entries[: max(drop, len(self.entries) - MAX_ENTRIES)]
-        self._save()
+        if drop := max(drop, len(self.entries) - MAX_ENTRIES):
+            del self.entries[:drop]
+            self._save()
 
     def _save(self) -> None:
         if self._can_save:
@@ -425,11 +432,13 @@ class PlejdActivityLog:
         """A mesh origin as logged: a scene run from HA or at a schedule's time gets that source instead."""
         if origin["kind"] == "plejd_scene":
             call = self._scene_calls.get(origin["index"])
-            if call and time.monotonic() - call[0] <= _ROOM_COMMAND_WINDOW:
+            if call and call[2] is None and call[0] <= origin["at"] <= call[0] + _ROOM_COMMAND_WINDOW:
+                call[2] = origin["at"]  # the first firing after the call is the one it caused
+            if call and call[2] == origin["at"]:
                 return dict(call[1])
             if schedule := self._schedule_for(origin["index"], state):
                 return {"kind": "plejd_schedule", "name": schedule}
-        return {k: v for k, v in origin.items() if k != "index"}
+        return {k: v for k, v in origin.items() if k not in ("index", "at")}
 
     def _schedule_enabled(self, schedule: dict[str, Any]) -> bool:
         """Whether a schedule's switch is on (switch.py's PlejdScheduleSwitch; unknown counts as on)."""
@@ -511,6 +520,7 @@ async def ws_list(hass: HomeAssistant, connection, msg) -> None:
     except ValueError:
         connection.send_error(msg["id"], "invalid_time", "start/end must be ISO times")
         return
+    log.prune()  # an idle install gets no new entries to prune on
     picked = [
         e
         for e in reversed(log.entries)
@@ -577,7 +587,8 @@ async def ws_alerts_set(hass: HomeAssistant, connection, msg) -> None:
     if log is None:
         connection.send_error(msg["id"], "not_loaded", "Plejd is not loaded")
         return
-    known = set(hass.services.async_services().get("notify", {}))
+    # A target already saved stays allowed after its service disappears, so the rest can still be edited.
+    known = set(hass.services.async_services().get("notify", {})) | set(log.alerts["targets"])
     if unknown := [t for t in msg["alerts"]["targets"] if t not in known]:
         connection.send_error(msg["id"], "unknown_target", f"Unknown notify service: {', '.join(unknown)}")
         return

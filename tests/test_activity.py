@@ -745,6 +745,22 @@ async def test_alert_settings_round_trip_and_reject_unknown_targets():
     assert reloaded.alerts == cfg
     await activity.ws_alerts_set(hass, conn, {"id": 3, "alerts": {**cfg, "targets": ["gone"]}})
     assert conn.error == (3, "unknown_target", "Unknown notify service: gone")
+    hass.data[activity.DATA_ACTIVITY].alerts = {**cfg, "targets": ["family", "gone"]}  # "gone" was removed after saving
+    await activity.ws_alerts_set(hass, conn, {"id": 4, "alerts": {**cfg, "targets": ["gone"]}})
+    assert conn.result == (4, {"alerts": {**cfg, "targets": ["gone"]}})  # a stale target can be kept or unticked
+
+
+async def test_list_drops_entries_that_aged_past_retention_while_idle(monkeypatch):
+    hass = await _log_hass()
+    hass.bus.listeners["state_changed"](
+        _change(_state("light.kontor", "off"), _state("light.kontor", "on", when=datetime(2026, 5, 20, tzinfo=UTC)))
+    )
+    later = datetime(2026, 6, 25, 12, tzinfo=UTC)
+    monkeypatch.setattr(activity.dt_util, "now", lambda: later)
+    conn = _Conn()
+    await activity.ws_list(hass, conn, {"id": 1, "limit": 5})
+    assert conn.result[1] == {"entries": [], "more": False, "oldest": None}
+    assert hass.data[activity.DATA_ACTIVITY].entries == []
 
 
 async def test_alert_commands_error_when_not_loaded():
@@ -847,7 +863,8 @@ async def test_entries_older_than_30_days_are_dropped_on_load():
 async def test_a_plejd_scene_run_from_ha_is_credited_to_its_caller(monkeypatch):
     clock = [100.0]
     monkeypatch.setattr(activity.time, "monotonic", lambda: clock[0])
-    hass = await _log_hass(origin={"kind": "plejd_scene", "name": "Kväll", "index": 3})
+    origin = {"kind": "plejd_scene", "name": "Kväll", "index": 3, "at": 101.0}
+    hass = await _log_hass(origin=origin)
     hass.data[DATA_ENTRY].runtime_data.scenes = [types.SimpleNamespace(scene_id="sc1", index=3)]
     reg = hass.entity_registry._entities
     reg["scene.kvall"] = types.SimpleNamespace(unique_id="scene_sc1", platform="plejd")
@@ -862,10 +879,14 @@ async def test_a_plejd_scene_run_from_ha_is_credited_to_its_caller(monkeypatch):
         )
 
     run_scene(_ctx(user_id="u1"), "scene.kvall")
+    clock[0] = 101.5
     assert _member(hass, "off", "on") == {"kind": "user", "user_id": "u1"}
+    assert _member(hass, "on", "off") == {"kind": "user", "user_id": "u1"}  # another output of the same firing
+    origin["at"] = 104.0  # a second firing within the window wasn't caused by that call
+    assert _member(hass, "off", "on") == {"kind": "plejd_scene", "name": "Kväll"}
     run_scene(_ctx(), ["scene.kvall"])  # no HA source: the mesh's own scene label stays
     run_scene(_ctx(user_id="u1"), ["scene.other", "scene.missing"])  # not Plejd scenes
-    clock[0] += 20  # the HA call is too old by now
+    origin["at"] = 99.0  # a firing from before the call
     assert _member(hass, "on", "off") == {"kind": "plejd_scene", "name": "Kväll"}
 
 

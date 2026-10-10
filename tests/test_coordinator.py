@@ -3866,8 +3866,8 @@ def test_toggle_origin_scene_and_motion(monkeypatch):
     def event(cmd, address, data):
         c._on_event(Command(address=address, command_type=0x10, command=cmd, data=data))
 
-    event(coordinator_mod.CMD_SCENE, 0, b"\x03")
-    assert c.toggle_origin(5) == {"kind": "plejd_scene", "name": "Kväll", "index": 3}
+    event(coordinator_mod.CMD_SCENE, 0, b"\x83")  # the power-off form of scene 3
+    assert c.toggle_origin(5) == {"kind": "plejd_scene", "name": "Kväll", "index": 3, "at": 100.0}
     event(coordinator_mod.CMD_SCENE, 0, b"\x09")  # an unknown scene index
     assert c.toggle_origin(5)["name"] == "#9"
     clock[0] = 110.0  # scene too old; motion now

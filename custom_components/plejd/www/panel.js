@@ -24693,11 +24693,15 @@ function bu({ hass: e }) {
 			/* @__PURE__ */ (0, $.jsxs)("div", {
 				className: "checks col",
 				children: [
-					o.map((e) => /* @__PURE__ */ (0, $.jsxs)("label", { children: [/* @__PURE__ */ (0, $.jsx)("input", {
-						type: "checkbox",
-						checked: i.targets.includes(e),
-						onChange: (t) => h({ targets: y(i.targets, e, t.target.checked) })
-					}), e.replace(/^mobile_app_/, "📱 ").replace(/_/g, " ")] }, e)),
+					[...o, ...n.targets.filter((e) => !o.includes(e))].map((e) => /* @__PURE__ */ (0, $.jsxs)("label", { children: [
+						/* @__PURE__ */ (0, $.jsx)("input", {
+							type: "checkbox",
+							checked: i.targets.includes(e),
+							onChange: (t) => h({ targets: y(i.targets, e, t.target.checked) })
+						}),
+						e.replace(/^mobile_app_/, "📱 ").replace(/_/g, " "),
+						!o.includes(e) && ` (${t.state_unavailable})`
+					] }, e)),
 					!o.length && /* @__PURE__ */ (0, $.jsx)(Jl, { text: t.nw_none }),
 					/* @__PURE__ */ (0, $.jsxs)("label", { children: [/* @__PURE__ */ (0, $.jsx)("input", {
 						type: "checkbox",
