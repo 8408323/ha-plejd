@@ -5,6 +5,7 @@ from __future__ import annotations
 import types
 from datetime import UTC, datetime
 
+import pytest
 from homeassistant.helpers import entity_registry as er
 from plejd import activity
 from plejd.schedule_ws import DATA_ENTRY
@@ -226,10 +227,8 @@ async def test_failed_load_never_overwrites_the_stored_log(monkeypatch):
         raise ValueError("newer storage version")
 
     monkeypatch.setattr(log._store, "async_load", _fail)
-    try:
+    with pytest.raises(ValueError):  # setup catches this and starts the log anyway
         await log.async_load()
-    except ValueError:
-        pass
     log.async_start()
     hass.bus.listeners["state_changed"](_change(_state("light.kontor", "off"), _state("light.kontor", "on")))
     await log.async_stop()
