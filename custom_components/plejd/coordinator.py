@@ -394,13 +394,16 @@ class PlejdCoordinator:
             and (since is None or self._recent_scene[0] > since)
         ):
             index = self._recent_scene[1]
-            name = next((s.name for s in self.scenes if s.index == index), f"#{index}")
-            candidates.append(
-                (
-                    self._recent_scene[0],
-                    {"kind": "plejd_scene", "name": name, "index": index, "at": self._recent_scene[0]},
+            scene = next((s for s in self.scenes if s.index == index), None)
+            name = scene.name if scene else f"#{index}"
+            # An output the scene doesn't set changed for another reason; unknown membership keeps the scene.
+            if scene is None or scene.output_addresses is None or output_address in scene.output_addresses:
+                candidates.append(
+                    (
+                        self._recent_scene[0],
+                        {"kind": "plejd_scene", "name": name, "index": index, "at": self._recent_scene[0]},
+                    )
                 )
-            )
         # A Plejd motion sensor in the same room that saw motion shortly before (its own rule switched the light).
         room_id = own_device.room_id if own_device else None
         for sensor in self.motion:

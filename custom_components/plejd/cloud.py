@@ -121,6 +121,8 @@ class PlejdCloudScene:
     scene_id: str
     name: str
     index: int
+    # Mesh addresses of the outputs the scene sets; None when unknown (cached before this was parsed).
+    output_addresses: list[int] | None = None
 
 
 @dataclass
@@ -842,6 +844,7 @@ def parse_site(site: dict) -> PlejdCloudSite:
     # devices at all, since each of those must have a hardware entry here.
     plejd_devices = _checked_list("plejdDevices", "motion", "devices", id_field="deviceId", required=has_devices)
     raw_scenes = _checked_list("scenes", "scenes", id_field="sceneId")
+    raw_scene_steps = site.get("sceneSteps")
     scene_index = _checked_dict("sceneIndex", "scenes")
     # These two carry every mesh address there is: outputAddress is what control commands
     # target, deviceAddress is the physical-device fallback (and what fault polling and the
@@ -1007,8 +1010,43 @@ def parse_site(site: dict) -> PlejdCloudSite:
             faceplate_id=str(faceplate) if faceplate is not None else None,
         )
 
+    # sceneSteps (top level, one per scene output) say which outputs each scene sets. Membership is left
+    # unknown (None) wherever it can't be trusted, so a scene is never wrongly ruled out as a change's origin:
+    # for every scene when the list is missing or has a record we can't attribute to a scene, and for one
+    # scene when a step is still dirty (edited in the cloud, not yet synced to the mesh by the app) or names
+    # an output we can't map.
+    scene_outputs: dict[str, list[int]] | None = None
+    unknown_scenes: set[str] = set()
+    if isinstance(raw_scene_steps, list):
+        address_by_output = {(d.device_id, d.output_index): d.address for d in devices if d.address is not None}
+        scene_outputs = {}
+        for step in raw_scene_steps:
+            if not isinstance(step, dict) or not isinstance(step.get("sceneId"), str):
+                scene_outputs = None
+                break
+            dirty, removed = step.get("dirty", False), step.get("dirtyRemoved", False)
+            device_id, output = step.get("deviceId"), step.get("output")
+            if (
+                dirty is not False
+                or not isinstance(removed, bool)
+                or not isinstance(device_id, str)
+                or type(output) is not int
+            ):
+                unknown_scenes.add(step["sceneId"])  # pending in the app, or fields we can't trust
+            elif not removed:  # a removal the mesh already has drops out
+                if (address := address_by_output.get((device_id, output))) is None:
+                    unknown_scenes.add(step["sceneId"])
+                else:
+                    scene_outputs.setdefault(step["sceneId"], []).append(address)
     scenes = [
-        PlejdCloudScene(scene_id=sc["sceneId"], name=sc.get("title") or sc["sceneId"], index=int(idx))
+        PlejdCloudScene(
+            scene_id=sc["sceneId"],
+            name=sc.get("title") or sc["sceneId"],
+            index=int(idx),
+            output_addresses=None
+            if scene_outputs is None or sc["sceneId"] in unknown_scenes
+            else sorted(set(scene_outputs.get(sc["sceneId"], []))),
+        )
         for sc in raw_scenes
         if isinstance(sc, dict)
         and isinstance(sc.get("sceneId"), str)

@@ -155,6 +155,26 @@ async def test_motion_sensor_room_comes_from_its_device_entry_or_its_own_record(
             assert [m.room_id for m in (await async_get_site(s, "tok", "S1")).motion] == ["r9"]
 
 
+def test_parse_site_scene_outputs_come_from_scene_steps():
+    def outputs(steps):
+        return [s.output_addresses for s in parse_site({**_SITE, "sceneSteps": steps}).scenes]
+
+    step = {"sceneId": "sc1", "deviceId": "d1", "output": 0, "dirty": False, "dirtyRemoved": False}
+    removed = {**step, "deviceId": "d2", "dirtyRemoved": True}  # a removal the mesh already has
+    assert outputs([step, dict(step), removed]) == [[11]]  # duplicates collapse
+    assert outputs([]) == [[]]  # a scene with no steps sets nothing
+    # Membership is unknown rather than incomplete when it can't be trusted:
+    assert outputs([step, {**removed, "dirty": True}]) == [None]  # an edit the mesh hasn't got yet
+    assert outputs([step, {**step, "deviceId": "gone"}]) == [None]  # an output we can't map
+    for bad in ({"dirty": 1}, {"dirtyRemoved": "true"}, {"deviceId": ["d1"]}, {"output": {"0": 1}}, {"output": True}):
+        assert outputs([step, {**step, **bad}]) == [None], bad  # flags or keys of the wrong type
+    assert outputs([step, {"sceneId": "sc2", "deviceId": "gone"}]) == [[11]]  # ...only for its own scene
+    assert outputs([step, "not-a-dict"]) == [None]
+    assert outputs([step, {**step, "sceneId": None}]) == [None]
+    assert outputs({"x": 1}) == [None]
+    assert [s.output_addresses for s in parse_site(_SITE).scenes] == [None]
+
+
 async def test_call_function_error_status_raises():
     with aioresponses() as m:
         m.post(_SITE_LIST, status=500, payload={"error": "boom"})

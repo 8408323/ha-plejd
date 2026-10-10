@@ -3868,6 +3868,9 @@ def test_toggle_origin_scene_and_motion(monkeypatch):
 
     event(coordinator_mod.CMD_SCENE, 0, b"\x83")  # the power-off form of scene 3
     assert c.toggle_origin(5) == {"kind": "plejd_scene", "name": "Kväll", "index": 3, "at": 100.0}
+    c.scenes = [PlejdCloudScene("s1", "Kväll", 3, output_addresses=[7])]
+    assert c.toggle_origin(5) is None  # output 5 isn't in the scene: a manual change at the same moment
+    assert c.toggle_origin(7)["name"] == "Kväll"
     event(coordinator_mod.CMD_SCENE, 0, b"\x09")  # an unknown scene index
     assert c.toggle_origin(5)["name"] == "#9"
     clock[0] = 110.0  # scene too old; motion now
