@@ -57,6 +57,7 @@ def _hass(origin=None):
             "light.room_kontor": reg("room_r1"),
             "light.other_brand": reg("x1", platform="hue"),
             "switch.relay": reg("d2"),
+            "cover.blind": reg("d1"),
         }
     )
     coordinator = types.SimpleNamespace(
@@ -168,6 +169,7 @@ async def test_noise_and_unrelated_entities_are_not_logged():
     fire(_change(_state("light.other_brand", "off"), _state("light.other_brand", "on")))  # not Plejd
     fire(_change(_state("switch.relay", "off"), _state("switch.relay", "on")))  # Plejd, but no address
     fire(_change(_state("sensor.temp", "1"), _state("sensor.temp", "2")))  # other domain
+    fire(_change(_state("cover.blind", "open"), _state("cover.blind", "closed")))  # covers aren't logged
     fire(_change(_state("light.unregistered", "off"), _state("light.unregistered", "on")))
     assert hass.data[activity.DATA_ACTIVITY].entries == []
 
@@ -192,14 +194,47 @@ async def test_log_is_capped_persisted_and_reloaded(monkeypatch):
     assert reloaded.entries == hass.data[activity.DATA_ACTIVITY].entries
 
 
-async def test_run_contexts_are_bounded(monkeypatch):
-    monkeypatch.setattr(activity, "_MAX_CONTEXTS", 2)
+async def test_run_contexts_are_kept_for_a_day_and_bounded(monkeypatch):
+    clock = [1000.0]
+    monkeypatch.setattr(activity.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(activity, "_MAX_CONTEXTS", 3)
     hass = await _log_hass()
-    for i in range(3):
+
+    def run(cid):
         hass.bus.listeners["automation_triggered"](
-            types.SimpleNamespace(event_type="automation_triggered", context=_ctx(f"r{i}"), data={"entity_id": "a"})
+            types.SimpleNamespace(event_type="automation_triggered", context=_ctx(cid), data={"entity_id": "a"})
         )
+
+    run("old")
+    clock[0] += 20 * 3600
+    run("r1")  # a run that waits for hours still has its context...
+    assert list(hass.data[activity.DATA_ACTIVITY]._runs) == ["old", "r1"]
+    clock[0] += 5 * 3600
+    run("r2")  # ...but one older than a day is dropped
     assert list(hass.data[activity.DATA_ACTIVITY]._runs) == ["r1", "r2"]
+    run("r3")
+    run("r4")  # and the count stays bounded
+    assert list(hass.data[activity.DATA_ACTIVITY]._runs) == ["r2", "r3", "r4"]
+
+
+async def test_failed_load_never_overwrites_the_stored_log(monkeypatch):
+    hass = _hass()
+    hass.data[("store", "plejd.activity.e1")] = {"entries": [{"kept": True}]}
+    log = activity.PlejdActivityLog(hass, "e1")
+
+    async def _fail():
+        raise ValueError("newer storage version")
+
+    monkeypatch.setattr(log._store, "async_load", _fail)
+    try:
+        await log.async_load()
+    except ValueError:
+        pass
+    log.async_start()
+    hass.bus.listeners["state_changed"](_change(_state("light.kontor", "off"), _state("light.kontor", "on")))
+    await log.async_stop()
+    assert log.entries[-1]["state"] == "on"  # still logged in memory
+    assert hass.data[("store", "plejd.activity.e1")] == {"entries": [{"kept": True}]}  # but the store is untouched
 
 
 async def test_stop_removes_the_listeners_and_flushes_pending_entries():

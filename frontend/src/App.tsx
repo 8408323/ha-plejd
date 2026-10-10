@@ -1070,7 +1070,7 @@ function ActivityLog({ hass }: Ctx) {
     .map((s) => `${s.entity_id}:${s.state}`).join("|");
   useEffect(() => {
     let cancelled = false;
-    hass.callWS({ type: "plejd/activity/list", limit: 500 })
+    hass.callWS({ type: "plejd/activity/list", limit: 1000 })
       .then((r: any) => { if (!cancelled) { setEntries(r.entries); setError(""); } })
       .catch((e: any) => { if (!cancelled) setError(errMsg(e)); });
     return () => { cancelled = true; };

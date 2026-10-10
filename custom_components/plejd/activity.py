@@ -1,4 +1,4 @@
-"""Activity log for the dashboard: every on/off of a Plejd light/switch/cover and every alarm change, with its source.
+"""Activity log for the dashboard: every on/off of a Plejd light or switch and every alarm change, with its source.
 
 HA's own context says when a change came from Home Assistant (a user, an automation or a script). For
 changes from outside HA, the mesh shows only part of the story - see PlejdCoordinator.toggle_origin - and
@@ -8,6 +8,7 @@ survives restarts and recorder purges.
 
 from __future__ import annotations
 
+import time
 from collections import OrderedDict
 from typing import Any
 
@@ -23,9 +24,12 @@ from .schedule_ws import DATA_ENTRY
 DATA_ACTIVITY = f"{DOMAIN}_activity"
 MAX_ENTRIES = 1000
 _STORE_KEY = f"{DOMAIN}.activity"  # + ".<entry_id>": one log per Plejd setup
-_TRACKED_PLEJD_DOMAINS = ("light", "switch", "cover")
+# Covers aren't logged: Plejd covers have no state read-back, so they never change state in HA.
+_TRACKED_PLEJD_DOMAINS = ("light", "switch")
 _IGNORED_STATES = ("unavailable", "unknown")
-_MAX_CONTEXTS = 200  # recent automation/script runs remembered for attribution
+# Automation/script runs remembered for attribution: long enough for runs with delays/waits, bounded for memory.
+_RUN_TTL = 24 * 3600
+_MAX_CONTEXTS = 5000
 
 
 class PlejdActivityLog:
@@ -35,11 +39,14 @@ class PlejdActivityLog:
         self.hass = hass
         self._store: Store = Store(hass, 1, f"{_STORE_KEY}.{entry_id}")
         self.entries: list[dict[str, Any]] = []  # oldest first
-        self._runs: OrderedDict[str, dict[str, str]] = OrderedDict()  # context id -> automation/script
+        self._runs: OrderedDict[str, tuple[float, dict[str, str]]] = OrderedDict()  # context id -> (started, run)
+        # Saving is off until the stored log has been read: after a failed read, saving would replace it.
+        self._can_save = False
         self._unsubs: list = []
 
     async def async_load(self) -> None:
         self.entries = list((await self._store.async_load() or {}).get("entries", []))[-MAX_ENTRIES:]
+        self._can_save = True
 
     @callback
     def async_start(self) -> None:
@@ -55,19 +62,24 @@ class PlejdActivityLog:
         for unsub in self._unsubs:
             unsub()
         self._unsubs = []
-        await self._store.async_save({"entries": self.entries})
+        if self._can_save:
+            await self._store.async_save({"entries": self.entries})
 
     @callback
     def _on_run(self, event) -> None:
         kind = "automation" if event.event_type == "automation_triggered" else "script"
         if event.context.id in self._runs:
             return  # a script called by an automation runs in its context: the automation stays the source
-        self._runs[event.context.id] = {
-            "kind": kind,
-            "name": event.data.get("name") or event.data.get("entity_id", ""),
-            "entity_id": event.data.get("entity_id", ""),
-        }
-        while len(self._runs) > _MAX_CONTEXTS:
+        now = time.monotonic()
+        self._runs[event.context.id] = (
+            now,
+            {
+                "kind": kind,
+                "name": event.data.get("name") or event.data.get("entity_id", ""),
+                "entity_id": event.data.get("entity_id", ""),
+            },
+        )
+        while self._runs and (len(self._runs) > _MAX_CONTEXTS or now - next(iter(self._runs.values()))[0] > _RUN_TTL):
             self._runs.popitem(last=False)
 
     @callback
@@ -95,7 +107,8 @@ class PlejdActivityLog:
             entry["brightness"] = round(new.attributes["brightness"] / 255 * 100)
         self.entries.append(entry)
         del self.entries[:-MAX_ENTRIES]
-        self._store.async_delay_save(lambda: {"entries": self.entries}, 10)
+        if self._can_save:
+            self._store.async_delay_save(lambda: {"entries": self.entries}, 10)
 
     def _plejd_address(self, entity_id: str, domain: str) -> int | None:
         """The mesh address of a Plejd output entity; None for anything that isn't one."""
@@ -115,7 +128,7 @@ class PlejdActivityLog:
         ctx = state.context
         run = self._runs.get(ctx.id) or (self._runs.get(ctx.parent_id) if ctx.parent_id else None)
         if run:
-            return dict(run)
+            return dict(run[1])
         if ctx.user_id:
             return {"kind": "user", "user_id": ctx.user_id}
         if address is None:  # an alarm panel: its own integration may know who changed it

@@ -8,7 +8,7 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
-- **Log** tab on the dashboard: every on/off of a Plejd light, switch or cover and
+- **Log** tab on the dashboard: every on/off of a Plejd light or switch and
   every alarm-panel change, newest first, with its source: a person or an automation
   or script in Home Assistant, a whole-room command (the Plejd app), a Plejd remote
   or wall switch (best guess), or "outside Home Assistant". Alarm changes name who

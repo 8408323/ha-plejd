@@ -384,7 +384,8 @@ class PlejdCoordinator:
             for update in list(self._listeners):
                 update()
         elif command.command == CMD_INPUT_BUTTON:
-            self._recent_toggles[command.address] = time.monotonic()
+            if command.data[:1] in (b"\x00", b"\x01"):  # a malformed frame mustn't be credited with a change
+                self._recent_toggles[command.address] = time.monotonic()
             pressed = bool(command.data and command.data[0])
             for cb in list(self._button_listeners):
                 cb(command.address, pressed)

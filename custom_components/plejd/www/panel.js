@@ -24110,7 +24110,7 @@ function _u({ hass: e }) {
 		let t = !1;
 		return e.callWS({
 			type: "plejd/activity/list",
-			limit: 500
+			limit: 1e3
 		}).then((e) => {
 			t || (r(e.entries), a(""));
 		}).catch((e) => {

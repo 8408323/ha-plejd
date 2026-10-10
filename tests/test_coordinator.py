@@ -3788,6 +3788,16 @@ def test_toggle_origin_separate_remote_is_a_best_guess(monkeypatch):
     assert c.toggle_origin(5) == {"kind": "plejd_input", "name": "Hall switch"}
 
 
+def test_toggle_origin_ignores_malformed_toggle_frames(monkeypatch):
+    from plejd.protocol import Command
+
+    clock = [100.0]
+    c, _ = _origin_coordinator(monkeypatch, clock)
+    for data in (b"", b"\x07"):
+        c._on_event(Command(address=41, command_type=0x10, command=coordinator_mod.CMD_INPUT_BUTTON, data=data))
+    assert c.toggle_origin(5) is None
+
+
 def test_toggle_origin_newest_command_wins(monkeypatch):
     clock = [100.0]
     c, toggle = _origin_coordinator(monkeypatch, clock)
