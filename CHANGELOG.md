@@ -6,6 +6,15 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Log** tab on the dashboard: every on/off of a Plejd light, switch or cover and
+  every alarm-panel change, newest first, with its source: a person or an automation
+  or script in Home Assistant, a whole-room command (the Plejd app), a Plejd remote
+  or wall switch (best guess), or "outside Home Assistant". Alarm changes name who
+  changed them when the alarm integration reports it (e.g. Verisure's `changed_by`).
+  Kept in Home Assistant's storage (last 1000 changes), so it survives restarts.
+
 ## [0.13.0] - 2026-10-10
 
 A new dashboard: React-based, translated into English and the Nordic languages,

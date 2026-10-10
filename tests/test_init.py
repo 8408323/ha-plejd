@@ -1539,6 +1539,21 @@ async def test_setup_survives_remote_profile_load_failure(monkeypatch):
     assert await async_setup_entry(hass, entry) is True  # storage error must not abort setup
 
 
+async def test_setup_survives_activity_log_load_failure(monkeypatch):
+    from plejd import activity
+
+    monkeypatch.setattr(plejd, "PlejdCoordinator", _FakeCoordinator)
+    _FakeCoordinator.instances.clear()
+
+    async def _corrupt(self):
+        raise ValueError("corrupt store")
+
+    monkeypatch.setattr(activity.PlejdActivityLog, "async_load", _corrupt)
+    hass, entry = _hass(), _entry()
+    assert await async_setup_entry(hass, entry) is True  # storage error must not abort setup
+    assert hass.data[activity.DATA_ACTIVITY].entries == []  # starts empty, still listening
+
+
 async def test_remove_entry_clears_the_persistent_repair_issue():
     # The malformed-cloud issue is persistent, and its only other clear paths (a healthy
     # poll, a successful reconfigure) are unreachable once the entry is gone - so without

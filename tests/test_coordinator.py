@@ -3746,3 +3746,53 @@ async def test_self_heal_cooldown_survives_a_backwards_wall_clock_step(monkeypat
 
     clock += coordinator_mod.SELF_HEAL_COOLDOWN_SECONDS + 1
     assert c._should_attempt_self_heal() is True  # released purely on elapsed monotonic time
+
+
+# ── toggle_origin (activity-log attribution) ─────────────────────────────────
+
+
+def _origin_coordinator(monkeypatch, clock):
+    from plejd.cloud import PlejdCloudInput, PlejdCloudRoom
+    from plejd.protocol import Command
+
+    monkeypatch.setattr(coordinator_mod.time, "monotonic", lambda: clock[0])
+    c = PlejdCoordinator(_hass(), _entry())  # _DEV: output address 5, device d1
+    c.rooms = [PlejdCloudRoom("r1", "Kontor", 41, [5], True, [5])]
+    c.inputs = [PlejdCloudInput("d1", "Built-in", 5), PlejdCloudInput("remote", "Hall switch", 60)]
+
+    def toggle(address):
+        c._on_event(Command(address=address, command_type=0x10, command=coordinator_mod.CMD_INPUT_BUTTON, data=b"\x01"))
+
+    return c, toggle
+
+
+def test_toggle_origin_room_group_command(monkeypatch):
+    clock = [100.0]
+    c, toggle = _origin_coordinator(monkeypatch, clock)
+    toggle(41)
+    clock[0] = 102.0
+    assert c.toggle_origin(5) == {"kind": "plejd_room", "name": "Kontor"}
+
+
+def test_toggle_origin_on_the_output_itself_is_ambiguous(monkeypatch):
+    clock = [100.0]
+    c, toggle = _origin_coordinator(monkeypatch, clock)
+    toggle(5)
+    assert c.toggle_origin(5) == {"kind": "plejd_device"}
+
+
+def test_toggle_origin_separate_remote_is_a_best_guess(monkeypatch):
+    clock = [100.0]
+    c, toggle = _origin_coordinator(monkeypatch, clock)
+    toggle(60)
+    assert c.toggle_origin(5) == {"kind": "plejd_input", "name": "Hall switch"}
+
+
+def test_toggle_origin_ignores_old_commands_and_unknown_addresses(monkeypatch):
+    clock = [100.0]
+    c, toggle = _origin_coordinator(monkeypatch, clock)
+    toggle(41)
+    toggle(60)
+    clock[0] = 106.0  # past the 5 s window
+    assert c.toggle_origin(5) is None
+    assert c.toggle_origin(99) is None

@@ -12,7 +12,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry
 
-from . import area_sync, dim_binding_ws, panel, remote_profile_ws, room_ws, schedule_ws
+from . import activity, area_sync, dim_binding_ws, panel, remote_profile_ws, room_ws, schedule_ws
 from .add_device import async_add_device
 from .bindings import PlejdDimBindings
 from .const import (
@@ -412,6 +412,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     entry.async_on_unload(partial(_drop, hass, dim_binding_ws.DATA_BINDINGS))
     entry.async_on_unload(dim_bindings.shutdown)
 
+    # Activity log for the dashboard's Log tab. Optional like the bindings: a storage error mustn't stop setup.
+    activity_log = activity.PlejdActivityLog(hass)
+    try:
+        await activity_log.async_load()
+    except Exception:  # noqa: BLE001 - optional; start with an empty log
+        _LOGGER.warning("Plejd: could not load the activity log; starting empty", exc_info=True)
+    activity_log.async_start()
+    hass.data[activity.DATA_ACTIVITY] = activity_log
+    entry.async_on_unload(partial(_drop, hass, activity.DATA_ACTIVITY))
+    entry.async_on_unload(activity_log.async_stop)
+
     # Schedules (managed from the dashboard via the WebSocket API too, mirroring bindings above).
     hass.data[schedule_ws.DATA_ENTRY] = entry
     entry.async_on_unload(partial(_drop, hass, schedule_ws.DATA_ENTRY))
@@ -431,6 +442,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         schedule_ws.async_register(hass)
         remote_profile_ws.async_register(hass)
         room_ws.async_register(hass)
+        activity.async_register(hass)
         hass.data[_WS_REGISTERED] = True
     # Room renames/moves and site syncs all reload the entry without touching entity ids; tell an
     # open dashboard to fetch the rooms again.
