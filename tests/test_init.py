@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import types
 from unittest.mock import AsyncMock
@@ -110,7 +111,7 @@ async def _run_unload(unload) -> None:
     """Run one on_unload callback the way HA does: a returned coroutine is awaited."""
     result = unload()
     if inspect.iscoroutine(result):
-        await result
+        await asyncio.gather(result)
 
 
 class _FakeBus:
@@ -687,9 +688,7 @@ async def test_unload_callbacks_return_nothing_ha_would_try_to_schedule(monkeypa
     await async_setup_entry(hass, entry)
     results = [unload() for unload in unloads]
     assert [r for r in results if r is not None and not inspect.iscoroutine(r)] == []
-    for r in results:
-        if inspect.iscoroutine(r):
-            await r  # HA runs these as tasks
+    await asyncio.gather(*(r for r in results if inspect.iscoroutine(r)))  # HA runs these as tasks
 
 
 async def test_setup_tells_an_open_dashboard_to_reload_rooms(monkeypatch):
