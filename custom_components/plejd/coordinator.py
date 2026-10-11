@@ -1202,8 +1202,10 @@ class PlejdCoordinator:
                     return
                 try:
                     await self._async_select_and_connect()
+                    # No return: a drop reported while this attempt was connecting (a socket that closed
+                    # before its receive loop started) only reaches _handle_disconnect, whose new loop
+                    # bails out on _reconnecting. Re-checking `available` keeps that drop from being lost.
                     _LOGGER.debug("reconnected to Plejd over %s", self._active)
-                    return
                 except ConfigEntryAuthFailed:
                     # Retrying with the same rejected credentials can't succeed; prompt
                     # reauth and stop until the entry reloads with fresh ones.
