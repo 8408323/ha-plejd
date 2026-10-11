@@ -775,6 +775,10 @@ async def async_set_input_setting(
     )
 
 
+def _plain_int(value: object) -> int:
+    return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+
 def parse_astro_events(site: dict) -> list[PlejdCloudAstroEvent]:
     """getSiteById's astroEvents; a record being removed (dirtyRemove) or missing its ids is skipped."""
     events = []
@@ -798,10 +802,10 @@ def parse_astro_events(site: dict) -> list[PlejdCloudAstroEvent]:
                 )
                 if isinstance(days, list)
                 else [],
-                fade_time=ev["fadeTime"] if isinstance(ev.get("fadeTime"), int) else 0,
+                fade_time=_plain_int(ev.get("fadeTime")),
                 activated=ev.get("activated") is not False,
-                sunset_offset=ev["sunsetOffset"] if isinstance(ev.get("sunsetOffset"), int) else 0,
-                sunrise_offset=ev["sunriseOffset"] if isinstance(ev.get("sunriseOffset"), int) else 0,
+                sunset_offset=_plain_int(ev.get("sunsetOffset")),
+                sunrise_offset=_plain_int(ev.get("sunriseOffset")),
                 targets=sorted(
                     {
                         (t["deviceId"], t["index"] if isinstance(t.get("index"), int) else None)

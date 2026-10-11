@@ -58,7 +58,13 @@ def test_parse_astro_events_reads_an_app_schedule():
 
 
 def test_parse_astro_events_defaults_missing_fields():
-    (ev,) = parse_astro_events({"astroEvents": [{"astroEventId": "a", "sceneId": "s", "nightReduction": {}}]})
+    (ev,) = parse_astro_events(
+        {
+            "astroEvents": [
+                {"astroEventId": "a", "sceneId": "s", "nightReduction": {}, "fadeTime": True, "sunsetOffset": False}
+            ]
+        }
+    )
     assert (ev.fade_time, ev.activated, ev.sunset_offset, ev.sunrise_offset) == (0, True, 0, 0)
     assert ev.scheduled_days == [] and ev.targets == []
     assert ev.night_reduction["weekend_start_time"] is None
@@ -156,3 +162,19 @@ async def test_cloud_list_rejects_a_malformed_site(cloud):
     conn = _Conn()
     await schedule_ws.ws_cloud_list(hass, conn, {"id": 1})
     assert conn.error == (1, "cloud_error", "Plejd cloud error: malformed site response")
+
+
+async def test_cloud_list_reports_network_errors(cloud):
+    cloud["login_error"] = TimeoutError()
+    hass, _ = _hass()
+    conn = _Conn()
+    await schedule_ws.ws_cloud_list(hass, conn, {"id": 1})
+    assert conn.error == (1, "cloud_error", "Plejd cloud error: TimeoutError")
+
+
+async def test_cloud_list_reports_an_unparseable_site(cloud):
+    cloud["site"] = {"siteId": "S1"}
+    hass, _ = _hass()
+    conn = _Conn()
+    await schedule_ws.ws_cloud_list(hass, conn, {"id": 1})
+    assert conn.error[1] == "cloud_error"

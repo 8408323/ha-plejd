@@ -14,6 +14,7 @@ import logging
 from collections.abc import Callable
 from dataclasses import asdict
 
+import aiohttp
 import voluptuous as vol
 from homeassistant.components import websocket_api
 from homeassistant.config_entries import ConfigEntry
@@ -292,18 +293,17 @@ async def ws_cloud_list(hass: HomeAssistant, connection, msg) -> None:
     try:
         token = await async_login(session, entry.data[CONF_EMAIL], entry.data[CONF_PASSWORD])
         raw = await async_get_site_raw(session, token, entry.data[CONF_SITE_ID])
+        site = raw[0] if isinstance(raw, list) and raw else raw
+        if not isinstance(site, dict):
+            raise PlejdCloudError("malformed site response")
+        parsed = parse_site(site)
     except PlejdAuthError:
         entry.async_start_reauth(hass)
         connection.send_error(msg["id"], "auth_failed", "Plejd cloud credentials rejected; reauthentication started")
         return
-    except PlejdCloudError as err:
-        connection.send_error(msg["id"], "cloud_error", f"Plejd cloud error: {err}")
+    except (PlejdCloudError, aiohttp.ClientError, OSError, TimeoutError) as err:
+        connection.send_error(msg["id"], "cloud_error", f"Plejd cloud error: {str(err) or type(err).__name__}")
         return
-    site = raw[0] if isinstance(raw, list) and raw else raw
-    if not isinstance(site, dict):
-        connection.send_error(msg["id"], "cloud_error", "Plejd cloud error: malformed site response")
-        return
-    parsed = parse_site(site)
     outputs = {(d.device_id, d.output_index): d.name for d in parsed.devices}
     devices = {d.device_id: d.name for d in parsed.devices}
     scenes = {s.scene_id: s.name for s in parsed.all_scenes}
