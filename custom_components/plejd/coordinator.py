@@ -1174,7 +1174,9 @@ class PlejdCoordinator:
         # The link dropped: entities go unavailable until a reconnect succeeds.
         self._available = False
         self._notify_outputs()
-        if not self._closed:
+        # A running reconnect loop re-checks `available` after its attempt, so it picks this drop up itself;
+        # replacing it here would leave shutdown cancelling a finished task while that loop kept going.
+        if not self._closed and not self._reconnecting:
             self._reconnect_task = self._spawn(self._async_reconnect())
 
     def _spawn(self, coro: Coroutine[Any, Any, None]) -> asyncio.Task:
@@ -1202,8 +1204,10 @@ class PlejdCoordinator:
                     return
                 try:
                     await self._async_select_and_connect()
+                    # No return: a drop reported while this attempt was connecting (a socket that closed
+                    # before its receive loop started) only reaches _handle_disconnect, whose new loop
+                    # bails out on _reconnecting. Re-checking `available` keeps that drop from being lost.
                     _LOGGER.debug("reconnected to Plejd over %s", self._active)
-                    return
                 except ConfigEntryAuthFailed:
                     # Retrying with the same rejected credentials can't succeed; prompt
                     # reauth and stop until the entry reloads with fresh ones.

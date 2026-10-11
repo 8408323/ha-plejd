@@ -730,11 +730,57 @@ async def test_reconnect_retries_on_unexpected_exception(monkeypatch):
         calls["n"] += 1
         if calls["n"] < 3:
             raise RuntimeError("boom")
+        c._closed = True  # connected: nothing left to retry
 
     monkeypatch.setattr(coordinator_mod.asyncio, "sleep", _fake_sleep)
     monkeypatch.setattr(c, "_async_select_and_connect", _flaky)
     await c._async_reconnect()
     assert calls["n"] == 3  # two unexpected failures were retried, not fatal
+
+
+async def test_a_drop_during_a_reconnect_is_not_lost(monkeypatch):
+    # Seen live: the new gateway socket closed before its receive loop started. The loop's exit
+    # reported the drop while the reconnect was still finishing, the drop's own reconnect bailed
+    # out on the running one, and the integration stayed unavailable until HA was restarted.
+    c = PlejdCoordinator(_hass(), _entry())
+    links = {"up": False}
+    monkeypatch.setattr(c, "_active_transport", lambda: types.SimpleNamespace(connected=links["up"]))
+    attempts = []
+
+    async def _fake_sleep(_delay):
+        pass
+
+    async def _connect():
+        attempts.append(len(attempts))
+        links["up"] = True
+        c._available = True
+        if len(attempts) == 1:  # this socket dies at once and reports it mid-reconnect
+            links["up"] = False
+            c._handle_disconnect()
+
+    monkeypatch.setattr(coordinator_mod.asyncio, "sleep", _fake_sleep)
+    monkeypatch.setattr(c, "_async_select_and_connect", _connect)
+    monkeypatch.setattr(c, "_notify_outputs", lambda: None)
+    spawned = []
+    monkeypatch.setattr(c, "_spawn", lambda coro: spawned.append(coro) or "TASK")
+    c._available = False
+    c._reconnect_task = task = asyncio.ensure_future(c._async_reconnect())
+    await asyncio.gather(task)
+    assert attempts == [0, 1]  # connected again rather than giving up after the first attempt
+    assert c.available is True
+    assert c._reconnecting is False
+    # The running loop handled the drop itself, so shutdown still cancels the task that did the work.
+    assert spawned == [] and c._reconnect_task is task
+
+
+async def test_a_drop_with_no_reconnect_running_starts_one(monkeypatch):
+    c = PlejdCoordinator(_hass(), _entry())
+    monkeypatch.setattr(c, "_notify_outputs", lambda: None)
+    spawned = []
+    monkeypatch.setattr(c, "_spawn", lambda coro: spawned.append(coro) or "TASK")
+    c._handle_disconnect()
+    assert c._reconnect_task == "TASK" and len(spawned) == 1
+    spawned[0].close()
 
 
 async def test_shutdown_cancels_reconnect_task(monkeypatch):
