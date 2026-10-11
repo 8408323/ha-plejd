@@ -6,6 +6,16 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.14.1] - 2026-10-11
+
+### Fixed
+
+- Plejd could stay unavailable until Home Assistant was restarted. This happened when
+  the gateway connection dropped again while a reconnect was finishing. The reconnect
+  now keeps retrying until it is really connected, and a drop during a running
+  reconnect is handled by that same reconnect, so unloading the integration stops it
+  cleanly (#151).
+
 ## [0.14.0] - 2026-10-10
 
 A **Log** tab on the dashboard: every light, switch and alarm change for the last
