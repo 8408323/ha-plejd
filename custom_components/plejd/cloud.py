@@ -803,7 +803,8 @@ def parse_astro_events(site: dict) -> list[PlejdCloudAstroEvent]:
                 if isinstance(days, list)
                 else [],
                 fade_time=_plain_int(ev.get("fadeTime")),
-                activated=ev.get("activated") is not False,
+                activated=ev.get("activated") is not False
+                and not (isinstance(ev.get("activated"), (int, str)) and not ev.get("activated")),
                 sunset_offset=_plain_int(ev.get("sunsetOffset")),
                 sunrise_offset=_plain_int(ev.get("sunriseOffset")),
                 targets=sorted(

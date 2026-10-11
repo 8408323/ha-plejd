@@ -199,3 +199,16 @@ async def test_cloud_list_reports_a_wrongly_typed_field(cloud):
     conn = _Conn()
     await schedule_ws.ws_cloud_list(hass, conn, {"id": 1})
     assert conn.error[1] == "cloud_error"
+
+
+def test_parse_astro_events_falsy_activated_means_paused():
+    site = {"astroEvents": [{"astroEventId": "a", "sceneId": "s", "activated": 0}]}
+    assert parse_astro_events(site)[0].activated is False
+
+
+async def test_cloud_list_drops_non_string_scene_titles(cloud):
+    cloud["site"] = [{**_SITE, "scenes": [{"sceneId": "sc9", "title": {"x": 1}}]}]
+    hass, _ = _hass()
+    conn = _Conn()
+    await schedule_ws.ws_cloud_list(hass, conn, {"id": 1})
+    assert conn.result[1]["schedules"][0]["scene_name"] is None

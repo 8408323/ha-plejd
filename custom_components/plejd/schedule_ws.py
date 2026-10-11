@@ -307,7 +307,7 @@ async def ws_cloud_list(hass: HomeAssistant, connection, msg) -> None:
         return
     outputs = {(d.device_id, d.output_index): d.name for d in parsed.devices}
     devices = {d.device_id: d.name for d in parsed.devices}
-    scenes = {s.scene_id: s.name for s in parsed.all_scenes}
+    scenes = {s.scene_id: s.name for s in parsed.all_scenes if isinstance(s.name, str)}
     tracked = {s.get("schedule_id") for s in entry.data.get(CONF_CLOUD_SCHEDULES, [])}
     connection.send_result(
         msg["id"],
