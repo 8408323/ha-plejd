@@ -1174,7 +1174,9 @@ class PlejdCoordinator:
         # The link dropped: entities go unavailable until a reconnect succeeds.
         self._available = False
         self._notify_outputs()
-        if not self._closed:
+        # A running reconnect loop re-checks `available` after its attempt, so it picks this drop up itself;
+        # replacing it here would leave shutdown cancelling a finished task while that loop kept going.
+        if not self._closed and not self._reconnecting:
             self._reconnect_task = self._spawn(self._async_reconnect())
 
     def _spawn(self, coro: Coroutine[Any, Any, None]) -> asyncio.Task:

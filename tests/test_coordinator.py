@@ -762,15 +762,25 @@ async def test_a_drop_during_a_reconnect_is_not_lost(monkeypatch):
     monkeypatch.setattr(c, "_async_select_and_connect", _connect)
     monkeypatch.setattr(c, "_notify_outputs", lambda: None)
     spawned = []
-    # HA's async_create_background_task starts the task eagerly, so it sees _reconnecting at once.
-    loop = asyncio.get_running_loop()
-    monkeypatch.setattr(c, "_spawn", lambda coro: spawned.append(asyncio.eager_task_factory(loop, coro)))
+    monkeypatch.setattr(c, "_spawn", lambda coro: spawned.append(coro) or "TASK")
     c._available = False
-    await c._async_reconnect()
-    await asyncio.gather(*spawned)
+    c._reconnect_task = task = asyncio.ensure_future(c._async_reconnect())
+    await task
     assert attempts == [0, 1]  # connected again rather than giving up after the first attempt
     assert c.available is True
     assert c._reconnecting is False
+    # The running loop handled the drop itself, so shutdown still cancels the task that did the work.
+    assert spawned == [] and c._reconnect_task is task
+
+
+async def test_a_drop_with_no_reconnect_running_starts_one(monkeypatch):
+    c = PlejdCoordinator(_hass(), _entry())
+    monkeypatch.setattr(c, "_notify_outputs", lambda: None)
+    spawned = []
+    monkeypatch.setattr(c, "_spawn", lambda coro: spawned.append(coro) or "TASK")
+    c._handle_disconnect()
+    assert c._reconnect_task == "TASK" and len(spawned) == 1
+    spawned[0].close()
 
 
 async def test_shutdown_cancels_reconnect_task(monkeypatch):
