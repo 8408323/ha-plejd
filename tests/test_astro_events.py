@@ -17,7 +17,12 @@ _EVENT = {
     "sunsetOffset": 15,
     "sunriseOffset": -10,
     "scheduledDays": [6, 0, 1, "x", True, 99],
-    "targetDevices": [{"deviceId": "d2", "index": 1}, {"deviceId": "d1", "index": 0}, {"deviceId": "d1"}, {"index": 2}],
+    "targetDevices": [
+        {"deviceId": "d2", "index": 1},
+        {"deviceId": "d1", "index": 0},
+        {"deviceId": "d1", "index": True},
+        {"index": 2},
+    ],
     "nightReduction": {
         "startTime": "23:00",
         "endTime": "05:00",
@@ -182,6 +187,14 @@ async def test_cloud_list_reports_an_unparseable_site(cloud):
 
 async def test_cloud_list_reports_a_malformed_crypto_key(cloud):
     cloud["site"] = [{**_SITE, "plejdMesh": {"cryptoKey": "zz"}}]
+    hass, _ = _hass()
+    conn = _Conn()
+    await schedule_ws.ws_cloud_list(hass, conn, {"id": 1})
+    assert conn.error[1] == "cloud_error"
+
+
+async def test_cloud_list_reports_a_wrongly_typed_field(cloud):
+    cloud["site"] = [{**_SITE, "plejdDevices": [{"deviceId": "d1", "hardwareId": {"x": 1}}]}]
     hass, _ = _hass()
     conn = _Conn()
     await schedule_ws.ws_cloud_list(hass, conn, {"id": 1})

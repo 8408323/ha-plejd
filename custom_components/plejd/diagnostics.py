@@ -125,5 +125,5 @@ async def _site_structure(hass: HomeAssistant, entry: ConfigEntry) -> Any:
     try:
         token = await async_login(session, entry.data[CONF_EMAIL], entry.data[CONF_PASSWORD])
         return site_shape(await async_get_site_raw(session, token, entry.data[CONF_SITE_ID]))
-    except (PlejdCloudError, aiohttp.ClientError, OSError, TimeoutError) as err:
+    except (PlejdCloudError, aiohttp.ClientError, OSError, TimeoutError, ValueError) as err:
         return {"error": type(err).__name__}

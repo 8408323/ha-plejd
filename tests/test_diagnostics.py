@@ -219,3 +219,12 @@ async def test_diagnostics_site_structure_survives_a_network_error(monkeypatch):
     monkeypatch.setattr(diagnostics, "async_login", offline)
     diag = await async_get_config_entry_diagnostics(None, _entry())
     assert diag["site_structure"] == {"error": "TimeoutError"} and diag["counts"]["devices"] == 2
+
+
+async def test_diagnostics_site_structure_survives_invalid_json(monkeypatch):
+    async def bad(session, token, site_id):
+        raise ValueError("Expecting value")
+
+    monkeypatch.setattr(diagnostics, "async_get_site_raw", bad)
+    diag = await async_get_config_entry_diagnostics(None, _entry())
+    assert diag["site_structure"] == {"error": "ValueError"}

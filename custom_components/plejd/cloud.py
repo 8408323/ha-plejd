@@ -808,7 +808,12 @@ def parse_astro_events(site: dict) -> list[PlejdCloudAstroEvent]:
                 sunrise_offset=_plain_int(ev.get("sunriseOffset")),
                 targets=sorted(
                     {
-                        (t["deviceId"], t["index"] if isinstance(t.get("index"), int) else None)
+                        (
+                            t["deviceId"],
+                            t["index"]
+                            if isinstance(t.get("index"), int) and not isinstance(t["index"], bool)
+                            else None,
+                        )
                         for t in targets
                         if isinstance(t, dict) and isinstance(t.get("deviceId"), str)
                     },

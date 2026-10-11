@@ -301,8 +301,8 @@ async def ws_cloud_list(hass: HomeAssistant, connection, msg) -> None:
         entry.async_start_reauth(hass)
         connection.send_error(msg["id"], "auth_failed", "Plejd cloud credentials rejected; reauthentication started")
         return
-    # ValueError/AttributeError: parse_site on a malformed cryptoKey; untrusted cloud data, not a bug here
-    except (PlejdCloudError, aiohttp.ClientError, OSError, TimeoutError, ValueError, AttributeError) as err:
+    # Value/Attribute/TypeError: parse_site on malformed cloud fields (untrusted data, not a bug here)
+    except (PlejdCloudError, aiohttp.ClientError, OSError, TimeoutError, ValueError, AttributeError, TypeError) as err:
         connection.send_error(msg["id"], "cloud_error", f"Plejd cloud error: {str(err) or type(err).__name__}")
         return
     outputs = {(d.device_id, d.output_index): d.name for d in parsed.devices}
