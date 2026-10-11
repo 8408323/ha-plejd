@@ -16,8 +16,8 @@ _EVENT = {
     "activated": True,
     "sunsetOffset": 15,
     "sunriseOffset": -10,
-    "scheduledDays": [6, 0, 1, "x"],
-    "targetDevices": [{"deviceId": "d1", "index": 0}, {"deviceId": "d1", "index": 1}, {"index": 2}],
+    "scheduledDays": [6, 0, 1, "x", True, 99],
+    "targetDevices": [{"deviceId": "d2", "index": 1}, {"deviceId": "d1", "index": 0}, {"deviceId": "d1"}, {"index": 2}],
     "nightReduction": {
         "startTime": "23:00",
         "endTime": "05:00",
@@ -30,10 +30,13 @@ _SITE = {
     "siteId": "S1",
     "title": "Home",
     "plejdMesh": {"cryptoKey": "00112233445566778899aabbccddeeff"},
-    "deviceAddress": {"d1": 1},
-    "outputAddress": {"d1": {"0": 11}},
-    "plejdDevices": [{"deviceId": "d1", "hardwareId": "1"}],
-    "devices": [{"deviceId": "d1", "title": "Kontor", "roomId": "r1", "outputType": "LIGHT"}],
+    "deviceAddress": {"d1": 1, "d2": 2},
+    "outputAddress": {"d1": {"0": 11}, "d2": {"0": 21, "1": 22}},
+    "plejdDevices": [{"deviceId": "d1", "hardwareId": "1"}, {"deviceId": "d2", "hardwareId": "18"}],
+    "devices": [
+        {"deviceId": "d1", "title": "Kontor", "roomId": "r1", "outputType": "LIGHT"},
+        {"deviceId": "d2", "title": "Hall", "roomId": "r1", "outputType": "RELAY"},
+    ],
     "scenes": [{"sceneId": "sc9", "title": "Kvällsljus", "hiddenFromSceneList": True}],
     "astroEvents": [_EVENT],
 }
@@ -43,7 +46,8 @@ def test_parse_astro_events_reads_an_app_schedule():
     (ev,) = parse_astro_events(_SITE)
     assert (ev.schedule_id, ev.scene_id, ev.fade_time, ev.activated) == ("ae1", "sc9", 2, True)
     assert (ev.sunset_offset, ev.sunrise_offset) == (15, -10)
-    assert ev.scheduled_days == [0, 1, 6] and ev.device_ids == ["d1"]
+    assert ev.scheduled_days == [0, 1, 6]
+    assert ev.targets == [("d1", None), ("d1", 0), ("d2", 1)]
     assert ev.night_reduction == {
         "start_time": "23:00",
         "end_time": "05:00",
@@ -56,7 +60,7 @@ def test_parse_astro_events_reads_an_app_schedule():
 def test_parse_astro_events_defaults_missing_fields():
     (ev,) = parse_astro_events({"astroEvents": [{"astroEventId": "a", "sceneId": "s", "nightReduction": {}}]})
     assert (ev.fade_time, ev.activated, ev.sunset_offset, ev.sunrise_offset) == (0, True, 0, 0)
-    assert ev.scheduled_days == [] and ev.device_ids == []
+    assert ev.scheduled_days == [] and ev.targets == []
     assert ev.night_reduction["weekend_start_time"] is None
 
 
@@ -113,7 +117,8 @@ async def test_cloud_list_names_devices_and_scenes_and_flags_app_schedules(cloud
     await schedule_ws.ws_cloud_list(hass, conn, {"id": 1})
     (sched,) = conn.result[1]["schedules"]
     assert sched["schedule_id"] == "ae1" and sched["scene_name"] == "Kvällsljus"
-    assert sched["devices"] == ["Kontor"] and sched["from_app"] is True
+    assert sched["devices"][0] == "Kontor" and sched["devices"][-1] == "Hall" and "d2" not in sched["devices"]
+    assert sched["from_app"] is True
 
 
 async def test_cloud_list_marks_integration_created_schedules(cloud):

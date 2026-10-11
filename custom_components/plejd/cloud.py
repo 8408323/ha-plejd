@@ -179,7 +179,7 @@ class PlejdCloudAstroEvent:
     activated: bool
     sunset_offset: int
     sunrise_offset: int
-    device_ids: list[str]
+    targets: list[tuple[str, int | None]]  # (deviceId, output index); a multi-output device names one output
     night_reduction: dict[str, object] | None
 
 
@@ -793,13 +793,22 @@ def parse_astro_events(site: dict) -> list[PlejdCloudAstroEvent]:
             PlejdCloudAstroEvent(
                 schedule_id=schedule_id,
                 scene_id=scene_id,
-                scheduled_days=sorted(d for d in days if isinstance(d, int)) if isinstance(days, list) else [],
+                scheduled_days=sorted(
+                    {d for d in days if isinstance(d, int) and not isinstance(d, bool) and 0 <= d <= 6}
+                )
+                if isinstance(days, list)
+                else [],
                 fade_time=ev["fadeTime"] if isinstance(ev.get("fadeTime"), int) else 0,
                 activated=ev.get("activated") is not False,
                 sunset_offset=ev["sunsetOffset"] if isinstance(ev.get("sunsetOffset"), int) else 0,
                 sunrise_offset=ev["sunriseOffset"] if isinstance(ev.get("sunriseOffset"), int) else 0,
-                device_ids=sorted(
-                    {t["deviceId"] for t in targets if isinstance(t, dict) and isinstance(t.get("deviceId"), str)}
+                targets=sorted(
+                    {
+                        (t["deviceId"], t["index"] if isinstance(t.get("index"), int) else None)
+                        for t in targets
+                        if isinstance(t, dict) and isinstance(t.get("deviceId"), str)
+                    },
+                    key=lambda x: (x[0], x[1] if x[1] is not None else -1),
                 )
                 if isinstance(targets, list)
                 else [],

@@ -16,6 +16,8 @@ SITE = {
         {"deviceId": "d2", "firmware": {"version": "2"}},
     ],
     "timeEvents": [{"mode": "astro", "offset": 15}, {"mode": "time", "time": "07:00"}],
+    "deviceAddress": {"FFB5CB120267": 1, "AABBCCDDEEFF": 2},
+    "roomAddress": {"5b1e2a90-aaaa-bbbb": 14},
 }
 
 
@@ -186,7 +188,7 @@ def test_site_shape_keeps_keys_and_types_but_no_values():
 
 
 def test_site_shape_caps_variants_per_list():
-    assert len(site_shape([{str(i): i} for i in range(10)])["items"]) == 4
+    assert len(site_shape([{"k" * (i + 1): i} for i in range(10)])["items"]) == 4
 
 
 async def test_diagnostics_include_site_structure():
@@ -201,3 +203,19 @@ async def test_diagnostics_site_structure_reports_cloud_error(monkeypatch):
     monkeypatch.setattr(diagnostics, "async_login", fail)
     diag = await async_get_config_entry_diagnostics(None, _entry())
     assert diag["site_structure"] == {"error": "PlejdAuthError"}
+
+
+def test_site_shape_hides_identifier_keys():
+    shape = site_shape(SITE)
+    assert shape["deviceAddress"] == {"<map>": 2, "values": ["int"]}
+    assert shape["roomAddress"] == {"<map>": 1, "values": ["int"]}
+    assert "FFB5CB120267" not in repr(shape) and "5b1e2a90" not in repr(shape)
+
+
+async def test_diagnostics_site_structure_survives_a_network_error(monkeypatch):
+    async def offline(session, email, password):
+        raise TimeoutError
+
+    monkeypatch.setattr(diagnostics, "async_login", offline)
+    diag = await async_get_config_entry_diagnostics(None, _entry())
+    assert diag["site_structure"] == {"error": "TimeoutError"} and diag["counts"]["devices"] == 2

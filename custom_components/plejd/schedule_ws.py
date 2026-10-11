@@ -304,6 +304,7 @@ async def ws_cloud_list(hass: HomeAssistant, connection, msg) -> None:
         connection.send_error(msg["id"], "cloud_error", "Plejd cloud error: malformed site response")
         return
     parsed = parse_site(site)
+    outputs = {(d.device_id, d.output_index): d.name for d in parsed.devices}
     devices = {d.device_id: d.name for d in parsed.devices}
     scenes = {s.scene_id: s.name for s in parsed.all_scenes}
     tracked = {s.get("schedule_id") for s in entry.data.get(CONF_CLOUD_SCHEDULES, [])}
@@ -314,7 +315,7 @@ async def ws_cloud_list(hass: HomeAssistant, connection, msg) -> None:
                 {
                     **asdict(ev),
                     "scene_name": scenes.get(ev.scene_id),
-                    "devices": [devices.get(d, d) for d in ev.device_ids],
+                    "devices": [outputs.get((d, i)) or devices.get(d, d) for d, i in ev.targets],
                     "from_app": ev.schedule_id not in tracked,
                 }
                 for ev in parse_astro_events(site)

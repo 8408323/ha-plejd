@@ -617,7 +617,7 @@ function Health({ hass, reg }: RegCtx) {
 type AppSchedule = {
   schedule_id: string; scene_name: string | null; devices: string[]; scheduled_days: number[]; fade_time: number;
   activated: boolean; sunset_offset: number; sunrise_offset: number; from_app: boolean;
-  night_reduction: { start_time: string | null; end_time: string | null } | null;
+  night_reduction: { start_time: string | null; end_time: string | null; weekend_start_time: string | null; weekend_end_time: string | null } | null;
 };
 
 const offset = (min: number) => (min ? `${min > 0 ? "+" : "−"}${Math.abs(min)} min` : "±0");
@@ -648,6 +648,7 @@ function AppSchedules({ hass }: Ctx) {
                 {s.scheduled_days.length === 7 ? "" : `${s.scheduled_days.map((d) => t.weekdays[d]).join(", ")} · `}
                 {fmt(t.astro_window, { a: offset(s.sunset_offset), b: offset(s.sunrise_offset) })}
                 {s.night_reduction?.start_time && ` · ${fmt(t.night_window, { a: s.night_reduction.start_time, b: s.night_reduction.end_time ?? "?" })}`}
+                {s.night_reduction?.weekend_start_time && ` · ${fmt(t.night_weekend, { a: s.night_reduction.weekend_start_time, b: s.night_reduction.weekend_end_time ?? "?" })}`}
                 {s.fade_time ? ` · ${fmt(t.fade_s, { n: s.fade_time })}` : ""}
               </div>
               {s.devices.length > 0 && <div className="muted">{s.devices.join(", ")}</div>}

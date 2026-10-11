@@ -8,8 +8,10 @@ counts, models) is exposed.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
+import aiohttp
 from homeassistant.components.diagnostics import async_redact_data
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
@@ -92,6 +94,14 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: ConfigE
 def site_shape(value: Any) -> Any:
     """Keys and value types only, never values: shows the cloud schema without any secret or PII."""
     if isinstance(value, dict):
+        if any(_is_identifier(key) for key in value):
+            # a map keyed by device/room/scene id (deviceAddress, outputAddress, ...): the keys are PII, keep shapes only
+            variants = []
+            for item in value.values():
+                shape = site_shape(item)
+                if shape not in variants and len(variants) < _SHAPE_VARIANTS:
+                    variants.append(shape)
+            return {"<map>": len(value), "values": variants}
         return {key: site_shape(item) for key, item in value.items()}
     if isinstance(value, list):
         variants: list[Any] = []
@@ -103,10 +113,15 @@ def site_shape(value: Any) -> Any:
     return type(value).__name__
 
 
+def _is_identifier(key: object) -> bool:
+    """Wire field names are plain camelCase; ids (MACs, GUIDs, Parse ids) carry digits or dashes."""
+    return not isinstance(key, str) or not re.fullmatch(r"[A-Za-z_]+", key) or bool(re.fullmatch(r"[0-9A-F]{8,}", key))
+
+
 async def _site_structure(hass: HomeAssistant, entry: ConfigEntry) -> Any:
     session = async_get_clientsession(hass)
     try:
         token = await async_login(session, entry.data[CONF_EMAIL], entry.data[CONF_PASSWORD])
         return site_shape(await async_get_site_raw(session, token, entry.data[CONF_SITE_ID]))
-    except PlejdCloudError as err:
+    except (PlejdCloudError, aiohttp.ClientError, OSError, TimeoutError) as err:
         return {"error": type(err).__name__}
