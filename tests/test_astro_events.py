@@ -178,3 +178,11 @@ async def test_cloud_list_reports_an_unparseable_site(cloud):
     conn = _Conn()
     await schedule_ws.ws_cloud_list(hass, conn, {"id": 1})
     assert conn.error[1] == "cloud_error"
+
+
+async def test_cloud_list_reports_a_malformed_crypto_key(cloud):
+    cloud["site"] = [{**_SITE, "plejdMesh": {"cryptoKey": "zz"}}]
+    hass, _ = _hass()
+    conn = _Conn()
+    await schedule_ws.ws_cloud_list(hass, conn, {"id": 1})
+    assert conn.error[1] == "cloud_error"

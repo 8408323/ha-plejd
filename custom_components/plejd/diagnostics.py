@@ -115,7 +115,9 @@ def site_shape(value: Any) -> Any:
 
 def _is_identifier(key: object) -> bool:
     """Wire field names are plain camelCase; ids (MACs, GUIDs, Parse ids) carry digits or dashes."""
-    return not isinstance(key, str) or not re.fullmatch(r"[A-Za-z_]+", key) or bool(re.fullmatch(r"[0-9A-F]{8,}", key))
+    return (
+        not isinstance(key, str) or not re.fullmatch(r"[A-Za-z_]+", key) or bool(re.fullmatch(r"[0-9A-Fa-f]{8,}", key))
+    )
 
 
 async def _site_structure(hass: HomeAssistant, entry: ConfigEntry) -> Any:

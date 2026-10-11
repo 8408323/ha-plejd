@@ -16,7 +16,7 @@ SITE = {
         {"deviceId": "d2", "firmware": {"version": "2"}},
     ],
     "timeEvents": [{"mode": "astro", "offset": 15}, {"mode": "time", "time": "07:00"}],
-    "deviceAddress": {"FFB5CB120267": 1, "AABBCCDDEEFF": 2},
+    "deviceAddress": {"FFB5CB120267": 1, "aabbccddeeff": 2},
     "roomAddress": {"5b1e2a90-aaaa-bbbb": 14},
 }
 
@@ -209,7 +209,7 @@ def test_site_shape_hides_identifier_keys():
     shape = site_shape(SITE)
     assert shape["deviceAddress"] == {"<map>": 2, "values": ["int"]}
     assert shape["roomAddress"] == {"<map>": 1, "values": ["int"]}
-    assert "FFB5CB120267" not in repr(shape) and "5b1e2a90" not in repr(shape)
+    assert "FFB5CB120267" not in repr(shape) and "aabbccddeeff" not in repr(shape) and "5b1e2a90" not in repr(shape)
 
 
 async def test_diagnostics_site_structure_survives_a_network_error(monkeypatch):
