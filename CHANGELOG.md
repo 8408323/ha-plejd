@@ -8,6 +8,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [0.14.1] - 2026-10-11
 
+### Added
+
+- The Automations tab has a read-only **In the Plejd app** card listing schedules
+  made in the Plejd app (sunrise/sunset schedules with their scene, days, offsets
+  and night reduction), read live from the Plejd cloud. Diagnostics now include
+  `site_structure`, the site's cloud data reduced to keys and value types only, with
+  no values (#150).
+
 ### Fixed
 
 - Plejd could stay unavailable until Home Assistant was restarted. This happened when
