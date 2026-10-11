@@ -487,12 +487,12 @@ dev = [
     { name = "aiohttp", specifier = ">=3.13.5,<3.14" },
     { name = "aioresponses", specifier = ">=0.7.9" },
     { name = "bleak", specifier = ">=3.0.2" },
-    { name = "bleak-retry-connector", specifier = ">=4.7.0" },
-    { name = "cryptography", specifier = ">=50.0.1" },
+    { name = "bleak-retry-connector", specifier = ">=4.7.1" },
+    { name = "cryptography", specifier = ">=50.0.2" },
     { name = "pytest", specifier = ">=9.1.1" },
     { name = "pytest-asyncio", specifier = ">=1.4.0" },
     { name = "pytest-cov", specifier = ">=7.1.0" },
-    { name = "ruff", specifier = ">=0.16.5" },
+    { name = "ruff", specifier = ">=0.16.10" },
     { name = "voluptuous", specifier = ">=0.16.0" },
 ]
 

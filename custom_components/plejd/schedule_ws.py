@@ -14,14 +14,26 @@ import logging
 from collections.abc import Callable
 from dataclasses import asdict
 
+import aiohttp
 import voluptuous as vol
 from homeassistant.components import websocket_api
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .cloud import PlejdCloudSite
+from .cloud import (
+    PlejdAuthError,
+    PlejdCloudError,
+    PlejdCloudSite,
+    async_get_site_raw,
+    async_login,
+    parse_astro_events,
+    parse_site,
+)
 from .const import (
+    CONF_CLOUD_SCHEDULES,
     CONF_DEVICE_ADDRESSES,
     CONF_DEVICES,
     CONF_GATEWAYS,
@@ -35,6 +47,7 @@ from .const import (
     CONF_ROOMS,
     CONF_SCENES,
     CONF_SCHEDULES,
+    CONF_SITE_ID,
     CONF_SYNC_AREAS,
     CONF_TRANSPORT,
     DOMAIN,
@@ -265,6 +278,51 @@ async def ws_list(hass: HomeAssistant, connection, msg) -> None:
         return
     scenes = [{"index": s["index"], "name": s["name"]} for s in entry.data.get(CONF_SCENES, [])]
     connection.send_result(msg["id"], {"schedules": entry.options.get(CONF_SCHEDULES, []), "scenes": scenes})
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): "plejd/schedules/cloud"})
+@websocket_api.async_response
+async def ws_cloud_list(hass: HomeAssistant, connection, msg) -> None:
+    """The site's sunset/sunrise schedules read live from the cloud, so ones made in the Plejd app show too."""
+    entry = hass.data.get(DATA_ENTRY)
+    if entry is None:
+        connection.send_error(msg["id"], "not_loaded", "Plejd is not loaded")
+        return
+    session = async_get_clientsession(hass)
+    try:
+        token = await async_login(session, entry.data[CONF_EMAIL], entry.data[CONF_PASSWORD])
+        raw = await async_get_site_raw(session, token, entry.data[CONF_SITE_ID])
+        site = raw[0] if isinstance(raw, list) and raw else raw
+        if not isinstance(site, dict):
+            raise PlejdCloudError("malformed site response")
+        parsed = parse_site(site)
+    except PlejdAuthError:
+        entry.async_start_reauth(hass)
+        connection.send_error(msg["id"], "auth_failed", "Plejd cloud credentials rejected; reauthentication started")
+        return
+    # Value/Attribute/TypeError: parse_site on malformed cloud fields (untrusted data, not a bug here)
+    except (PlejdCloudError, aiohttp.ClientError, OSError, TimeoutError, ValueError, AttributeError, TypeError) as err:
+        connection.send_error(msg["id"], "cloud_error", f"Plejd cloud error: {str(err) or type(err).__name__}")
+        return
+    outputs = {(d.device_id, d.output_index): d.name for d in parsed.devices}
+    devices = {d.device_id: d.name for d in parsed.devices}
+    scenes = {s.scene_id: s.name for s in parsed.all_scenes if isinstance(s.name, str)}
+    tracked = {s.get("schedule_id") for s in entry.data.get(CONF_CLOUD_SCHEDULES, [])}
+    connection.send_result(
+        msg["id"],
+        {
+            "schedules": [
+                {
+                    **asdict(ev),
+                    "scene_name": scenes.get(ev.scene_id),
+                    "devices": [outputs.get((d, i)) or devices.get(d, d) for d, i in ev.targets],
+                    "from_app": ev.schedule_id not in tracked,
+                }
+                for ev in parse_astro_events(site)
+            ]
+        },
+    )
 
 
 @websocket_api.require_admin
@@ -522,6 +580,7 @@ async def _async_persist(
 
 def async_register(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_list)
+    websocket_api.async_register_command(hass, ws_cloud_list)
     websocket_api.async_register_command(hass, ws_add)
     websocket_api.async_register_command(hass, ws_delete)
     websocket_api.async_register_command(hass, ws_settings_get)
