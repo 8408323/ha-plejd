@@ -765,7 +765,7 @@ async def test_a_drop_during_a_reconnect_is_not_lost(monkeypatch):
     monkeypatch.setattr(c, "_spawn", lambda coro: spawned.append(coro) or "TASK")
     c._available = False
     c._reconnect_task = task = asyncio.ensure_future(c._async_reconnect())
-    await task
+    await asyncio.gather(task)
     assert attempts == [0, 1]  # connected again rather than giving up after the first attempt
     assert c.available is True
     assert c._reconnecting is False
