@@ -281,11 +281,13 @@ async def test_room_turn_on_without_brightness_defaults_full_when_average_zero()
     assert coord.commands == [(14, True, 255)]
 
 
-async def test_room_turn_off_sends_group_off():
+async def test_room_turn_off_sends_per_member_off():
+    # A room-group off resets the dimmers' remembered level; per-member offs keep it.
     coord = _Coordinator([], rooms=[_room()])
-    light = PlejdRoomLight(coord, _room(address=16))
+    light = PlejdRoomLight(coord, _room(address=16, members=(7, 8)))
     await light.async_turn_off()
-    assert coord.commands == [(16, False, 0)]
+    assert coord.commands == [(7, False, 0), (8, False, 0)]
+    assert coord.group_calls == []
 
 
 async def test_room_turn_on_without_brightness_defaults_full_when_not_dimmable():
@@ -305,13 +307,6 @@ async def test_room_turn_on_forwards_member_addresses_for_optimistic_update():
     light = PlejdRoomLight(coord, _room(address=14, members=(5, 6)))
     await light.async_turn_on(**{ATTR_BRIGHTNESS: 120})
     assert coord.group_calls == [(14, True, 120, [5, 6])]
-
-
-async def test_room_turn_off_forwards_member_addresses_for_optimistic_update():
-    coord = _Coordinator([], rooms=[_room()])
-    light = PlejdRoomLight(coord, _room(address=16, members=(7, 8)))
-    await light.async_turn_off()
-    assert coord.group_calls == [(16, False, 0, [7, 8])]
 
 
 def test_room_is_on_true_if_any_member_on():

@@ -175,7 +175,10 @@ class PlejdRoomLight(LightEntity):
         await self._coordinator.async_set_group_output(self._room.address, True, level, self._room.member_addresses)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
-        await self._coordinator.async_set_group_output(self._room.address, False, 0, self._room.member_addresses)
+        # Each member gets its own off, not one room-group off: a group off makes the dimmers forget their
+        # level, so the next wall-switch/remote "on" comes back at minimum brightness. A per-output off keeps it.
+        for member in self._room.member_addresses:
+            await self._coordinator.async_set_output(member, False, 0)
 
     async def async_start_dim(self, direction: str) -> None:
         """Start a smooth hold-to-dim ramp across the room's group address (entity service)."""
