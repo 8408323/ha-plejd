@@ -6,6 +6,22 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.14.2] - 2026-11-14
+
+A maintenance release with no change in behaviour. It clears the repository's
+security advisories for development dependencies.
+
+### Security
+
+- The development and test dependencies flagged by security advisories are on
+  fixed versions: aiohttp 3.14.5 and multidict 7.2.1 (#162). Installs were never
+  affected, because at runtime the integration uses Home Assistant's own aiohttp.
+
+### Changed
+
+- Development tooling updated: pytest 9.2.0, pytest-asyncio 1.5.0, ruff 0.17.5,
+  bleak 3.1.0 (#162, #163) and the CodeQL action 4.39.3 (#160).
+
 ## [0.14.1] - 2026-10-11
 
 ### Added
