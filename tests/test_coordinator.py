@@ -3960,3 +3960,43 @@ def test_toggle_origin_uses_a_standalone_motion_sensors_own_room(monkeypatch):
     c.motion = [PlejdCloudMotion("wms", "Hall motion", 33, room_id="r1")]  # no output entry for it at all
     c._recent_motion[33] = 99.0
     assert c.toggle_origin(5) == {"kind": "plejd_motion", "name": "Hall motion"}
+
+
+def _climate_coordinator():
+    entry = _entry()
+    trm = {**_DEV, "device_id": "t1", "name": "Bad", "address": 9, "outputs": [9], "hardware_id": 100}
+    entry.data[CONF_DEVICES] = [_DEV, {**trm, "model": "TRM-01", "category": "climate", "traits": 0x20}]
+    return PlejdCoordinator(_hass(), entry)
+
+
+def test_climate_state_for_decodes_the_output_state_report(monkeypatch):
+    from plejd.protocol import OutputState
+
+    c = _climate_coordinator()
+    # word 0x1C821: mode 7 (normal), target 32-10 = 22 °C, current 33-10 = 23 °C
+    monkeypatch.setattr(c, "state_for", lambda a: OutputState(output=a, on=True, level=0x21, raw_level=0x21C8))
+    state = c.climate_state_for(9)
+    assert (state.mode, state.target, state.current, state.heating) == (7, 22, 23, None)
+
+
+def test_climate_state_for_is_none_without_a_raw_level(monkeypatch):
+    from plejd.protocol import OutputState
+
+    c = _climate_coordinator()
+    assert c.climate_state_for(9) is None
+    monkeypatch.setattr(c, "state_for", lambda a: OutputState(output=a, on=True, level=0))
+    assert c.climate_state_for(9) is None
+
+
+def test_thermostat_report_records_heating_only_for_thermostats(monkeypatch):
+    from plejd.const import CMD_GROUP_STATE_AND_LEVEL
+    from plejd.protocol import Command, OutputState
+
+    c = _climate_coordinator()
+    c._on_event(
+        Command(address=9, command_type=0x10, command=CMD_GROUP_STATE_AND_LEVEL, data=bytes([1, 0xC8, 0x21, 0x80]))
+    )
+    c._on_event(Command(address=5, command_type=0x10, command=CMD_GROUP_STATE_AND_LEVEL, data=bytes([1, 0, 200, 0x80])))
+    assert c._climate_heating == {9: True}
+    monkeypatch.setattr(c, "state_for", lambda a: OutputState(output=a, on=True, level=0x21, raw_level=0x21C8))
+    assert c.climate_state_for(9).heating is True
