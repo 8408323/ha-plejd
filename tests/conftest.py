@@ -8,9 +8,14 @@ as the top-level `plejd` package so tests can `from plejd... import ...`.
 from __future__ import annotations
 
 import enum
+import inspect
 import os
 import sys
 import types
+from unittest.mock import Mock
+
+import aiohttp
+import aioresponses.core
 
 _CC = os.path.join(os.path.dirname(__file__), "..", "custom_components")
 sys.path.insert(0, os.path.abspath(_CC))
@@ -665,3 +670,15 @@ except ImportError:
 
     _devauto_exc.DeviceNotFound = _DeviceNotFound  # type: ignore[attr-defined]
     sys.modules.setdefault("homeassistant.components.device_automation.exceptions", _devauto_exc)
+
+
+# aioresponses 0.7.9 builds ClientResponse without aiohttp 3.14's required `stream_writer` kwarg
+# (pnuckowski/aioresponses#288). It is only read for `output_size`. Drop this once a release passes it.
+if "stream_writer" in inspect.signature(aiohttp.ClientResponse.__init__).parameters:
+
+    class _MockedClientResponse(aiohttp.ClientResponse):
+        def __init__(self, *args, **kwargs):
+            kwargs.setdefault("stream_writer", Mock(output_size=0))
+            super().__init__(*args, **kwargs)
+
+    aioresponses.core.ClientResponse = _MockedClientResponse
