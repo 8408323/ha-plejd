@@ -136,7 +136,7 @@ def test_decode_state_report_0x0098_keyed_by_address():
         address=11, command_type=0x10, command=CMD_GROUP_STATE_AND_LEVEL, data=bytes([0x01, 0xC8, 0xC8, 0x00])
     )
     st = decode_output_state(cmd)
-    assert st == st.__class__(output=11, on=True, level=0xC8)
+    assert st == st.__class__(output=11, on=True, level=0xC8, raw_level=0xC8C8)
 
 
 def test_decode_state_report_off():
@@ -610,3 +610,35 @@ def test_notify_events_request_and_decode():
     # gateway) must be rejected, not treated as an all-clear empty bitfield.
     assert decode_notify_events(Command(11, 0x03, CMD_NOTIFY_EVENTS, b"")) is None
     assert decode_notify_events(Command(11, 0x03, CMD_NOTIFY_EVENTS, bytes(7))) is None
+
+
+def test_decode_state_report_keeps_the_full_level_for_thermostats():
+    cmd = Command(address=9, command_type=0x10, command=CMD_GROUP_STATE_AND_LEVEL, data=bytes([0x01, 0xC8, 0x21]))
+    assert decode_output_state(cmd).raw_level == 0x21C8
+
+
+def test_decode_read_reply_keeps_the_full_level():
+    cmd = Command(address=9, command_type=0x03, command=CMD_OUTPUT_STATE_AND_LEVEL, data=bytes([0x00, 0xC8, 0x21]))
+    assert decode_output_state(cmd).raw_level == 0x21C8
+
+
+def test_decode_thermostat_state_unpacks_mode_target_and_current():
+    from plejd.protocol import decode_thermostat_state
+
+    state = decode_thermostat_state(True, 0x21C8)
+    assert (state.mode, state.target, state.current, state.heating) == (7, 22, 23, None)
+
+
+def test_decode_thermostat_state_reports_heating_from_the_extra_byte():
+    from plejd.protocol import decode_thermostat_state
+
+    assert decode_thermostat_state(True, 0x21C8, 0x80).heating is True
+    assert decode_thermostat_state(True, 0x21C8, 0x00).heating is False
+
+
+def test_decode_thermostat_state_hides_the_mode_on_error():
+    from plejd.protocol import decode_thermostat_state
+
+    # word 0x1E821 = 0x1C821 with the error bit (0x2000) set
+    state = decode_thermostat_state(True, 0x21E8)
+    assert state.mode is None and state.target == 22 and state.current == 23
