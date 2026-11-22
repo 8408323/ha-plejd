@@ -3,6 +3,7 @@
 
 const en = {
   lang: "en",
+  more_info: "More info",
   tagline: "Lights & home", hero_now: "Right now", hero_on: "{n} lights on", hero_on_one: "1 light on", hero_none: "All lights off", hero_lit_in: "On in {rooms}", hero_loading: "Counting lights…", stat_lights: "Lights on", stat_rooms: "Rooms lit", stat_scenes: "Scenes", stat_link: "Connection", conn_gateway: "Via gateway", conn_ble: "Via Bluetooth", conn_disconnected: "Not connected", conn_unknown: "Unknown", faults_n: "{n} need attention", all_ok: "All devices OK", site_off: "Turn everything off", site_off_failed: "Could not turn everything off: {error}", appearance: "Language & appearance", theme: "Theme", theme_auto: "Same as Home Assistant", theme_light: "Light", theme_dark: "Dark", menu: "Menu",
   trigger_types: { press: "Press", release: "Release", short_press: "Short press", long_press: "Long press", double_press: "Double press", triple_press: "Triple press", short_release: "Release after short press", long_release: "Release after long press", initial_press: "First press", repeat: "Repeat", turned_on: "Turned on", turned_off: "Turned off", opened: "Opened", closed: "Closed", motion: "Motion", no_motion: "No motion", dim_up: "Dim up", dim_down: "Dim down" } as Record<string, string>,
   trigger_subtypes: { turn_on: "On", turn_off: "Off", on: "On", off: "Off", dim_up: "Dim up", dim_down: "Dim down", left: "Left", right: "Right", up: "Up", down: "Down" } as Record<string, string>,
@@ -85,6 +86,7 @@ export type T = typeof en;
 
 const sv: T = {
   lang: "sv",
+  more_info: "Mer info",
   tagline: "Ljus & hem", hero_now: "Just nu", hero_on: "{n} lampor tända", hero_on_one: "1 lampa tänd", hero_none: "Alla lampor släckta", hero_lit_in: "Tänt i {rooms}", hero_loading: "Räknar lampor…", stat_lights: "Tända lampor", stat_rooms: "Tända rum", stat_scenes: "Scener", stat_link: "Anslutning", conn_gateway: "Via gateway", conn_ble: "Via Bluetooth", conn_disconnected: "Inte ansluten", conn_unknown: "Okänd", faults_n: "{n} behöver åtgärdas", all_ok: "Alla enheter OK", site_off: "Släck allt", site_off_failed: "Kunde inte släcka allt: {error}", appearance: "Språk & utseende", theme: "Tema", theme_auto: "Samma som Home Assistant", theme_light: "Ljust", theme_dark: "Mörkt", menu: "Meny",
   trigger_types: { press: "Tryck", release: "Släpp", short_press: "Kort tryck", long_press: "Långt tryck", double_press: "Dubbeltryck", triple_press: "Trippeltryck", short_release: "Släpp efter kort tryck", long_release: "Släpp efter långt tryck", initial_press: "Första tryck", repeat: "Upprepning", turned_on: "Påslagen", turned_off: "Avslagen", opened: "Öppnad", closed: "Stängd", motion: "Rörelse", no_motion: "Ingen rörelse", dim_up: "Dimra upp", dim_down: "Dimra ner" } as Record<string, string>,
   trigger_subtypes: { turn_on: "På", turn_off: "Av", on: "På", off: "Av", dim_up: "Dimra upp", dim_down: "Dimra ner", left: "Vänster", right: "Höger", up: "Upp", down: "Ner" } as Record<string, string>,
@@ -166,6 +168,7 @@ const sv: T = {
 
 const nb: T = {
   lang: "nb",
+  more_info: "Mer info",
   tagline: "Lys & hjem", hero_now: "Akkurat nå", hero_on: "{n} lys på", hero_on_one: "1 lys på", hero_none: "Alle lys av", hero_lit_in: "På i {rooms}", hero_loading: "Teller lys…", stat_lights: "Lys på", stat_rooms: "Rom tent", stat_scenes: "Scener", stat_link: "Tilkobling", conn_gateway: "Via gateway", conn_ble: "Via Bluetooth", conn_disconnected: "Ikke tilkoblet", conn_unknown: "Ukjent", faults_n: "{n} trenger tilsyn", all_ok: "Alle enheter OK", site_off: "Slå av alt", site_off_failed: "Kunne ikke slå av alt: {error}", appearance: "Språk og utseende", theme: "Tema", theme_auto: "Samme som Home Assistant", theme_light: "Lyst", theme_dark: "Mørkt", menu: "Meny",
   trigger_types: { press: "Trykk", release: "Slipp", short_press: "Kort trykk", long_press: "Langt trykk", double_press: "Dobbelttrykk", triple_press: "Trippeltrykk", short_release: "Slipp etter kort trykk", long_release: "Slipp etter langt trykk", initial_press: "Første trykk", repeat: "Gjentakelse", turned_on: "Slått på", turned_off: "Slått av", opened: "Åpnet", closed: "Lukket", motion: "Bevegelse", no_motion: "Ingen bevegelse", dim_up: "Dim opp", dim_down: "Dim ned" } as Record<string, string>,
   trigger_subtypes: { turn_on: "På", turn_off: "Av", on: "På", off: "Av", dim_up: "Dim opp", dim_down: "Dim ned", left: "Venstre", right: "Høyre", up: "Opp", down: "Ned" } as Record<string, string>,
@@ -247,6 +250,7 @@ const nb: T = {
 
 const da: T = {
   lang: "da",
+  more_info: "Mere info",
   tagline: "Lys & hjem", hero_now: "Lige nu", hero_on: "{n} lys tændt", hero_on_one: "1 lys tændt", hero_none: "Alle lys slukket", hero_lit_in: "Tændt i {rooms}", hero_loading: "Tæller lys…", stat_lights: "Lys tændt", stat_rooms: "Rum tændt", stat_scenes: "Scener", stat_link: "Forbindelse", conn_gateway: "Via gateway", conn_ble: "Via Bluetooth", conn_disconnected: "Ikke forbundet", conn_unknown: "Ukendt", faults_n: "{n} kræver opmærksomhed", all_ok: "Alle enheder OK", site_off: "Sluk alt", site_off_failed: "Kunne ikke slukke alt: {error}", appearance: "Sprog og udseende", theme: "Tema", theme_auto: "Samme som Home Assistant", theme_light: "Lyst", theme_dark: "Mørkt", menu: "Menu",
   trigger_types: { press: "Tryk", release: "Slip", short_press: "Kort tryk", long_press: "Langt tryk", double_press: "Dobbelttryk", triple_press: "Tredobbelt tryk", short_release: "Slip efter kort tryk", long_release: "Slip efter langt tryk", initial_press: "Første tryk", repeat: "Gentagelse", turned_on: "Tændt", turned_off: "Slukket", opened: "Åbnet", closed: "Lukket", motion: "Bevægelse", no_motion: "Ingen bevægelse", dim_up: "Dæmp op", dim_down: "Dæmp ned" } as Record<string, string>,
   trigger_subtypes: { turn_on: "Til", turn_off: "Fra", on: "Til", off: "Fra", dim_up: "Dæmp op", dim_down: "Dæmp ned", left: "Venstre", right: "Højre", up: "Op", down: "Ned" } as Record<string, string>,
@@ -328,6 +332,7 @@ const da: T = {
 
 const fi: T = {
   lang: "fi",
+  more_info: "Lisätietoja",
   tagline: "Valot & koti", hero_now: "Juuri nyt", hero_on: "{n} valoa päällä", hero_on_one: "1 valo päällä", hero_none: "Kaikki valot pois", hero_lit_in: "Päällä: {rooms}", hero_loading: "Lasketaan valoja…", stat_lights: "Valoja päällä", stat_rooms: "Valaistut huoneet", stat_scenes: "Tilanteet", stat_link: "Yhteys", conn_gateway: "Yhdyskäytävän kautta", conn_ble: "Bluetoothin kautta", conn_disconnected: "Ei yhteyttä", conn_unknown: "Tuntematon", faults_n: "{n} vaatii huomiota", all_ok: "Kaikki laitteet OK", site_off: "Sammuta kaikki", site_off_failed: "Kaikkea ei voitu sammuttaa: {error}", appearance: "Kieli ja ulkoasu", theme: "Teema", theme_auto: "Sama kuin Home Assistantissa", theme_light: "Vaalea", theme_dark: "Tumma", menu: "Valikko",
   trigger_types: { press: "Painallus", release: "Vapautus", short_press: "Lyhyt painallus", long_press: "Pitkä painallus", double_press: "Kaksoispainallus", triple_press: "Kolmoispainallus", short_release: "Vapautus lyhyen painalluksen jälkeen", long_release: "Vapautus pitkän painalluksen jälkeen", initial_press: "Ensimmäinen painallus", repeat: "Toisto", turned_on: "Kytketty päälle", turned_off: "Kytketty pois", opened: "Avattu", closed: "Suljettu", motion: "Liikettä", no_motion: "Ei liikettä", dim_up: "Kirkasta", dim_down: "Himmennä" } as Record<string, string>,
   trigger_subtypes: { turn_on: "Päälle", turn_off: "Pois", on: "Päälle", off: "Pois", dim_up: "Kirkasta", dim_down: "Himmennä", left: "Vasen", right: "Oikea", up: "Ylös", down: "Alas" } as Record<string, string>,
@@ -409,6 +414,7 @@ const fi: T = {
 
 const is_: T = {
   lang: "is",
+  more_info: "Nánar",
   tagline: "Ljós & heimili", hero_now: "Núna", hero_on: "{n} ljós kveikt", hero_on_one: "1 ljós kveikt", hero_none: "Slökkt á öllum ljósum", hero_lit_in: "Kveikt í {rooms}", hero_loading: "Telur ljós…", stat_lights: "Kveikt ljós", stat_rooms: "Upplýst herbergi", stat_scenes: "Senur", stat_link: "Tenging", conn_gateway: "Um gátt", conn_ble: "Um Bluetooth", conn_disconnected: "Ekki tengt", conn_unknown: "Óþekkt", faults_n: "{n} þarfnast athygli", all_ok: "Öll tæki í lagi", site_off: "Slökkva á öllu", site_off_failed: "Ekki tókst að slökkva á öllu: {error}", appearance: "Tungumál og útlit", theme: "Þema", theme_auto: "Sama og í Home Assistant", theme_light: "Ljóst", theme_dark: "Dökkt", menu: "Valmynd",
   trigger_types: { press: "Ýtt", release: "Sleppt", short_press: "Stutt ýting", long_press: "Löng ýting", double_press: "Tvíýting", triple_press: "Þreföld ýting", short_release: "Sleppt eftir stutta ýtingu", long_release: "Sleppt eftir langa ýtingu", initial_press: "Fyrsta ýting", repeat: "Endurtekning", turned_on: "Kveikt", turned_off: "Slökkt", opened: "Opnað", closed: "Lokað", motion: "Hreyfing", no_motion: "Engin hreyfing", dim_up: "Auka birtu", dim_down: "Deyfa" } as Record<string, string>,
   trigger_subtypes: { turn_on: "Kveikja", turn_off: "Slökkva", on: "Kveikja", off: "Slökkva", dim_up: "Auka birtu", dim_down: "Deyfa", left: "Vinstri", right: "Hægri", up: "Upp", down: "Niður" } as Record<string, string>,

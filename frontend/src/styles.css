@@ -18,6 +18,7 @@
              linear-gradient(135deg, #0c3a28 0%, #17694a 52%, #2f9b6c 100%);
   --pl-font: "Plus Jakarta Sans", "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --text-primary-color: #fff;
+  color-scheme: light; /* the page picks its own theme, so native fields must not inherit HA dark mode */
   min-height: 100vh; color: var(--pl-text); background: var(--pl-bg);
   font: 14.5px/1.5 var(--pl-font); -webkit-font-smoothing: antialiased; transition: background-color .25s, color .25s;
 }
@@ -224,3 +225,39 @@ textarea { min-height: 56px; font-family: monospace; }
 .log-between label { display: flex; align-items: center; gap: 4px; }
 .log-between input[type="time"] { width: auto; }
 .log-dim .dot { background: color-mix(in srgb, var(--pl-on) 55%, transparent); }
+
+/* ---- section info (ⓘ): hover/focus on a desktop, tap on a phone ---- */
+.card { position: relative; }
+.card-head h2, h3 { display: flex; align-items: center; gap: 6px; }
+.info { display: inline-flex; }
+.info-btn { width: 18px; height: 18px; flex: none; padding: 0; border-radius: 50%; cursor: pointer; display: grid; place-items: center;
+  border: 1px solid color-mix(in srgb, var(--pl-muted) 55%, transparent); background: transparent; color: var(--pl-muted);
+  font: italic 700 11px/1 Georgia, serif; transition: background .15s, color .15s, border-color .15s; }
+.info-btn:hover, .info.open .info-btn { color: var(--pl-accent); border-color: var(--pl-accent); background: color-mix(in srgb, var(--pl-accent) 12%, transparent); }
+.info-btn:focus-visible { outline: 2px solid var(--pl-accent); outline-offset: 2px; }
+.info-pop { display: none; position: absolute; left: 16px; right: 16px; z-index: 5; margin-top: 30px; max-width: 440px; padding: 10px 12px;
+  border-radius: 12px; background: var(--pl-card); color: var(--pl-text); border: 1px solid var(--pl-line);
+  box-shadow: 0 12px 32px -12px rgba(0, 0, 0, .45); font-size: 13px; font-weight: 400; line-height: 1.5; letter-spacing: 0; text-transform: none; }
+.info.open .info-pop, .info:focus-within .info-pop { display: block; }
+@media (hover: hover) { .info:hover .info-pop { display: block; } }
+
+/* ---- spacing and forms that fit the card ---- */
+.card h3 { margin: 20px 0 8px; }
+.card-head + h3, .form > h3:first-child { margin-top: 0; }
+.fields > *, label.f { min-width: 0; }
+input, select, textarea { min-width: 0; max-width: 100%; }
+/* iOS draws time inputs at a fixed width with centred text: make them behave like the other fields */
+input[type="time"] { -webkit-appearance: none; appearance: none; display: block; min-height: 38px; text-align: left; }
+input[type="time"]::-webkit-date-and-time-value { text-align: left; }
+.checks.col { flex-wrap: nowrap; }
+.checks.col label { min-width: 0; }
+.checks label { line-height: 1.3; }
+.checks.col + .label, .fields + .label, .checks + .label { margin-top: 14px !important; }
+@media (max-width: 600px) {
+  .fields, .fields.press { grid-template-columns: minmax(0, 1fr); }
+  .actions { flex-wrap: wrap; }
+}
+.narrow .fields, .narrow .fields.press { grid-template-columns: minmax(0, 1fr); }
+@media (max-width: 600px) { .fields.press > button { justify-self: end; } }
+.narrow .fields.press > button { justify-self: end; }
+input[type="checkbox"] { accent-color: var(--pl-accent); width: 16px; height: 16px; margin: 0 6px 0 0; flex: none; }

@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useId, useRef, useState } from "react";
 import { LANGS, T, pick } from "./i18n";
 import { DEFAULT_STYLE, LAMP_STYLES, LampStyle, lampImage } from "./lamps";
 import { BindingForm, PRESS_ACTIONS, PressRow, Theme, Trigger, buildBinding, buildSchedule, clampPosition, fmt, isDark, moveId, orderIds, siteSummary, stepTemperature, triggerLabel } from "./logic";
@@ -172,14 +172,31 @@ function useRooms(hass: any): Room[] | null {
   return rooms;
 }
 
-function Card({ title, count, wide, children }: { title: string; count?: number; wide?: boolean; children: React.ReactNode }) {
+function Card({ title, count, wide, info, children }: { title: string; count?: number; wide?: boolean; info?: string; children: React.ReactNode }) {
   return (
     <section className={`card ${wide ? "wide" : ""}`}>
-      <div className="card-head"><h2>{title}</h2>{count != null && <span className="count">{count}</span>}</div>
+      <div className="card-head"><h2>{title}{info && <Info text={info} />}</h2>{count != null && <span className="count">{count}</span>}</div>
       {children}
     </section>
   );
 }
+
+// A section's explanation behind an ⓘ: shown on hover or keyboard focus on a desktop, toggled by a tap on a phone.
+function Info({ text }: { text: string }) {
+  const t = useT();
+  const [open, setOpen] = useState(false);
+  const id = useId();
+  return (
+    <span className={`info ${open ? "open" : ""}`} onKeyDown={(e) => { if (e.key === "Escape") setOpen(false); }}>
+      <button type="button" className="info-btn" aria-label={t.more_info} aria-expanded={open} aria-describedby={id}
+        onClick={() => setOpen((o) => !o)}>i</button>
+      <span className="info-pop" role="tooltip" id={id}>{text}</span>
+    </span>
+  );
+}
+
+// A heading inside a card, with its explanation behind an ⓘ.
+const H3 = ({ title, info }: { title: string; info?: string }) => <h3>{title}{info && <Info text={info} />}</h3>;
 
 const Empty = ({ text }: { text: string }) => <p className="muted">{text}</p>;
 
@@ -734,8 +751,7 @@ function AppSchedules({ hass }: Ctx) {
   };
   useEffect(load, []);
   return (
-    <Card title={t.app_schedules} wide>
-      <p className="lead">{t.app_schedules_lead}</p>
+    <Card title={t.app_schedules} wide info={t.app_schedules_lead}>
       {error ? <><p className="error">{error}</p><div className="actions"><button className="btn" onClick={load}>{t.retry}</button></div></>
         : list === null ? <Empty text={t.loading} />
         : !list.length ? <Empty text={t.no_app_schedules} />
@@ -803,8 +819,7 @@ function Schedules({ hass }: Ctx) {
   const set = (patch: Partial<typeof form>) => setForm({ ...form, ...patch });
 
   return (
-    <Card title={t.schedules} wide>
-      <p className="lead">{t.schedules_lead}</p>
+    <Card title={t.schedules} wide info={t.schedules_lead}>
       {list === null ? (
         loadError ? <><p className="error">{loadError}</p><div className="actions"><button className="btn" onClick={load}>{t.retry}</button></div></> : <Empty text={t.loading} />
       ) : (
@@ -940,8 +955,7 @@ function Bindings({ hass, reg }: RegCtx) {
     setForm({ ...form, presses: form.presses.map((p, j) => (j === i ? { ...p, ...patch } : p)) });
 
   return (
-    <Card title={t.bindings} wide>
-      <p className="lead">{t.bindings_lead}</p>
+    <Card title={t.bindings} wide info={t.bindings_lead}>
       {list === null ? (
         loadError ? <><p className="error">{loadError}</p><div className="actions"><button className="btn" onClick={load}>{t.retry}</button></div></> : <Empty text={t.loading} />
       ) : (
@@ -1090,13 +1104,11 @@ function Settings({ hass }: Ctx) {
           <div className="form" />
         </>
       )}
-      <h3>{t.areas}</h3>
-      <p className="lead">{t.areas_lead}</p>
+      <H3 title={t.areas} info={t.areas_lead} />
       <div className="checks col">
         <label><input type="checkbox" checked={draft.sync_areas} onChange={(e) => set({ sync_areas: e.target.checked })} />{t.sync_areas}</label>
       </div>
-      <h3>{t.holiday}</h3>
-      <p className="lead">{t.holiday_lead}</p>
+      <H3 title={t.holiday} info={t.holiday_lead} />
       <div className="fields">
         <label className="f"><span>{t.window_start}</span><input type="time" value={draft.holiday_window_start} onChange={(e) => set({ holiday_window_start: e.target.value })} /></label>
         <label className="f"><span>{t.window_end}</span><input type="time" value={draft.holiday_window_end} onChange={(e) => set({ holiday_window_end: e.target.value })} /></label>
@@ -1155,8 +1167,7 @@ function AddDevice({ hass }: Ctx) {
   };
 
   return (
-    <Card title={t.add_device}>
-      <p className="lead">{t.add_device_lead}</p>
+    <Card title={t.add_device} info={t.add_device_lead}>
       {scan && !scan.bluetooth && <p className="error">{t.no_bluetooth}</p>}
       {scan?.bluetooth && !scan.devices.length && <p className="muted">{t.no_new_devices}</p>}
       {scan?.devices.map((d) => (
@@ -1320,8 +1331,7 @@ function ActivityLog({ hass }: Ctx) {
   const maxExtra = Math.max(0, 30 - LOG_RANGES[range]);
   return (
     <>
-      <Card title={t.log_title} wide>
-        <p className="lead">{t.log_lead}</p>
+      <Card title={t.log_title} wide info={t.log_lead}>
         <div className="log-filters">
           <input type="search" className="log-search" placeholder={t.log_search} aria-label={t.log_search} value={query} onChange={(e) => setQuery(e.target.value)} />
           <div className="seg" role="radiogroup" aria-label={t.log_range}>
@@ -1416,8 +1426,7 @@ function NightWatch({ hass }: Ctx) {
   const plannedLabels: Record<string, string> = { automation: t.srcgrp_auto, script: t.srcgrp_auto, plejd_schedule: t.nw_schedules };
   const toggleIn = (list: string[], item: string, on: boolean) => (on ? [...new Set([...list, item])] : list.filter((x) => x !== item));
   return (
-    <Card title={t.nw_title} wide>
-      <p className="lead">{t.nw_lead}</p>
+    <Card title={t.nw_title} wide info={t.nw_lead}>
       <label className="checks"><span><input type="checkbox" checked={draft.enabled} onChange={(e) => set({ enabled: e.target.checked })} /> {t.nw_enabled}</span></label>
       <div className="fields">
         <label className="f"><span>{t.nw_from}</span><input type="time" value={draft.start} onChange={(e) => set({ start: e.target.value })} /></label>
