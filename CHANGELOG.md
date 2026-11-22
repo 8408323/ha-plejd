@@ -24,6 +24,11 @@ All notable changes to this project are documented here. The format follows
   no longer overlap or stick out of their card on a phone. The lamp lists are
   one column with full names, and sections are spaced evenly. Checkboxes and
   time fields follow the dashboard's own theme, not Home Assistant's.
+- Buttons, switches and sliders keep their distance from each other. On a touch
+  screen every tap target is at least 40–44 px, and the sliders look the same in
+  every browser, with a filled track and a round handle. On a phone a room's
+  brightness slider and switch get a row of their own, and lamp names wrap over
+  two lines instead of being cut off.
 
 ## [0.14.3] - 2026-11-22
 

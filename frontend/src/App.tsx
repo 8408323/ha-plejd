@@ -21,6 +21,8 @@ const TCtx = createContext<T>(LANGS.en[0]);
 const useT = () => useContext(TCtx);
 
 const errMsg = (e: any) => e?.message || String(e);
+// The filled part of a 0/1-100 slider, for the track drawn in styles.css (native fills differ per browser).
+const fill = (v: number, min: number) => ({ "--fill": `${((v - min) / (100 - min)) * 100}%` }) as React.CSSProperties;
 const nameOf = (s: St) => s.attributes.friendly_name || s.entity_id;
 const byName = (a: { name: string }, b: { name: string }) => a.name.localeCompare(b.name);
 const isPlejd = (hass: any, s: St) => hass.entities?.[s.entity_id]?.platform === "plejd" || s.attributes.attribution === "Plejd";
@@ -450,7 +452,7 @@ function RoomControl({ hass, s }: Ctx & { s: St }) {
   const l = useLight(hass, s);
   return (
     <div className="room-control">
-      {l.dimmable && <input type="range" min={1} max={100} value={l.pct} disabled={l.unavailable} className={l.on ? "" : "idle"}
+      {l.dimmable && <input type="range" min={1} max={100} value={l.pct} style={fill(l.pct, 1)} disabled={l.unavailable} className={l.on ? "" : "idle"}
         aria-label={fmt(t.brightness, { name: nameOf(s) })} onChange={(e) => l.slide(Number(e.target.value))} />}
       <button type="button" role="switch" aria-checked={l.on} aria-label={fmt(l.on ? t.turn_off : t.turn_on, { name: nameOf(s) })}
         className={`switch ${l.on ? "on" : ""}`} disabled={l.unavailable} onClick={l.toggle} />
@@ -490,7 +492,7 @@ function LightTile({ hass, s, style, edit }: Ctx & { s: St; style: LampStyle; ed
         <>
           <div className="tile-name" title={nameOf(s)}>{nameOf(s)}</div>
           <div className="muted">{l.level}</div>
-          {l.dimmable && <input type="range" min={1} max={100} value={l.pct} disabled={l.unavailable} className={l.on ? "" : "idle"}
+          {l.dimmable && <input type="range" min={1} max={100} value={l.pct} style={fill(l.pct, 1)} disabled={l.unavailable} className={l.on ? "" : "idle"}
             aria-label={fmt(t.brightness, { name: nameOf(s) })} onChange={(e) => l.slide(Number(e.target.value))} />}
         </>
       )}
@@ -661,7 +663,7 @@ function CoverRow({ hass, s }: Ctx & { s: St }) {
         <button className="btn" disabled={unavailable} onClick={() => command("open_cover", {}, 100)}>{t.open}</button>
         <button className="btn ghost" disabled={unavailable} onClick={() => command("stop_cover", {}, null)}>{t.stop}</button>
         <button className="btn" disabled={unavailable} onClick={() => command("close_cover", {}, 0)}>{t.close}</button>
-        {canSetPosition && <input ref={slider} type="range" min={0} max={100} value={drag ?? known ?? 50} disabled={unavailable}
+        {canSetPosition && <input ref={slider} type="range" min={0} max={100} value={drag ?? known ?? 50} style={fill(drag ?? known ?? 50, 0)} disabled={unavailable}
           aria-label={fmt(t.position, { name: nameOf(s) })} onChange={(e) => setDrag(Number(e.target.value))} onPointerCancel={() => setDrag(null)} />}
       </div>
     </div>
