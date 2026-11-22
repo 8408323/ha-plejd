@@ -95,6 +95,9 @@ from .protocol import Command, MotionEvent, OutputSettings, OutputState, decode_
 
 _LOGGER = logging.getLogger(__name__)
 
+# How long after our own state-only write its 0x0097 echo is still taken to be ours.
+_OWN_STATE_ECHO_WINDOW = 3.0
+
 RECONNECT_INITIAL_DELAY = 1.0
 RECONNECT_MAX_DELAY = 60.0
 NOTIFY_POLL_INTERVAL = timedelta(minutes=10)  # device-health (NotifyEvents) poll cadence
@@ -253,6 +256,9 @@ class PlejdCoordinator:
         self._button_listeners: list[Callable[[int, bool], None]] = []
         # mesh address -> (monotonic time, on/off value) of the last 0x0097 command seen for it, for the activity log
         self._recent_toggles: dict[int, tuple[float, bool]] = {}
+        # mesh address -> (monotonic time, on/off value) of our own state-only 0x0097 writes: their echo
+        # must not be credited to the Plejd app or a wall switch in the activity log.
+        self._own_state_writes: dict[int, tuple[float, bool]] = {}
         # Other recent mesh events that can explain a change, for the activity log:
         # last scene run (monotonic time, scene index) and last motion seen per motion-sensor address.
         self._recent_scene: tuple[float, int] | None = None
@@ -341,6 +347,17 @@ class PlejdCoordinator:
             self._fault_listeners.remove(cb)
 
         return _remove
+
+    def _is_own_state_echo(self, address: int, value: bool) -> bool:
+        """Whether a 0x0097 just seen is the echo of our own state-only write (consumed on match)."""
+        own = self._own_state_writes.get(address)
+        if own is None:
+            return False
+        at, own_value = own
+        if time.monotonic() - at > _OWN_STATE_ECHO_WINDOW or own_value != value:
+            return False
+        del self._own_state_writes[address]
+        return True
 
     def toggle_origin(
         self,
@@ -440,7 +457,9 @@ class PlejdCoordinator:
                 update()
         elif command.command == CMD_INPUT_BUTTON:
             if command.data[:1] in (b"\x00", b"\x01"):  # a malformed frame mustn't be credited with a change
-                self._recent_toggles[command.address] = (time.monotonic(), command.data[0] == 1)
+                value = command.data[0] == 1
+                if not self._is_own_state_echo(command.address, value):
+                    self._recent_toggles[command.address] = (time.monotonic(), value)
             pressed = bool(command.data and command.data[0])
             for cb in list(self._button_listeners):
                 cb(command.address, pressed)
@@ -1277,6 +1296,9 @@ class PlejdCoordinator:
         # Off is a state-only 0x0097, like the Plejd app: an off sent as 0x0098 with level 0 makes the
         # dimmer store level 0, so the next on from a wall switch or remote comes back at minimum.
         vector = protocol.set_group_state_and_level(address, on, level) if on else protocol.set_state(address, False)
+        if not on:
+            # Marked before the write: over the gateway the echo is decoded before write() returns.
+            self._own_state_writes[address] = (time.monotonic(), False)
         await self._write_vector(vector)
         current = self.state_for(address)
         # What our OWN command's echo literally looks like on the wire - level=0 for an

@@ -3991,3 +3991,40 @@ async def test_gateway_set_group_output_off_sends_state_only_off_to_room(monkeyp
     assert c._gateway.writes[-1] == set_state(14, False)
     assert c.state_for(5).on is False and c.state_for(5).level == 90
     assert c.state_for(6).on is False and c.state_for(6).level == 90
+
+
+async def test_own_state_off_echo_is_not_credited_as_an_external_toggle(monkeypatch):
+    # Over the gateway our own 0x0097 off comes back as a push; the activity log must keep
+    # crediting the HA caller, not "Plejd app / the light's own switch".
+    from plejd.protocol import Command, decode_command
+
+    clock = [100.0]
+    c, toggle = _origin_coordinator(monkeypatch, clock)
+
+    async def _write_with_echo(vector):
+        c._on_event(decode_command(vector))
+
+    monkeypatch.setattr(c, "_write_vector", _write_with_echo)
+    await c.async_set_output(5, False, 0)
+    assert c.toggle_origin(5) is None
+
+    # A real external toggle afterwards is still seen.
+    clock[0] = 101.0
+    c._on_event(Command(address=5, command_type=0x10, command=coordinator_mod.CMD_INPUT_BUTTON, data=b"\x00"))
+    assert c.toggle_origin(5) == {"kind": "plejd_device"}
+
+
+async def test_own_state_write_marker_expires(monkeypatch):
+    from plejd.protocol import Command
+
+    clock = [100.0]
+    c, toggle = _origin_coordinator(monkeypatch, clock)
+
+    async def _write_no_echo(vector):
+        return None
+
+    monkeypatch.setattr(c, "_write_vector", _write_no_echo)
+    await c.async_set_output(5, False, 0)  # BLE: no echo ever arrives
+    clock[0] = 110.0
+    c._on_event(Command(address=5, command_type=0x10, command=coordinator_mod.CMD_INPUT_BUTTON, data=b"\x00"))
+    assert c.toggle_origin(5) == {"kind": "plejd_device"}
