@@ -292,10 +292,10 @@ input[type="range"].idle { opacity: .45; }
 .room-head { gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
 .room-control { gap: 14px; }
 .room-control input[type="range"] { width: 110px; }
-.tiles { gap: 10px; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); }
-.tile { padding: 8px 10px 10px; }
+.tiles { gap: 10px; grid-template-columns: repeat(auto-fill, minmax(116px, 1fr)); }
+.tile { padding: 8px 8px 10px; }
 .tile-name { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-height: 1.25;
-  min-height: 2.5em; margin-top: 2px; overflow-wrap: anywhere; }
+  min-height: 2.5em; margin-top: 2px; overflow-wrap: break-word; -webkit-hyphens: auto; hyphens: auto; }
 .tile input[type="range"] { margin-top: 6px; }
 .edit-tools { gap: 8px; }
 /* phone: the room's own slider and switch get a row under the name */
@@ -339,3 +339,6 @@ input[type="range"].idle { opacity: .45; }
   .log-between label, .log-filters label { min-height: 40px; }
   .chip { min-height: 40px; }
 }
+.narrow .tile { padding: 8px 7px 10px; }
+.narrow .tile-name { font-size: 12px; }
+@media (max-width: 600px) { .tile { padding: 8px 7px 10px; } .tile-name { font-size: 12px; } }
