@@ -610,3 +610,15 @@ def test_notify_events_request_and_decode():
     # gateway) must be rejected, not treated as an all-clear empty bitfield.
     assert decode_notify_events(Command(11, 0x03, CMD_NOTIFY_EVENTS, b"")) is None
     assert decode_notify_events(Command(11, 0x03, CMD_NOTIFY_EVENTS, bytes(7))) is None
+
+
+def test_set_state_off_is_state_only_0x0097():
+    # The app's off: opcode 0x0097 with a single [00] byte and no level, so the dimmer keeps its level.
+    from plejd.const import CMD_STATE
+    from plejd.protocol import TYPE_DONT_RESPOND, set_state
+
+    v = set_state(40, on=False)
+    assert v == encode_command(40, CMD_STATE, b"\x00", command_type=TYPE_DONT_RESPOND)
+    cmd = decode_command(v)
+    assert cmd.address == 40 and cmd.command == 0x0097 and cmd.data == b"\x00"
+    assert set_state(40, on=True)[-1] == 0x01

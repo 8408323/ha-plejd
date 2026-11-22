@@ -33,6 +33,7 @@ from .const import (
     CMD_OUTPUT_START_LEVEL,
     CMD_OUTPUT_STATE_AND_LEVEL,
     CMD_SCENE,
+    CMD_STATE,
     CMD_SYSTEM_TIME,
     CMD_TIME_EVENT_SCENE,
     CMD_TIME_EVENT_TIME,
@@ -117,6 +118,17 @@ def set_group_state_and_level(address: int, on: bool, level: int, command_type: 
     lvl = level & 0xFF
     payload = bytes([1 if on else 0, lvl, lvl])
     return encode_command(address, CMD_GROUP_STATE_AND_LEVEL, payload, command_type=command_type)
+
+
+def set_state(address: int, on: bool, command_type: int = TYPE_DONT_RESPOND) -> bytes:
+    """State-only on/off (0x0097 `[01]`/`[00]`) for an output or a room's group address.
+
+    This is the off the Plejd app and wall switches send. It leaves the dimmer's remembered
+    level alone, so the next on from anywhere (switch, remote, app) comes back where it was.
+    An off sent as 0x0098 `[00, 00, 00]` instead stores level 0, and the next on comes back
+    at minimum brightness.
+    """
+    return encode_command(address, CMD_STATE, bytes([1 if on else 0]), command_type=command_type)
 
 
 def request_output_state_and_level(address: int, output: int) -> bytes:

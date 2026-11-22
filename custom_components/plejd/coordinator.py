@@ -1259,10 +1259,11 @@ class PlejdCoordinator:
     async def async_set_output(self, address: int, on: bool, level: int, *, notify: bool = True) -> None:
         """Send an on/off + level command for an output.
 
-        Uses 0x0098 (`set_group_state_and_level`): the per-output cloud address alone
+        On uses 0x0098 (`set_group_state_and_level`): the per-output cloud address alone
         identifies the target output, with no separate output byte — 0x00C8 with the
         per-output address broke every output past the first on a multi-output
-        device (#71).
+        device (#71). Off uses the state-only 0x0097 (`set_state`), which keeps the
+        dimmer's remembered level.
 
         `notify=False` lets a caller that still has more state to record (e.g.
         async_set_group_output's member states) defer the listener notification
@@ -1273,7 +1274,10 @@ class PlejdCoordinator:
         # returns, so reading "prior" afterward would already see this command's own
         # echo (off, level 0) instead of the real previous level.
         prior = self.state_for(address)
-        await self._write_vector(protocol.set_group_state_and_level(address, on, level))
+        # Off is a state-only 0x0097, like the Plejd app: an off sent as 0x0098 with level 0 makes the
+        # dimmer store level 0, so the next on from a wall switch or remote comes back at minimum.
+        vector = protocol.set_group_state_and_level(address, on, level) if on else protocol.set_state(address, False)
+        await self._write_vector(vector)
         current = self.state_for(address)
         # What our OWN command's echo literally looks like on the wire - level=0 for an
         # off command regardless of the remembered brightness (the enriched value below

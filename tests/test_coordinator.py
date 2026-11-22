@@ -247,7 +247,7 @@ async def test_set_output_without_connection_raises():
 
 
 async def test_all_off_turns_off_every_light_output(monkeypatch):
-    from plejd.const import CMD_GROUP_STATE_AND_LEVEL
+    from plejd.const import CMD_STATE
     from plejd.protocol import decode_command
 
     client = _FakeClient()
@@ -266,9 +266,9 @@ async def test_all_off_turns_off_every_light_output(monkeypatch):
     await c.async_all_off()
 
     commands = [decode_command(c._connection.mesh.decrypt(w[1])) for w in client.writes if w[0] == PLEJD_CHAR_DATA_UUID]
-    off_cmds = [cmd for cmd in commands if cmd.command == CMD_GROUP_STATE_AND_LEVEL]
+    off_cmds = [cmd for cmd in commands if cmd.command == CMD_STATE]  # state-only off, keeps the dim level
     assert sorted(cmd.address for cmd in off_cmds) == [5, 6]  # only the two light outputs
-    assert all(cmd.data[0] == 0 for cmd in off_cmds)  # off, not on
+    assert all(cmd.data == b"\x00" for cmd in off_cmds)  # off, not on
 
 
 async def test_all_off_one_output_failure_does_not_skip_the_rest(monkeypatch):
@@ -3960,3 +3960,34 @@ def test_toggle_origin_uses_a_standalone_motion_sensors_own_room(monkeypatch):
     c.motion = [PlejdCloudMotion("wms", "Hall motion", 33, room_id="r1")]  # no output entry for it at all
     c._recent_motion[33] = 99.0
     assert c.toggle_origin(5) == {"kind": "plejd_motion", "name": "Hall motion"}
+
+
+async def test_gateway_set_output_off_sends_state_only_off(monkeypatch):
+    # An off must not be 0x0098 [00 00 00]: that stores level 0 in the dimmer, and the next
+    # wall-switch/remote on comes back at minimum. The app's state-only 0x0097 [00] keeps it.
+    from plejd.protocol import set_state
+
+    monkeypatch.setattr(coordinator_mod, "PlejdGatewayConnection", _FakeGateway)
+    hass = _hass()
+    hass.session = object()
+    c = PlejdCoordinator(hass, _gateway_entry())
+    await c.async_start()
+    await c.async_set_output(11, True, 80)
+    await c.async_set_output(11, False, 0)
+    assert c._gateway.writes[-1] == set_state(11, False)
+    assert c.state_for(11).on is False and c.state_for(11).level == 80
+
+
+async def test_gateway_set_group_output_off_sends_state_only_off_to_room(monkeypatch):
+    from plejd.protocol import set_state
+
+    monkeypatch.setattr(coordinator_mod, "PlejdGatewayConnection", _FakeGateway)
+    hass = _hass()
+    hass.session = object()
+    c = PlejdCoordinator(hass, _gateway_entry())
+    await c.async_start()
+    await c.async_set_group_output(14, True, 90, [5, 6])
+    await c.async_set_group_output(14, False, 0, [5, 6])
+    assert c._gateway.writes[-1] == set_state(14, False)
+    assert c.state_for(5).on is False and c.state_for(5).level == 90
+    assert c.state_for(6).on is False and c.state_for(6).level == 90
