@@ -29,6 +29,7 @@ const all = [
   ent("light.hall", "off", { friendly_name: "Hall", supported_color_modes: ["onoff"] }, "d2"),
   ent("light.porch", "unavailable", { friendly_name: "Porch", ...dim }, "d3"),
   ent("scene.evening", "unknown", { friendly_name: "Evening" }),
+  ent("sensor.plejd_connection", new URLSearchParams(location.search).get("link") || "gateway", { friendly_name: "Plejd Connection", device_class: "enum", options: ["gateway", "ble", "disconnected"] }),
   ent("climate.bath", "heat", { friendly_name: "Bathroom floor", temperature: 22, min_temp: 5, max_temp: 35, target_temp_step: 0.5 }),
   ent("cover.blind", "open", { friendly_name: "Blind", supported_features: 15 }),
   ent("binary_sensor.hall_motion", "on", { friendly_name: "Hall Motion", device_class: "motion" }, "d4"),
@@ -122,6 +123,8 @@ const hass = {
 };
 // ?halang=sv: Home Assistant's own language (the panel follows it unless one is picked in Settings)
 hass.language = new URLSearchParams(location.search).get("halang") || "en";
+// ?dark / ?light: Home Assistant in dark or light mode (the panel follows it on Auto)
+if (/[?&](dark|light)/.test(location.search)) hass.themes = { darkMode: location.search.includes("dark") };
 p.narrow = innerWidth < 600;
 window.fireEvent = (type) => window.subs?.[type]?.({ event_type: type });
 p.hass = window.mockHass = hass;

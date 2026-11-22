@@ -6,6 +6,19 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- The Plejd dashboard has a new look, shared with the other Villa panels. A
+  green hero at the top says how many lights are on right now and in which
+  rooms, with lights on, rooms lit and scenes as small tiles. Chips show
+  whether Plejd is connected through the gateway or Bluetooth and whether a
+  device needs attention, and a button turns everything off. The tabs are pill
+  navigation in the hero, and on the other tabs the hero shrinks to the
+  headline. The dashboard has its own light and dark theme, which follows Home
+  Assistant by default and can be switched with the sun/moon button or under
+  Settings. On a phone the tabs get their own row, and a menu button opens the
+  Home Assistant sidebar.
+
 ## [0.14.3] - 2026-11-22
 
 ### Fixed
