@@ -261,3 +261,5 @@ input[type="time"]::-webkit-date-and-time-value { text-align: left; }
 @media (max-width: 600px) { .fields.press > button { justify-self: end; } }
 .narrow .fields.press > button { justify-self: end; }
 input[type="checkbox"] { accent-color: var(--pl-accent); width: 16px; height: 16px; margin: 0 6px 0 0; flex: none; }
+.narrow .log-row .grow { white-space: normal; }
+@media (max-width: 600px) { .log-row .grow { white-space: normal; } }
