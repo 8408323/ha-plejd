@@ -518,7 +518,7 @@ wheels = [
 
 [[package]]
 name = "ha-plejd"
-version = "0.14.2"
+version = "0.14.3"
 source = { virtual = "." }
 
 [package.dev-dependencies]
