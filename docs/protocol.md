@@ -104,6 +104,7 @@ have the Ack bit set in `command_type`).
 |--------|------|---------|-----|
 | `0x00C8` (200) | output_state_and_level | set `[output, on?1:0, level, level]`; read `[output]` | on/off + brightness; **primary** light/switch control + state |
 | `0x0098` (152) | group_state_and_level | `[on?1:0, level, level]` | fast group/all broadcast |
+| `0x0097` (151) | state | `[01]` on / `[00]` off, no level | state-only on/off to an output or room address (what the app and wall switches send); keeps the remembered dim level. An off as `0x0098 [00 00 00]` stores level 0, so the next on comes back at minimum |
 | `0x0021` (33) | scene | `[index]` (DontRespond); `index+0x80` = power-off scene | trigger scene |
 | `0x0420` (1056) | output_set | mini-package (Source `03 08`, Channel `0a <out>`, StateNLevel `00 <on> <lvl> <lvl>`); cover/CCT sub-packages | modern firmware control |
 | `0x0306` (774) | jal_set_level | `[u16 level]` | JAL blind position |

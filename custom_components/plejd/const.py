@@ -160,6 +160,9 @@ CMD_DEVICE_MAC = 0x0003
 CMD_DEVICE_FW_VERSION = 0x0004
 CMD_GROUP_STATE_AND_LEVEL = 0x0098  # broadcast on/off + level to a group/all
 CMD_INPUT_BUTTON = 0x0097  # button press broadcast on an input address: data=[01 pressed/00 released]
+# The same opcode written to an output or room address is a state-only on/off ([01]/[00]): what the
+# Plejd app and wall switches send. Unlike 0x0098 it leaves the dimmer's remembered level alone.
+CMD_STATE = 0x0097
 CMD_OUTPUT_SET = 0x0420  # modern "mini-package" output protocol (newer firmware)
 SUBPKG_SOURCE = 3  # mini-package sub-package type: source flag
 SUBPKG_LUX = 6  # mini-package sub-package type: ambient light
