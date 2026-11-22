@@ -6,6 +6,21 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.14.3] - 2026-11-22
+
+### Fixed
+
+- Turning a Plejd light or room off from Home Assistant no longer makes it
+  forget its brightness. Every off was sent as on/off + level 0, which the
+  dimmer stored, so the next on from a wall switch, remote or the Plejd app
+  came back at minimum brightness. Off is now the same state-only command the
+  Plejd app and wall switches send, so the light comes back at its previous
+  level wherever it is turned on (#166). This covers single lights, rooms and
+  `plejd.all_off`. A light that already has level 0 stored comes back dim once
+  more; dim it up once and it keeps its level from then on.
+- The activity log no longer credits an off from Home Assistant to the Plejd
+  app or the light's own switch when it runs through a gateway (#166).
+
 ## [0.14.2] - 2026-11-14
 
 A maintenance release with no change in behaviour. It clears the repository's
