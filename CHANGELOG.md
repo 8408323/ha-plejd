@@ -6,6 +6,30 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- The Plejd dashboard has a new look, shared with the other Villa panels. A
+  green hero at the top says how many lights are on right now and in which
+  rooms, with lights on, rooms lit and scenes as small tiles. Chips show
+  whether Plejd is connected through the gateway or Bluetooth and whether a
+  device needs attention, and a button turns everything off. The tabs are pill
+  navigation in the hero, and on the other tabs the hero shrinks to the
+  headline. The dashboard has its own light and dark theme, which follows Home
+  Assistant by default and can be switched with the sun/moon button or under
+  Settings. On a phone the tabs get their own row, and a menu button opens the
+  Home Assistant sidebar.
+- The dashboard's long explanations sit behind a small ⓘ next to each
+  heading. It shows on hover or keyboard focus, and a tap opens it on a phone.
+  Below 600 px every form shows one field per row, so the time and fade fields
+  no longer overlap or stick out of their card on a phone. The lamp lists are
+  one column with full names, and sections are spaced evenly. Checkboxes and
+  time fields follow the dashboard's own theme, not Home Assistant's.
+- Buttons, switches and sliders keep their distance from each other. On a touch
+  screen every tap target is at least 40–44 px, and the sliders look the same in
+  every browser, with a filled track and a round handle. On a phone a room's
+  brightness slider and switch get a row of their own, and lamp names wrap over
+  two lines instead of being cut off.
+
 ## [0.14.3] - 2026-11-22
 
 ### Fixed

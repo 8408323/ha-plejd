@@ -125,3 +125,41 @@ export function buildSchedule(form: ScheduleForm, t: T) {
   if (!Number.isInteger(fade) || fade < 0) throw new Error(t.err_sched_fade);
   return { name, days: [...form.days].sort((a, b) => a - b), time: form.time, scene: Number(form.scene), fade };
 }
+
+// ── the hero's site summary ────────────────────────────────────────────────
+
+type SumState = { entity_id: string; state: string; attributes: Record<string, any> };
+export type SumRoom = { name: string; entity_id: string | null; lights: string[] };
+export type Connection = "gateway" | "ble" | "disconnected" | "unknown";
+export type SiteSummary = {
+  lightsOn: number; lights: number; roomsOn: number; rooms: number; litRooms: string[]; scenes: number; faults: number; connection: Connection;
+};
+const LINKS = ["gateway", "ble", "disconnected"];
+
+// Counts for the hero, from the Plejd entities only. A room's group light is not a lamp of its own, so it
+// is left out once the rooms are known; a room counts as lit when any of its lights is on.
+export function siteSummary(states: SumState[], rooms: SumRoom[] | null): SiteSummary {
+  const groups = new Set((rooms ?? []).map((r) => r.entity_id).filter(Boolean));
+  const of = (domain: string) => states.filter((s) => s.entity_id.startsWith(`${domain}.`));
+  const lamps = of("light").filter((s) => !groups.has(s.entity_id));
+  const on = new Set(lamps.filter((s) => s.state === "on").map((s) => s.entity_id));
+  const withLights = (rooms ?? []).filter((r) => r.lights.length);
+  // The integration's connection sensor (sensor.py PlejdConnectivitySensor): an enum of the transports.
+  const link = of("sensor").find((s) => Array.isArray(s.attributes.options) && LINKS.every((o) => s.attributes.options.includes(o)));
+  const lit = withLights.filter((r) => r.lights.some((id) => on.has(id)));
+  return {
+    lightsOn: on.size,
+    lights: lamps.length,
+    roomsOn: lit.length,
+    rooms: withLights.length,
+    litRooms: lit.map((r) => r.name),
+    scenes: of("scene").length,
+    faults: of("binary_sensor").filter((s) => s.attributes.device_class === "problem" && s.state === "on").length,
+    connection: link && LINKS.includes(link.state) ? (link.state as Connection) : "unknown",
+  };
+}
+
+export type Theme = "auto" | "light" | "dark";
+// "auto" follows Home Assistant's dark mode, or the system's when HA doesn't say.
+export const isDark = (theme: Theme, haDark: boolean | undefined, sysDark: boolean) =>
+  theme === "auto" ? haDark ?? sysDark : theme === "dark";

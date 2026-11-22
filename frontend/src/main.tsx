@@ -2,6 +2,17 @@ import { createRoot, Root } from "react-dom/client";
 import App from "./App";
 import css from "./styles.css?inline";
 
+// The panel's own typeface, shared with the other Villa panels. @font-face doesn't work inside a shadow
+// root, so the stylesheet goes into the document once; without internet the system font is used.
+function loadFont() {
+  if (document.getElementById("plejd-font")) return;
+  const link = document.createElement("link");
+  link.id = "plejd-font";
+  link.rel = "stylesheet";
+  link.href = "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap";
+  document.head.append(link);
+}
+
 class PlejdPanel extends HTMLElement {
   private root?: Root;
   private _hass: any;
@@ -10,6 +21,7 @@ class PlejdPanel extends HTMLElement {
   set narrow(n: boolean) { this._narrow = n; this.render(); }
   connectedCallback() {
     if (this.root) return;
+    loadFont();
     // a re-attached element keeps its shadow root; attachShadow() would throw a second time
     const shadow = this.shadowRoot ?? this.attachShadow({ mode: "open" });
     shadow.replaceChildren();

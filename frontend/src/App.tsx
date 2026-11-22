@@ -1,7 +1,7 @@
-import { createContext, useContext, useEffect, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useId, useRef, useState } from "react";
 import { LANGS, T, pick } from "./i18n";
 import { DEFAULT_STYLE, LAMP_STYLES, LampStyle, lampImage } from "./lamps";
-import { BindingForm, PRESS_ACTIONS, PressRow, Trigger, buildBinding, buildSchedule, clampPosition, fmt, moveId, orderIds, stepTemperature, triggerLabel } from "./logic";
+import { BindingForm, PRESS_ACTIONS, PressRow, Theme, Trigger, buildBinding, buildSchedule, clampPosition, fmt, isDark, moveId, orderIds, siteSummary, stepTemperature, triggerLabel } from "./logic";
 
 // Home Assistant's panel host sets `hass` (states, entity/device/area registries, callWS/callService).
 type St = { entity_id: string; state: string; attributes: Record<string, any> };
@@ -21,6 +21,8 @@ const TCtx = createContext<T>(LANGS.en[0]);
 const useT = () => useContext(TCtx);
 
 const errMsg = (e: any) => e?.message || String(e);
+// The filled part of a 0/1-100 slider, for the track drawn in styles.css (native fills differ per browser).
+const fill = (v: number, min: number) => ({ "--fill": `${((v - min) / (100 - min)) * 100}%` }) as React.CSSProperties;
 const nameOf = (s: St) => s.attributes.friendly_name || s.entity_id;
 const byName = (a: { name: string }, b: { name: string }) => a.name.localeCompare(b.name);
 const isPlejd = (hass: any, s: St) => hass.entities?.[s.entity_id]?.platform === "plejd" || s.attributes.attribution === "Plejd";
@@ -50,15 +52,39 @@ export default function App({ hass, narrow }: { hass: any; narrow: boolean }) {
       .catch((e: any) => console.warn("Plejd panel: failed to load area/device registries", e));
   }, []);
   const ctx = { hass, reg: fetched ?? { areas: hass.areas || {}, devices: hass.devices || {} } };
+  // Light / dark / auto, remembered per browser like the language.
+  const [theme, setThemeState] = useState<Theme>(() => {
+    try { return (localStorage.getItem("plejd_theme") as Theme) || "auto"; } catch { return "auto"; }
+  });
+  const setTheme = (x: Theme) => {
+    setThemeState(x);
+    try { x === "auto" ? localStorage.removeItem("plejd_theme") : localStorage.setItem("plejd_theme", x); } catch { /* private mode */ }
+  };
+  const dark = isDark(theme, hass.themes?.darkMode, window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false);
+  // In the narrow layout HA hides its sidebar and a custom panel has no toolbar: open it from here.
+  const toggleMenu = (e: React.MouseEvent) => e.currentTarget.dispatchEvent(new Event("hass-toggle-menu", { bubbles: true, composed: true }));
   return (
     <TCtx.Provider value={t}>
-    <div className={`page ${narrow ? "narrow" : ""}`} lang={t.lang}>
-      <header>
-        <h1>Plejd</h1>
-        <nav className="tabs">
-          {TABS.map((x) => <button key={x} className={tab === x ? "on" : ""} onClick={() => go(x)}>{tabLabels[x]}</button>)}
-        </nav>
+    <div className={`page ${narrow ? "narrow" : ""} ${dark ? "dark" : ""}`} lang={t.lang}>
+      <header className="hero">
+        <div className="wrap">
+          <div className="hero-top">
+            <div className="brand">
+              {narrow && <button className="menu" onClick={toggleMenu} aria-label={t.menu} title={t.menu}>☰</button>}
+              <Logo /><span className="brand-name">Plejd<small>{t.tagline}</small></span>
+            </div>
+            <div className="hero-actions">
+              <nav className="tabs">
+                {TABS.map((x) => <button key={x} className={tab === x ? "on" : ""} aria-current={tab === x ? "page" : undefined} onClick={() => go(x)}>{tabLabels[x]}</button>)}
+              </nav>
+              <button className="theme-btn" onClick={() => setTheme(dark ? "light" : "dark")}
+                title={dark ? t.theme_light : t.theme_dark} aria-label={dark ? t.theme_light : t.theme_dark}>{dark ? "☀️" : "🌙"}</button>
+            </div>
+          </div>
+          <Hero hass={hass} compact={tab !== "devices"} onFaults={() => go("devices")} />
+        </div>
       </header>
+      <main className="wrap">
       {tab === "devices" && (
         <div className="grid">
           <div className="rooms"><Lights {...ctx} /></div>
@@ -67,20 +93,112 @@ export default function App({ hass, narrow }: { hass: any; narrow: boolean }) {
       )}
       {tab === "automations" && <div className="grid"><Schedules {...ctx} /><AppSchedules {...ctx} /><Bindings {...ctx} /></div>}
       {tab === "log" && <div className="grid"><ActivityLog {...ctx} /></div>}
-      {tab === "settings" && <div className="grid"><Settings {...ctx} /><Language lang={lang} setLang={setLang} /><AddDevice {...ctx} /></div>}
+      {tab === "settings" && <div className="grid"><Settings {...ctx} /><Language lang={lang} setLang={setLang} theme={theme} setTheme={setTheme} /><AddDevice {...ctx} /></div>}
+      </main>
     </div>
     </TCtx.Provider>
   );
 }
 
-function Card({ title, count, wide, children }: { title: string; count?: number; wide?: boolean; children: React.ReactNode }) {
+// The panel's mark: a lit bulb over a mesh of three nodes.
+function Logo() {
+  return (
+    <svg className="logo" viewBox="0 0 34 34" aria-hidden="true">
+      <rect width="34" height="34" rx="10" fill="rgba(255,255,255,.14)" />
+      <circle cx="17" cy="14" r="8.5" fill="#ffd27a" opacity=".28" />
+      <path d="M17 6.5a6.5 6.5 0 0 0-3.9 11.7c.6.5.9 1.1.9 1.8v.7h6v-.7c0-.7.3-1.3.9-1.8A6.5 6.5 0 0 0 17 6.5z" fill="#ffd27a" />
+      <rect x="14" y="22" width="6" height="2.2" rx="1.1" fill="#fff" opacity=".92" />
+      <rect x="14.8" y="25.2" width="4.4" height="2" rx="1" fill="#fff" opacity=".75" />
+    </svg>
+  );
+}
+
+// The hero's headline: how many lights are on right now, and the site at a glance.
+// Compact on the other tabs: just the headline and the status chips, so the tab's own content starts higher.
+function Hero({ hass, compact, onFaults }: Ctx & { compact: boolean; onFaults: () => void }) {
+  const t = useT();
+  const rooms = useRooms(hass);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const states = (Object.values(hass.states) as St[]).filter((s) => isPlejd(hass, s));
+  const sum = siteSummary(states, rooms);
+  const allOff = () => {
+    setBusy(true); setError("");
+    hass.callService("plejd", "all_off", {})
+      .catch((e: any) => setError(fmt(t.site_off_failed, { error: errMsg(e) })))
+      .finally(() => setBusy(false));
+  };
+  const headline = rooms === null ? t.hero_loading : sum.lightsOn === 0 ? t.hero_none : sum.lightsOn === 1 ? t.hero_on_one : fmt(t.hero_on, { n: sum.lightsOn });
+  const link = sum.connection === "gateway" || sum.connection === "ble" ? "ok" : sum.connection === "disconnected" ? "bad" : "";
+  return (
+    <div className={`hero-main ${compact ? "compact" : ""}`}>
+      <div className="hero-head">
+        {!compact && <div className="hero-kicker">{t.hero_now}</div>}
+        <div className="hero-title">{headline}</div>
+        {!compact && sum.litRooms.length > 0 && <div className="hero-sub">{fmt(t.hero_lit_in, { rooms: sum.litRooms.join(" · ") })}</div>}
+        {error && <div className="hero-error">{error}</div>}
+      </div>
+      <div className="hero-side">
+        <span className={`chip status ${link}`}><span className="chip-dot" />{t[`conn_${sum.connection}`]}</span>
+        {sum.faults > 0
+          ? <button className="chip status warn" onClick={onFaults}><span className="chip-dot" />{fmt(t.faults_n, { n: sum.faults })}</button>
+          : <span className="chip status ok"><span className="chip-dot" />{t.all_ok}</span>}
+        {sum.lightsOn > 0 && <button className="hero-btn" disabled={busy} onClick={allOff}>⏻ {t.site_off}</button>}
+      </div>
+      {!compact && <div className="hero-stats">
+        <div className="hero-stat"><span className="label">{t.stat_lights}</span><b>{rooms === null ? "–" : sum.lightsOn}<small> / {rooms === null ? "–" : sum.lights}</small></b></div>
+        <div className="hero-stat"><span className="label">{t.stat_rooms}</span><b>{rooms === null ? "–" : sum.roomsOn}<small> / {rooms === null ? "–" : sum.rooms}</small></b></div>
+        <div className="hero-stat"><span className="label">{t.stat_scenes}</span><b>{sum.scenes}</b></div>
+      </div>}
+    </div>
+  );
+}
+
+// The Plejd rooms for the hero's counts; retried while Plejd is still starting (like the room cards).
+function useRooms(hass: any): Room[] | null {
+  const [rooms, setRooms] = useState<Room[] | null>(null);
+  const [version, setVersion] = useState(0);
+  useEffect(() => {
+    const sub = hass.connection.subscribeEvents(() => setVersion((v) => v + 1), "plejd_rooms_changed");
+    return () => { sub.then((unsub: () => void) => unsub()).catch(() => {}); };
+  }, []);
+  useEffect(() => {
+    let cancelled = false;
+    let timer = 0;
+    const load = () => hass.callWS({ type: "plejd/rooms" })
+      .then((r: any) => { if (!cancelled) setRooms(r.rooms); })
+      .catch(() => { if (!cancelled) timer = window.setTimeout(load, 5000); });
+    load();
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [hass.entities, version]);
+  return rooms;
+}
+
+function Card({ title, count, wide, info, children }: { title: string; count?: number; wide?: boolean; info?: string; children: React.ReactNode }) {
   return (
     <section className={`card ${wide ? "wide" : ""}`}>
-      <div className="card-head"><h2>{title}</h2>{count != null && <span className="count">{count}</span>}</div>
+      <div className="card-head"><h2>{title}{info && <Info text={info} />}</h2>{count != null && <span className="count">{count}</span>}</div>
       {children}
     </section>
   );
 }
+
+// A section's explanation behind an ⓘ: shown on hover or keyboard focus on a desktop, toggled by a tap on a phone.
+function Info({ text }: { text: string }) {
+  const t = useT();
+  const [open, setOpen] = useState(false);
+  const id = useId();
+  return (
+    <span className={`info ${open ? "open" : ""}`} onKeyDown={(e) => { if (e.key === "Escape") setOpen(false); }}>
+      <button type="button" className="info-btn" aria-label={t.more_info} aria-expanded={open} aria-describedby={id}
+        onClick={() => setOpen((o) => !o)}>i</button>
+      <span className="info-pop" role="tooltip" id={id}>{text}</span>
+    </span>
+  );
+}
+
+// A heading inside a card, with its explanation behind an ⓘ.
+const H3 = ({ title, info }: { title: string; info?: string }) => <h3>{title}{info && <Info text={info} />}</h3>;
 
 const Empty = ({ text }: { text: string }) => <p className="muted">{text}</p>;
 
@@ -334,7 +452,7 @@ function RoomControl({ hass, s }: Ctx & { s: St }) {
   const l = useLight(hass, s);
   return (
     <div className="room-control">
-      {l.dimmable && <input type="range" min={1} max={100} value={l.pct} disabled={l.unavailable} className={l.on ? "" : "idle"}
+      {l.dimmable && <input type="range" min={1} max={100} value={l.pct} style={fill(l.pct, 1)} disabled={l.unavailable} className={l.on ? "" : "idle"}
         aria-label={fmt(t.brightness, { name: nameOf(s) })} onChange={(e) => l.slide(Number(e.target.value))} />}
       <button type="button" role="switch" aria-checked={l.on} aria-label={fmt(l.on ? t.turn_off : t.turn_on, { name: nameOf(s) })}
         className={`switch ${l.on ? "on" : ""}`} disabled={l.unavailable} onClick={l.toggle} />
@@ -374,7 +492,7 @@ function LightTile({ hass, s, style, edit }: Ctx & { s: St; style: LampStyle; ed
         <>
           <div className="tile-name" title={nameOf(s)}>{nameOf(s)}</div>
           <div className="muted">{l.level}</div>
-          {l.dimmable && <input type="range" min={1} max={100} value={l.pct} disabled={l.unavailable} className={l.on ? "" : "idle"}
+          {l.dimmable && <input type="range" min={1} max={100} value={l.pct} style={fill(l.pct, 1)} disabled={l.unavailable} className={l.on ? "" : "idle"}
             aria-label={fmt(t.brightness, { name: nameOf(s) })} onChange={(e) => l.slide(Number(e.target.value))} />}
         </>
       )}
@@ -545,7 +663,7 @@ function CoverRow({ hass, s }: Ctx & { s: St }) {
         <button className="btn" disabled={unavailable} onClick={() => command("open_cover", {}, 100)}>{t.open}</button>
         <button className="btn ghost" disabled={unavailable} onClick={() => command("stop_cover", {}, null)}>{t.stop}</button>
         <button className="btn" disabled={unavailable} onClick={() => command("close_cover", {}, 0)}>{t.close}</button>
-        {canSetPosition && <input ref={slider} type="range" min={0} max={100} value={drag ?? known ?? 50} disabled={unavailable}
+        {canSetPosition && <input ref={slider} type="range" min={0} max={100} value={drag ?? known ?? 50} style={fill(drag ?? known ?? 50, 0)} disabled={unavailable}
           aria-label={fmt(t.position, { name: nameOf(s) })} onChange={(e) => setDrag(Number(e.target.value))} onPointerCancel={() => setDrag(null)} />}
       </div>
     </div>
@@ -635,8 +753,7 @@ function AppSchedules({ hass }: Ctx) {
   };
   useEffect(load, []);
   return (
-    <Card title={t.app_schedules} wide>
-      <p className="lead">{t.app_schedules_lead}</p>
+    <Card title={t.app_schedules} wide info={t.app_schedules_lead}>
       {error ? <><p className="error">{error}</p><div className="actions"><button className="btn" onClick={load}>{t.retry}</button></div></>
         : list === null ? <Empty text={t.loading} />
         : !list.length ? <Empty text={t.no_app_schedules} />
@@ -704,8 +821,7 @@ function Schedules({ hass }: Ctx) {
   const set = (patch: Partial<typeof form>) => setForm({ ...form, ...patch });
 
   return (
-    <Card title={t.schedules} wide>
-      <p className="lead">{t.schedules_lead}</p>
+    <Card title={t.schedules} wide info={t.schedules_lead}>
       {list === null ? (
         loadError ? <><p className="error">{loadError}</p><div className="actions"><button className="btn" onClick={load}>{t.retry}</button></div></> : <Empty text={t.loading} />
       ) : (
@@ -841,8 +957,7 @@ function Bindings({ hass, reg }: RegCtx) {
     setForm({ ...form, presses: form.presses.map((p, j) => (j === i ? { ...p, ...patch } : p)) });
 
   return (
-    <Card title={t.bindings} wide>
-      <p className="lead">{t.bindings_lead}</p>
+    <Card title={t.bindings} wide info={t.bindings_lead}>
       {list === null ? (
         loadError ? <><p className="error">{loadError}</p><div className="actions"><button className="btn" onClick={load}>{t.retry}</button></div></> : <Empty text={t.loading} />
       ) : (
@@ -991,13 +1106,11 @@ function Settings({ hass }: Ctx) {
           <div className="form" />
         </>
       )}
-      <h3>{t.areas}</h3>
-      <p className="lead">{t.areas_lead}</p>
+      <H3 title={t.areas} info={t.areas_lead} />
       <div className="checks col">
         <label><input type="checkbox" checked={draft.sync_areas} onChange={(e) => set({ sync_areas: e.target.checked })} />{t.sync_areas}</label>
       </div>
-      <h3>{t.holiday}</h3>
-      <p className="lead">{t.holiday_lead}</p>
+      <H3 title={t.holiday} info={t.holiday_lead} />
       <div className="fields">
         <label className="f"><span>{t.window_start}</span><input type="time" value={draft.holiday_window_start} onChange={(e) => set({ holiday_window_start: e.target.value })} /></label>
         <label className="f"><span>{t.window_end}</span><input type="time" value={draft.holiday_window_end} onChange={(e) => set({ holiday_window_end: e.target.value })} /></label>
@@ -1056,8 +1169,7 @@ function AddDevice({ hass }: Ctx) {
   };
 
   return (
-    <Card title={t.add_device}>
-      <p className="lead">{t.add_device_lead}</p>
+    <Card title={t.add_device} info={t.add_device_lead}>
       {scan && !scan.bluetooth && <p className="error">{t.no_bluetooth}</p>}
       {scan?.bluetooth && !scan.devices.length && <p className="muted">{t.no_new_devices}</p>}
       {scan?.devices.map((d) => (
@@ -1087,16 +1199,25 @@ function AddDevice({ hass }: Ctx) {
   );
 }
 
-function Language({ lang, setLang }: { lang: string | null; setLang: (x: string | null) => void }) {
+function Language({ lang, setLang, theme, setTheme }: {
+  lang: string | null; setLang: (x: string | null) => void; theme: Theme; setTheme: (x: Theme) => void;
+}) {
   const t = useT();
+  const label = { auto: t.theme_auto, light: `☀️ ${t.theme_light}`, dark: `🌙 ${t.theme_dark}` };
   return (
-    <Card title={t.language}>
+    <Card title={t.appearance}>
       <label className="f"><span>{t.language}</span>
         <select value={lang ?? ""} onChange={(e) => setLang(e.target.value || null)}>
           <option value="">{t.lang_auto}</option>
           {Object.entries(LANGS).map(([code, [, name]]) => <option key={code} value={code}>{name}</option>)}
         </select>
       </label>
+      <span className="label theme-label">{t.theme}</span>
+      <div className="seg theme-seg" role="radiogroup" aria-label={t.theme}>
+        {(["auto", "light", "dark"] as const).map((x) => (
+          <button key={x} role="radio" aria-checked={theme === x} className={theme === x ? "on" : ""} onClick={() => setTheme(x)}>{label[x]}</button>
+        ))}
+      </div>
     </Card>
   );
 }
@@ -1212,8 +1333,7 @@ function ActivityLog({ hass }: Ctx) {
   const maxExtra = Math.max(0, 30 - LOG_RANGES[range]);
   return (
     <>
-      <Card title={t.log_title} wide>
-        <p className="lead">{t.log_lead}</p>
+      <Card title={t.log_title} wide info={t.log_lead}>
         <div className="log-filters">
           <input type="search" className="log-search" placeholder={t.log_search} aria-label={t.log_search} value={query} onChange={(e) => setQuery(e.target.value)} />
           <div className="seg" role="radiogroup" aria-label={t.log_range}>
@@ -1308,8 +1428,7 @@ function NightWatch({ hass }: Ctx) {
   const plannedLabels: Record<string, string> = { automation: t.srcgrp_auto, script: t.srcgrp_auto, plejd_schedule: t.nw_schedules };
   const toggleIn = (list: string[], item: string, on: boolean) => (on ? [...new Set([...list, item])] : list.filter((x) => x !== item));
   return (
-    <Card title={t.nw_title} wide>
-      <p className="lead">{t.nw_lead}</p>
+    <Card title={t.nw_title} wide info={t.nw_lead}>
       <label className="checks"><span><input type="checkbox" checked={draft.enabled} onChange={(e) => set({ enabled: e.target.checked })} /> {t.nw_enabled}</span></label>
       <div className="fields">
         <label className="f"><span>{t.nw_from}</span><input type="time" value={draft.start} onChange={(e) => set({ start: e.target.value })} /></label>

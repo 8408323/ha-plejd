@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { LANGS } from "../frontend/src/i18n.ts";
-import { buildBinding, buildSchedule, clampPosition, fmt, moveId, orderIds, stepTemperature, triggerLabel } from "../frontend/src/logic.ts";
+import { buildBinding, buildSchedule, clampPosition, fmt, isDark, moveId, orderIds, siteSummary, stepTemperature, triggerLabel } from "../frontend/src/logic.ts";
 
 const en = LANGS.en[0];
 
@@ -129,4 +129,59 @@ test("moving a card puts it at the target position, clamped to the list", () => 
   assert.deepEqual(moveId(["a", "b", "c"], "a", 2), ["b", "c", "a"]);
   assert.deepEqual(moveId(["a", "b", "c"], "c", 0), ["c", "a", "b"]);
   assert.deepEqual(moveId(["a", "b", "c"], "b", 99), ["a", "c", "b"]);
+});
+
+const st = (entity_id, state, attributes = {}) => ({ entity_id, state, attributes });
+const LINK = { device_class: "enum", options: ["gateway", "ble", "disconnected"] };
+const SITE = [
+  st("light.kok", "on"), st("light.tak", "on"), st("light.spot", "off"), st("light.golv", "off"), st("light.porch", "unavailable"),
+  st("scene.evening", "unknown"), st("scene.morning", "unknown"),
+  st("binary_sensor.dimmer_fault", "on", { device_class: "problem" }), st("binary_sensor.other_fault", "off", { device_class: "problem" }),
+  st("binary_sensor.hall_motion", "on", { device_class: "motion" }),
+  st("sensor.plejd_connection", "gateway", LINK), st("sensor.hall_lux", "42.5", { device_class: "illuminance" }),
+];
+const ROOMS = [
+  { name: "Kök", entity_id: "light.kok", lights: ["light.tak", "light.spot"] },
+  { name: "Vardagsrum", entity_id: "light.vardagsrum", lights: ["light.golv"] },
+  { name: "Tomt", entity_id: "light.tomt", lights: [] },
+];
+
+test("the hero counts lamps, not the room group lights, and names the lit rooms", () => {
+  assert.deepEqual(siteSummary(SITE, ROOMS), {
+    lightsOn: 1, lights: 4, roomsOn: 1, rooms: 2, litRooms: ["Kök"], scenes: 2, faults: 1, connection: "gateway",
+  });
+});
+
+test("before the rooms load every light counts, and no room is lit", () => {
+  const s = siteSummary(SITE, null);
+  assert.equal(s.lightsOn, 2);
+  assert.equal(s.lights, 5);
+  assert.deepEqual([s.rooms, s.roomsOn, s.litRooms], [0, 0, []]);
+});
+
+test("the connection comes from the transport sensor, unknown without one", () => {
+  assert.equal(siteSummary([st("sensor.c", "ble", LINK)], []).connection, "ble");
+  assert.equal(siteSummary([st("sensor.c", "disconnected", LINK)], []).connection, "disconnected");
+  assert.equal(siteSummary([st("sensor.c", "unavailable", LINK)], []).connection, "unknown");
+  assert.equal(siteSummary([st("sensor.c", "gateway", { options: ["gateway"] })], []).connection, "unknown");
+  assert.equal(siteSummary([], []).connection, "unknown");
+});
+
+test("auto follows the Home Assistant dark mode, then the system; light and dark are fixed", () => {
+  assert.equal(isDark("auto", true, false), true);
+  assert.equal(isDark("auto", false, true), false);
+  assert.equal(isDark("auto", undefined, true), true);
+  assert.equal(isDark("auto", undefined, false), false);
+  assert.equal(isDark("light", true, true), false);
+  assert.equal(isDark("dark", false, false), true);
+});
+
+test("every language has the hero and theme strings", () => {
+  for (const [code, [t]] of Object.entries(LANGS)) {
+    for (const k of ["tagline", "hero_on", "hero_lit_in", "conn_gateway", "conn_unknown", "faults_n", "site_off", "theme_auto", "menu"]) {
+      assert.ok(t[k], `${code}.${k}`);
+    }
+    assert.match(t.hero_on, /\{n\}/, code);
+    assert.match(t.hero_lit_in, /\{rooms\}/, code);
+  }
 });
