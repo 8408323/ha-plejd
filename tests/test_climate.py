@@ -34,9 +34,17 @@ class _Coordinator:
         self.listeners: list = []
         self.available = True
         self.temperatures: dict = {}
+        self.setpoint = None
+        self.mode = None
 
     def climate_temperature(self, address, sensor):
         return self.temperatures.get((address, sensor))
+
+    def climate_setpoint(self, address):
+        return self.setpoint
+
+    def climate_mode(self, address):
+        return self.mode
 
     def async_add_listener(self, cb):
         self.listeners.append(cb)
@@ -134,3 +142,18 @@ def test_current_temperature_falls_back_to_room_without_a_floor_reading():
 
 def test_current_temperature_is_none_before_any_reading():
     assert PlejdClimate(_Coordinator([]), _device()).current_temperature is None
+
+
+def test_target_and_preset_show_what_the_thermostat_reports():
+    coord = _Coordinator([])
+    coord.setpoint, coord.mode = 17.0, 3  # Boost
+    c = PlejdClimate(coord, _device())
+    assert c.target_temperature == 17.0 and c.preset_mode == "boost"
+
+
+def test_target_and_preset_fall_back_before_a_reading_or_for_an_unknown_mode():
+    coord = _Coordinator([])
+    c = PlejdClimate(coord, _device())
+    assert c.target_temperature == 21.0 and c.preset_mode == "none"
+    coord.mode = 99
+    assert c.preset_mode == "none"

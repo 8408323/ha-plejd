@@ -64,6 +64,8 @@ from .const import (
     CMD_OUTPUT_SPEED,
     CMD_OUTPUT_STATE_AND_LEVEL,
     CMD_SCENE,
+    CMD_TRM_MODE,
+    CMD_TRM_SETPOINT,
     CMD_TRM_TEMP_READING,
     CONF_CRYPTO_KEY,
     CONF_DEVICE_ADDRESSES,
@@ -100,6 +102,8 @@ from .protocol import (
     MotionEvent,
     OutputSettings,
     OutputState,
+    decode_climate_mode,
+    decode_climate_setpoint,
     decode_climate_temperature,
     decode_motion,
     decode_notify_events,
@@ -115,6 +119,12 @@ RECONNECT_MAX_DELAY = 60.0
 NOTIFY_POLL_INTERVAL = timedelta(minutes=10)  # device-health (NotifyEvents) poll cadence
 # Thermostat temperatures (0x045B) are only sent when asked for, so they are polled.
 CLIMATE_POLL_INTERVAL = timedelta(minutes=5)
+# Right after connecting, a thermostat sometimes misses the first reads (seen through a gateway while the
+# fault poll is also going out); anything still unknown is read once more after this delay.
+CLIMATE_RETRY_DELAY = 30
+# Reads sent back-to-back to thermostats get answers lost (seen through a gateway: of four reads in a row
+# often only one or two came back); spaced a second apart they all do.
+CLIMATE_READ_GAP = 1.0
 CLOUD_POLL_INTERVAL = timedelta(hours=24)  # how often to check for site changes (added/renamed devices)
 # Minimum gap between setup-time self-heal attempts (see async_start). Much shorter than
 # CLOUD_POLL_INTERVAL because a real repair should take effect on the next setup retry rather
@@ -282,10 +292,15 @@ class PlejdCoordinator:
         self._faults: dict[int, frozenset[str]] = {}
         # address -> {sensor index -> °C}, from 0x045B read replies (see _async_poll_climate).
         self._climate_temperatures: dict[int, dict[int, float]] = {}
+        # address -> target °C / OperatingMode, from 0x045C / 0x045F read replies (or our own write until the
+        # confirming read comes back).
+        self._climate_setpoints: dict[int, float] = {}
+        self._climate_modes: dict[int, int] = {}
         self.firmware: dict[str, PlejdFirmwareStatus] = {}  # device_id -> firmware status
         self._clock_unsub: Callable[[], None] | None = None
         self._faults_unsub: Callable[[], None] | None = None
         self._climate_unsub: Callable[[], None] | None = None
+        self._climate_retry_unsub: Callable[[], None] | None = None
         self._cloud_poll_unsub: Callable[[], None] | None = None
         self._firmware_unsub: Callable[[], None] | None = None
         self._firmware_now_unsub: Callable[[], None] | None = None
@@ -463,6 +478,14 @@ class PlejdCoordinator:
         """A thermostat's last reported reading for one sensor (TRM_SENSOR_*), or None if none yet."""
         return self._climate_temperatures.get(address, {}).get(sensor)
 
+    def climate_setpoint(self, address: int) -> float | None:
+        """A thermostat's target temperature as last read (or last set), or None if unknown."""
+        return self._climate_setpoints.get(address)
+
+    def climate_mode(self, address: int) -> int | None:
+        """A thermostat's OperatingMode as last read (or last set), or None if unknown."""
+        return self._climate_modes.get(address)
+
     def device_address_for(self, device_id: str) -> int | None:
         """A physical device's own mesh address (for fault entities), or None if unresolved."""
         return self._device_addresses.get(device_id)
@@ -504,6 +527,16 @@ class PlejdCoordinator:
             if reading is not None:
                 sensor, celsius = reading
                 self._climate_temperatures.setdefault(command.address, {})[sensor] = celsius
+                self._notify_outputs()
+        elif command.command == CMD_TRM_SETPOINT:
+            setpoint = decode_climate_setpoint(command)
+            if setpoint is not None:
+                self._climate_setpoints[command.address] = setpoint
+                self._notify_outputs()
+        elif command.command == CMD_TRM_MODE:
+            mode = decode_climate_mode(command)
+            if mode is not None:
+                self._climate_modes[command.address] = mode
                 self._notify_outputs()
         elif command.command == CMD_NOTIFY_EVENTS:
             faults = decode_notify_events(command)
@@ -1125,20 +1158,48 @@ class PlejdCoordinator:
             self._climate_unsub()
         self._climate_unsub = async_track_time_interval(self.hass, self._async_poll_climate, CLIMATE_POLL_INTERVAL)
         await self._async_poll_climate(None)
+        if self._climate_retry_unsub is not None:
+            self._climate_retry_unsub()
+        self._climate_retry_unsub = async_call_later(self.hass, CLIMATE_RETRY_DELAY, self._async_retry_climate)
+
+    def _climate_addresses(self) -> list[int]:
+        return sorted({d.address for d in self.devices if d.category == CATEGORY_CLIMATE and d.address is not None})
 
     async def _async_poll_climate(self, _now: object) -> None:
-        """Ask every thermostat for its floor and room temperatures; replies arrive push-side.
+        """Read every thermostat's target, mode, floor and room temperature; replies arrive push-side.
 
         A thermostat without a floor sensor refuses that read, which simply leaves the
         floor reading unset.
         """
-        addresses = {d.address for d in self.devices if d.category == CATEGORY_CLIMATE and d.address is not None}
-        for address in sorted(addresses):
-            for sensor in (TRM_SENSOR_FLOOR, TRM_SENSOR_ROOM):
+        await self._async_read_climate(self._climate_addresses())
+
+    async def _async_retry_climate(self, _now: object) -> None:
+        """Read again any thermostat that has not answered its target or room temperature yet."""
+        self._climate_retry_unsub = None
+        missing = [
+            a
+            for a in self._climate_addresses()
+            if a not in self._climate_setpoints or self.climate_temperature(a, TRM_SENSOR_ROOM) is None
+        ]
+        await self._async_read_climate(missing)
+
+    async def _async_read_climate(self, addresses: list[int]) -> None:
+        first = True
+        for address in addresses:
+            reads = [
+                protocol.request_climate_setpoint(address),
+                protocol.request_climate_mode(address),
+                protocol.request_climate_temperature(address, TRM_SENSOR_FLOOR),
+                protocol.request_climate_temperature(address, TRM_SENSOR_ROOM),
+            ]
+            for vector in reads:
+                if not first:
+                    await asyncio.sleep(CLIMATE_READ_GAP)
+                first = False
                 try:
-                    await self._write_vector(protocol.request_climate_temperature(address, sensor))
+                    await self._write_vector(vector)
                 except Exception:  # noqa: BLE001 - best-effort per read; one failure shouldn't skip the rest
-                    _LOGGER.debug("Plejd temperature poll failed for thermostat %s", address, exc_info=True)
+                    _LOGGER.debug("Plejd thermostat read failed for %s", address, exc_info=True)
 
     async def _async_poll_faults(self, _now: object) -> None:
         # NotifyEvents belongs to the physical device, not any one output — poll the
@@ -1495,12 +1556,23 @@ class PlejdCoordinator:
         await self._write_vector(protocol.join_mesh_group(address, room_address))
 
     async def async_set_climate_setpoint(self, address: int, celsius: float) -> None:
-        """Set a thermostat target temperature."""
+        """Set a thermostat target temperature, then read it back.
+
+        The write gets no reply, so the new value is shown at once and the read that
+        follows confirms it, or puts back what the thermostat really holds if the write
+        was lost.
+        """
         await self._write_vector(protocol.set_climate_setpoint(address, celsius))
+        self._climate_setpoints[address] = celsius
+        self._notify_outputs()
+        await self._write_vector(protocol.request_climate_setpoint(address))
 
     async def async_set_climate_mode(self, address: int, mode: int) -> None:
-        """Set a thermostat operating mode."""
+        """Set a thermostat operating mode, then read it back (as for the setpoint)."""
         await self._write_vector(protocol.set_climate_mode(address, mode))
+        self._climate_modes[address] = mode
+        self._notify_outputs()
+        await self._write_vector(protocol.request_climate_mode(address))
 
     async def async_set_cover_position(self, address: int, position: int) -> None:
         """Move a cover to a position (0-100)."""
@@ -1525,6 +1597,9 @@ class PlejdCoordinator:
         if self._climate_unsub is not None:
             self._climate_unsub()
             self._climate_unsub = None
+        if self._climate_retry_unsub is not None:
+            self._climate_retry_unsub()
+            self._climate_retry_unsub = None
         if self._firmware_unsub is not None:
             self._firmware_unsub()
             self._firmware_unsub = None

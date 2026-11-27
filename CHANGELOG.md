@@ -15,6 +15,12 @@ All notable changes to this project are documented here. The format follows
   asked, so both are read every 5 minutes (0x045B, sensor 0 = floor, 1 = room),
   over the gateway or Bluetooth. Confirmed on two TRM-01 in floor regulation
   through a GWY-01.
+- TRM-01 target temperature and preset are read back from the thermostat
+  (0x045C and 0x045F reads) every 5 minutes and right after every change, so
+  a change made on the thermostat or in the Plejd app shows up in Home
+  Assistant, and a lost write is corrected instead of shown as taken. The
+  reads are spaced a second apart (back-to-back reads lose answers), and any
+  thermostat that hasn't answered 30 seconds after connecting is read again.
 
 ## [0.14.3] - 2026-11-22
 

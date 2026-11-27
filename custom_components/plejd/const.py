@@ -173,8 +173,8 @@ WINDOW_LEVEL = 1  # WindowControlType.Level
 SOURCE_MOTION = 3  # SourceFlags.Motion
 CMD_NOTIFY_EVENTS = 0x002B  # device fault flags (NotifyEvents bitfield)
 CMD_HARDFAULT_REASON = 0x001D  # struct: code(u32 le), line(u16 le), message(ascii)
-CMD_TRM_SETPOINT = 0x045C  # thermostat target temperature: u16le = round(C*10)
-CMD_TRM_MODE = 0x045F  # thermostat operating mode (OperatingMode enum)
+CMD_TRM_SETPOINT = 0x045C  # thermostat target temperature: u16le = round(C*10); a read (no data) replies the same
+CMD_TRM_MODE = 0x045F  # thermostat operating mode (OperatingMode enum); a read (no data) replies [mode]
 CMD_TRM_TEMP_READING = 0x045B  # temperature reading: read [sensor] -> reply [sensor, u16le C*10]
 # 0x045B sensor indices. Confirmed on two TRM-01 in floor regulation (stone floor, NTC floor
 # sensors) over the gateway: 0 tracks the floor sensor, 1 the built-in room sensor, and

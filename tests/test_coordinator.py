@@ -4047,6 +4047,12 @@ _TRM = {
 }
 
 
+@pytest.fixture(autouse=True)
+def _no_thermostat_read_gap(monkeypatch):
+    # The real one-second spacing between thermostat reads would only slow the suite down.
+    monkeypatch.setattr(coordinator_mod, "CLIMATE_READ_GAP", 0)
+
+
 def _gateway_entry_with_thermostat():
     entry = _gateway_entry()
     entry.data = {**entry.data, CONF_DEVICES: [_DEV, _TRM]}
@@ -4093,16 +4099,17 @@ async def test_thermostat_poll_failure_does_not_skip_other_reads(monkeypatch):
     from homeassistant.exceptions import HomeAssistantError
 
     c = PlejdCoordinator(_hass(), _gateway_entry_with_thermostat())
-    attempted: list[bytes] = []
+    attempted: list[tuple[int, bytes]] = []
 
     async def _write_vector(vector):
-        attempted.append(vector[5:])
+        attempted.append(((vector[3] << 8) | vector[4], vector[5:]))
         if vector[5:] == b"\x00":
             raise HomeAssistantError("not connected")
 
     monkeypatch.setattr(c, "_write_vector", _write_vector)
     await c._async_poll_climate(None)  # no exception propagates
-    assert attempted == [b"\x00", b"\x01"]  # the room read still went out after the floor read failed
+    # target, mode, floor (fails), room: the room read still went out after the floor read failed
+    assert attempted == [(0x045C, b""), (0x045F, b""), (0x045B, b"\x00"), (0x045B, b"\x01")]
 
 
 async def test_shutdown_stops_thermostat_polling(monkeypatch):
@@ -4115,3 +4122,102 @@ async def test_shutdown_stops_thermostat_polling(monkeypatch):
     assert c._climate_unsub is not None
     await c.async_shutdown()
     assert c._climate_unsub is None
+
+
+async def test_thermostat_setpoint_and_mode_replies_are_stored(monkeypatch):
+    from plejd.const import CMD_TRM_MODE, CMD_TRM_SETPOINT
+    from plejd.protocol import Command
+
+    monkeypatch.setattr(coordinator_mod, "PlejdGatewayConnection", _FakeGateway)
+    hass = _hass()
+    hass.session = object()
+    c = PlejdCoordinator(hass, _gateway_entry_with_thermostat())
+    await c.async_start()
+    updates: list[int] = []
+    c.async_add_listener(lambda: updates.append(1))
+    c._gateway.on_event(Command(47, 0x10, CMD_TRM_SETPOINT, bytes.fromhex("d200")))  # a write echo: ignored
+    c._gateway.on_event(Command(47, 0x02, CMD_TRM_MODE, b""))  # our own read echoed: ignored
+    assert c.climate_setpoint(47) is None and c.climate_mode(47) is None and updates == []
+    # Captured replies from a TRM-01 over the gateway: target 17.0 °C, mode 7 (Normal).
+    c._gateway.on_event(Command(47, 0x03, CMD_TRM_SETPOINT, bytes.fromhex("aa00")))
+    c._gateway.on_event(Command(47, 0x03, CMD_TRM_MODE, bytes.fromhex("07")))
+    assert c.climate_setpoint(47) == 17.0 and c.climate_mode(47) == 7
+    assert len(updates) == 2
+
+
+async def test_setting_a_thermostat_shows_it_at_once_and_reads_it_back(monkeypatch):
+    from plejd.protocol import (
+        decode_command,
+        request_climate_mode,
+        request_climate_setpoint,
+        set_climate_mode,
+        set_climate_setpoint,
+    )
+
+    monkeypatch.setattr(coordinator_mod, "PlejdGatewayConnection", _FakeGateway)
+    hass = _hass()
+    hass.session = object()
+    c = PlejdCoordinator(hass, _gateway_entry_with_thermostat())
+    await c.async_start()
+    c._gateway.writes.clear()
+    await c.async_set_climate_setpoint(47, 26.0)
+    await c.async_set_climate_mode(47, 3)
+    assert c._gateway.writes == [
+        set_climate_setpoint(47, 26.0),
+        request_climate_setpoint(47),
+        set_climate_mode(47, 3),
+        request_climate_mode(47),
+    ]
+    assert c.climate_setpoint(47) == 26.0 and c.climate_mode(47) == 3
+    assert decode_command(c._gateway.writes[1]).command_type == 0x02  # a Read, so the thermostat answers
+
+
+async def test_retry_reads_only_thermostats_that_have_not_answered(monkeypatch):
+    from plejd.const import CMD_TRM_SETPOINT, CMD_TRM_TEMP_READING
+    from plejd.protocol import Command, decode_command
+
+    entry = _gateway_entry()
+    second = {**_TRM, "device_id": "t2", "address": 49, "outputs": [49]}
+    entry.data = {**entry.data, CONF_DEVICES: [_DEV, _TRM, second]}
+    monkeypatch.setattr(coordinator_mod, "PlejdGatewayConnection", _FakeGateway)
+    hass = _hass()
+    hass.session = object()
+    c = PlejdCoordinator(hass, entry)
+    await c.async_start()
+    assert c._climate_retry_unsub is not None
+    # 47 answered target and room temperature; 49 answered nothing
+    c._gateway.on_event(Command(47, 0x03, CMD_TRM_SETPOINT, bytes.fromhex("aa00")))
+    c._gateway.on_event(Command(47, 0x03, CMD_TRM_TEMP_READING, bytes.fromhex("01da00")))
+    c._gateway.writes.clear()
+    await c._async_retry_climate(None)
+    assert {decode_command(w).address for w in c._gateway.writes} == {49}
+    assert c._climate_retry_unsub is None
+
+
+async def test_shutdown_cancels_the_thermostat_retry(monkeypatch):
+    monkeypatch.setattr(coordinator_mod, "PlejdGatewayConnection", _FakeGateway)
+    hass = _hass()
+    hass.session = object()
+    c = PlejdCoordinator(hass, _gateway_entry_with_thermostat())
+    await c.async_start()
+    await c._start_fault_polling()  # a reconnect re-arms the retry without leaking the old one
+    assert c._climate_retry_unsub is not None
+    await c.async_shutdown()
+    assert c._climate_retry_unsub is None
+
+
+async def test_thermostat_reads_are_spaced_apart(monkeypatch):
+    c = PlejdCoordinator(_hass(), _gateway_entry_with_thermostat())
+    monkeypatch.setattr(coordinator_mod, "CLIMATE_READ_GAP", 0.25)
+    events: list[object] = []
+
+    async def _write_vector(vector):
+        events.append("read")
+
+    async def _sleep(seconds):
+        events.append(seconds)
+
+    monkeypatch.setattr(c, "_write_vector", _write_vector)
+    monkeypatch.setattr(coordinator_mod.asyncio, "sleep", _sleep)
+    await c._async_poll_climate(None)
+    assert events == ["read", 0.25, "read", 0.25, "read", 0.25, "read"]

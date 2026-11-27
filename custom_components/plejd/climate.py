@@ -1,9 +1,11 @@
 """Plejd climate platform (TRM thermostats).
 
-Decoded from the app. Setpoint writes and the temperature read-back are confirmed on
-TRM-01 hardware in floor regulation; the operating-mode presets are not yet validated.
-The current temperature is the floor sensor's reading when the thermostat has one,
-otherwise its room sensor's (see the coordinator's temperature poll).
+Decoded from the app. Setpoint writes and the read-back of the target, the operating mode
+and the temperatures are confirmed on TRM-01 hardware in floor regulation; switching the
+operating-mode presets is not yet validated. Everything is read every 5 minutes (see the
+coordinator's thermostat poll), so a change made on the thermostat or in the Plejd app shows
+up here. The current temperature is the floor sensor's reading when the thermostat has
+one, otherwise its room sensor's.
 """
 
 from __future__ import annotations
@@ -70,6 +72,18 @@ class PlejdClimate(ClimateEntity):
     @property
     def available(self) -> bool:
         return self._coordinator.available
+
+    @property
+    def target_temperature(self) -> float | None:
+        setpoint = self._coordinator.climate_setpoint(self._device.address)
+        return setpoint if setpoint is not None else self._attr_target_temperature
+
+    @property
+    def preset_mode(self) -> str | None:
+        mode = self._coordinator.climate_mode(self._device.address)
+        if mode is None:
+            return self._attr_preset_mode
+        return TRM_PRESETS.get(mode, self._attr_preset_mode)
 
     @property
     def current_temperature(self) -> float | None:

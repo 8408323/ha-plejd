@@ -322,6 +322,37 @@ def set_climate_mode(address: int, mode: int) -> bytes:
     return encode_command(address, CMD_TRM_MODE, bytes([mode & 0xFF]), command_type=TYPE_DONT_RESPOND)
 
 
+def request_climate_setpoint(address: int) -> bytes:
+    """Read a thermostat's current target temperature (0x045C, Read, no data); see `decode_climate_setpoint`."""
+    return encode_command(address, CMD_TRM_SETPOINT, b"", command_type=TYPE_READ)
+
+
+def decode_climate_setpoint(cmd: Command) -> float | None:
+    """Decode a 0x045C read reply ([u16le °C×10], Ack bit set) into °C.
+
+    Our own setpoint writes (DontRespond, no Ack) and echoed reads are ignored, as is a value
+    with the top bit set.
+    """
+    if cmd.command != CMD_TRM_SETPOINT or not cmd.command_type & TYPE_ACK or len(cmd.data) < 2:
+        return None
+    raw = cmd.data[0] | (cmd.data[1] << 8)
+    if raw & 0x8000:
+        return None
+    return raw / 10
+
+
+def request_climate_mode(address: int) -> bytes:
+    """Read a thermostat's operating mode (0x045F, Read, no data); see `decode_climate_mode`."""
+    return encode_command(address, CMD_TRM_MODE, b"", command_type=TYPE_READ)
+
+
+def decode_climate_mode(cmd: Command) -> int | None:
+    """Decode a 0x045F read reply ([mode], Ack bit set) into the OperatingMode value."""
+    if cmd.command != CMD_TRM_MODE or not cmd.command_type & TYPE_ACK or not cmd.data:
+        return None
+    return cmd.data[0]
+
+
 def request_climate_temperature(address: int, sensor: int) -> bytes:
     """Read one of a thermostat's temperature sensors (0x045B, Read, data=[sensor]).
 
