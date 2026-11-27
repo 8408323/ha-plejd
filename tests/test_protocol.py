@@ -622,3 +622,34 @@ def test_set_state_off_is_state_only_0x0097():
     cmd = decode_command(v)
     assert cmd.address == 40 and cmd.command == 0x0097 and cmd.data == b"\x00"
     assert set_state(40, on=True)[-1] == 0x01
+
+
+def test_climate_temperature_request_reads_one_sensor():
+    from plejd.const import CMD_TRM_TEMP_READING, TRM_SENSOR_FLOOR
+    from plejd.protocol import TYPE_READ, request_climate_temperature
+
+    req = request_climate_temperature(47, TRM_SENSOR_FLOOR)
+    assert req[0] == 47 and req[2] == TYPE_READ
+    assert (req[3] << 8) | req[4] == CMD_TRM_TEMP_READING and req[5:] == bytes([TRM_SENSOR_FLOOR])
+
+
+def test_climate_temperature_reply_decodes_sensor_and_celsius():
+    from plejd.const import CMD_TRM_TEMP_READING
+    from plejd.protocol import Command, decode_climate_temperature
+
+    # Captured replies from a TRM-01 over the gateway: floor 26.5 °C, room 21.8 °C.
+    assert decode_climate_temperature(Command(47, 0x03, CMD_TRM_TEMP_READING, bytes.fromhex("000901"))) == (0, 26.5)
+    assert decode_climate_temperature(Command(47, 0x03, CMD_TRM_TEMP_READING, bytes.fromhex("01da00"))) == (1, 21.8)
+
+
+def test_climate_temperature_ignores_echoes_refusals_and_other_commands():
+    from plejd.const import CMD_NOTIFY_EVENTS, CMD_TRM_TEMP_READING
+    from plejd.protocol import Command, decode_climate_temperature
+
+    # our own read request echoed back (no Ack bit)
+    assert decode_climate_temperature(Command(47, 0x02, CMD_TRM_TEMP_READING, bytes.fromhex("00"))) is None
+    # a refused read (sensor index the thermostat doesn't have): Ack set but no value
+    assert decode_climate_temperature(Command(47, 0x07, CMD_TRM_TEMP_READING, bytes.fromhex("02"))) is None
+    # another command, and a value with the top bit set (no reading)
+    assert decode_climate_temperature(Command(47, 0x03, CMD_NOTIFY_EVENTS, bytes.fromhex("000901"))) is None
+    assert decode_climate_temperature(Command(47, 0x03, CMD_TRM_TEMP_READING, bytes.fromhex("00ffff"))) is None

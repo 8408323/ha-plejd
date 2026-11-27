@@ -118,7 +118,7 @@ Entities are created automatically from your site:
 - **Buttons** ✅ — wall switches / remotes (WPH-01, WRT-01) fire HA **events** (press / release) for automations
 - **Motion & illuminance** ✅ — WMS-01 reports occupancy (`binary_sensor`) and ambient light (`sensor`)
 - **Covers** — JAL-01 / MTR-01 blinds and shades *(decoded; not hardware-validated)*
-- **Climate** — TRM-01 thermostats: target temperature + Plejd presets *(decoded; not hardware-validated)*
+- **Climate** — TRM-01 thermostats: target temperature ✅, floor and room temperature ✅ (polled every 5 minutes; the climate entity shows the floor reading when there is a floor sensor), Plejd presets *(decoded; not hardware-validated)*
 
 Per-output **device settings** (config entities):
 

@@ -6,6 +6,16 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- TRM-01 thermostats report their temperatures. Each thermostat now has a
+  **Floor temperature** and a **Room temperature** sensor, and the climate
+  entity's current temperature is the floor reading when the thermostat has a
+  floor sensor, otherwise the room reading. The thermostats only answer when
+  asked, so both are read every 5 minutes (0x045B, sensor 0 = floor, 1 = room),
+  over the gateway or Bluetooth. Confirmed on two TRM-01 in floor regulation
+  through a GWY-01.
+
 ## [0.14.3] - 2026-11-22
 
 ### Fixed

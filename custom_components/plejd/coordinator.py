@@ -46,6 +46,7 @@ from .cloud import (
 )
 from .connection import PlejdConnection
 from .const import (
+    CATEGORY_CLIMATE,
     CATEGORY_LIGHT,
     CATEGORY_SWITCH,
     CMD_GROUP_STATE_AND_LEVEL,
@@ -63,6 +64,7 @@ from .const import (
     CMD_OUTPUT_SPEED,
     CMD_OUTPUT_STATE_AND_LEVEL,
     CMD_SCENE,
+    CMD_TRM_TEMP_READING,
     CONF_CRYPTO_KEY,
     CONF_DEVICE_ADDRESSES,
     CONF_DEVICES,
@@ -88,10 +90,20 @@ from .const import (
     TRANSPORT_AUTO,
     TRANSPORT_BLE,
     TRANSPORT_GATEWAY,
+    TRM_SENSOR_FLOOR,
+    TRM_SENSOR_ROOM,
 )
 from .dim_ramp import PlejdDimRamp
 from .gateway_transport import PlejdGatewayConnection
-from .protocol import Command, MotionEvent, OutputSettings, OutputState, decode_motion, decode_notify_events
+from .protocol import (
+    Command,
+    MotionEvent,
+    OutputSettings,
+    OutputState,
+    decode_climate_temperature,
+    decode_motion,
+    decode_notify_events,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -101,6 +113,8 @@ _OWN_STATE_ECHO_WINDOW = 3.0
 RECONNECT_INITIAL_DELAY = 1.0
 RECONNECT_MAX_DELAY = 60.0
 NOTIFY_POLL_INTERVAL = timedelta(minutes=10)  # device-health (NotifyEvents) poll cadence
+# Thermostat temperatures (0x045B) are only sent when asked for, so they are polled.
+CLIMATE_POLL_INTERVAL = timedelta(minutes=5)
 CLOUD_POLL_INTERVAL = timedelta(hours=24)  # how often to check for site changes (added/renamed devices)
 # Minimum gap between setup-time self-heal attempts (see async_start). Much shorter than
 # CLOUD_POLL_INTERVAL because a real repair should take effect on the next setup retry rather
@@ -266,9 +280,12 @@ class PlejdCoordinator:
         self._motion_listeners: list[Callable[[MotionEvent], None]] = []
         self._fault_listeners: list[Callable[[int, frozenset[str]], None]] = []
         self._faults: dict[int, frozenset[str]] = {}
+        # address -> {sensor index -> °C}, from 0x045B read replies (see _async_poll_climate).
+        self._climate_temperatures: dict[int, dict[int, float]] = {}
         self.firmware: dict[str, PlejdFirmwareStatus] = {}  # device_id -> firmware status
         self._clock_unsub: Callable[[], None] | None = None
         self._faults_unsub: Callable[[], None] | None = None
+        self._climate_unsub: Callable[[], None] | None = None
         self._cloud_poll_unsub: Callable[[], None] | None = None
         self._firmware_unsub: Callable[[], None] | None = None
         self._firmware_now_unsub: Callable[[], None] | None = None
@@ -442,6 +459,10 @@ class PlejdCoordinator:
         """Active fault-flag names last reported by a device (empty if none/unknown)."""
         return self._faults.get(address, frozenset())
 
+    def climate_temperature(self, address: int, sensor: int) -> float | None:
+        """A thermostat's last reported reading for one sensor (TRM_SENSOR_*), or None if none yet."""
+        return self._climate_temperatures.get(address, {}).get(sensor)
+
     def device_address_for(self, device_id: str) -> int | None:
         """A physical device's own mesh address (for fault entities), or None if unresolved."""
         return self._device_addresses.get(device_id)
@@ -478,6 +499,12 @@ class PlejdCoordinator:
             # and echo back on the same feed with a different payload shape ([output,
             # value...] vs. the reply's value-only bytes) — only a genuine reply is cacheable.
             self._update_output_settings(command)
+        elif command.command == CMD_TRM_TEMP_READING:
+            reading = decode_climate_temperature(command)
+            if reading is not None:
+                sensor, celsius = reading
+                self._climate_temperatures.setdefault(command.address, {})[sensor] = celsius
+                self._notify_outputs()
         elif command.command == CMD_NOTIFY_EVENTS:
             faults = decode_notify_events(command)
             if faults is not None:
@@ -1094,6 +1121,24 @@ class PlejdCoordinator:
             self._faults_unsub()
         self._faults_unsub = async_track_time_interval(self.hass, self._async_poll_faults, NOTIFY_POLL_INTERVAL)
         await self._async_poll_faults(None)
+        if self._climate_unsub is not None:
+            self._climate_unsub()
+        self._climate_unsub = async_track_time_interval(self.hass, self._async_poll_climate, CLIMATE_POLL_INTERVAL)
+        await self._async_poll_climate(None)
+
+    async def _async_poll_climate(self, _now: object) -> None:
+        """Ask every thermostat for its floor and room temperatures; replies arrive push-side.
+
+        A thermostat without a floor sensor refuses that read, which simply leaves the
+        floor reading unset.
+        """
+        addresses = {d.address for d in self.devices if d.category == CATEGORY_CLIMATE and d.address is not None}
+        for address in sorted(addresses):
+            for sensor in (TRM_SENSOR_FLOOR, TRM_SENSOR_ROOM):
+                try:
+                    await self._write_vector(protocol.request_climate_temperature(address, sensor))
+                except Exception:  # noqa: BLE001 - best-effort per read; one failure shouldn't skip the rest
+                    _LOGGER.debug("Plejd temperature poll failed for thermostat %s", address, exc_info=True)
 
     async def _async_poll_faults(self, _now: object) -> None:
         # NotifyEvents belongs to the physical device, not any one output — poll the
@@ -1477,6 +1522,9 @@ class PlejdCoordinator:
         if self._faults_unsub is not None:
             self._faults_unsub()
             self._faults_unsub = None
+        if self._climate_unsub is not None:
+            self._climate_unsub()
+            self._climate_unsub = None
         if self._firmware_unsub is not None:
             self._firmware_unsub()
             self._firmware_unsub = None

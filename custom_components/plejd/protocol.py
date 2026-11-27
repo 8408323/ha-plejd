@@ -40,6 +40,7 @@ from .const import (
     CMD_TIME_EVENT_TYPE,
     CMD_TRM_MODE,
     CMD_TRM_SETPOINT,
+    CMD_TRM_TEMP_READING,
     NOTIFY_EVENT_FLAGS,
     SOURCE_APP,
     SOURCE_MOTION,
@@ -319,6 +320,31 @@ def set_climate_setpoint(address: int, celsius: float) -> bytes:
 def set_climate_mode(address: int, mode: int) -> bytes:
     """Set a thermostat operating mode (0x045F, OperatingMode enum)."""
     return encode_command(address, CMD_TRM_MODE, bytes([mode & 0xFF]), command_type=TYPE_DONT_RESPOND)
+
+
+def request_climate_temperature(address: int, sensor: int) -> bytes:
+    """Read one of a thermostat's temperature sensors (0x045B, Read, data=[sensor]).
+
+    The reply lands on LastChanged as [sensor, u16le °C×10] with the Ack bit set; see
+    `decode_climate_temperature`. Sensor indices are TRM_SENSOR_FLOOR / TRM_SENSOR_ROOM.
+    """
+    return encode_command(address, CMD_TRM_TEMP_READING, bytes([sensor & 0xFF]), command_type=TYPE_READ)
+
+
+def decode_climate_temperature(cmd: Command) -> tuple[int, float] | None:
+    """Decode a 0x045B read reply into (sensor, °C).
+
+    Only a genuine reply counts: it has the Ack bit set and three bytes. Our own read
+    request echoes back on the same feed as [sensor] with no Ack bit, and a refused read
+    (an index the thermostat doesn't have) comes back as [sensor] alone. A value with the
+    top bit set is treated as "no reading" rather than a huge temperature.
+    """
+    if cmd.command != CMD_TRM_TEMP_READING or not cmd.command_type & TYPE_ACK or len(cmd.data) < 3:
+        return None
+    raw = cmd.data[1] | (cmd.data[2] << 8)
+    if raw & 0x8000:
+        return None
+    return cmd.data[0], raw / 10
 
 
 def decode_temperature(data: bytes) -> float | None:

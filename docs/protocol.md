@@ -108,6 +108,7 @@ have the Ack bit set in `command_type`).
 | `0x0021` (33) | scene | `[index]` (DontRespond); `index+0x80` = power-off scene | trigger scene |
 | `0x0420` (1056) | output_set | mini-package (Source `03 08`, Channel `0a <out>`, StateNLevel `00 <on> <lvl> <lvl>`); cover/CCT sub-packages | modern firmware control |
 | `0x0306` (774) | jal_set_level | `[u16 level]` | JAL blind position |
+| `0x045B` (1115) | trm_temperature | read `[sensor]`; reply `[sensor, u16le °C×10]` | thermostat temperature: sensor 0 = floor, 1 = room; other indices are refused (reply type `0x07`, no value). Only sent when read: poll |
 | `0x045C` (1116) | trm_setpoint | `[u16le °C×10]` | thermostat target |
 | `0x045F` (1119) | trm_operating_mode | `[mode]` | HVAC mode |
 | `0x0195` (405) | input_state_and_level | `[channel, on?1:0, level, level]` | input/button state notification |

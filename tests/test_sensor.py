@@ -4,14 +4,22 @@ from __future__ import annotations
 
 import types
 
-from plejd.cloud import PlejdCloudMotion
+from plejd.cloud import PlejdCloudDevice, PlejdCloudMotion
 from plejd.protocol import MotionEvent
-from plejd.sensor import PlejdConnectivitySensor, PlejdIlluminanceSensor, async_setup_entry
+from plejd.sensor import (
+    PlejdConnectivitySensor,
+    PlejdIlluminanceSensor,
+    PlejdThermostatTemperatureSensor,
+    async_setup_entry,
+)
 
 
 class _Coordinator:
-    def __init__(self, motion, active_transport="ble"):
+    def __init__(self, motion, active_transport="ble", devices=()):
         self.motion = motion
+        self.devices = list(devices)
+        self.available = True
+        self.temperatures: dict = {}
         self.motion_listeners = []
         self.listeners = []
         self.site_id = "site-1"
@@ -24,6 +32,9 @@ class _Coordinator:
     def async_add_listener(self, cb):
         self.listeners.append(cb)
         return lambda: self.listeners.remove(cb)
+
+    def climate_temperature(self, address, sensor):
+        return self.temperatures.get((address, sensor))
 
 
 def _sensor():
@@ -81,3 +92,52 @@ async def test_added_to_hass_subscribes():
     coord = _Coordinator([PlejdCloudMotion("w1", "M", 33)])
     await PlejdIlluminanceSensor(coord, coord.motion[0]).async_added_to_hass()
     assert len(coord.motion_listeners) == 1
+
+
+def _trm(category="climate", address=47):
+    return PlejdCloudDevice(
+        device_id="t1",
+        name="Bathroom Floor",
+        address=address,
+        output_index=0,
+        outputs=[address],
+        hardware_id=100,
+        model="TRM-01",
+        category=category,
+        dimmable=False,
+        traits=0x20,
+        room_id="r1",
+    )
+
+
+async def test_setup_creates_floor_and_room_sensors_per_thermostat():
+    coord = _Coordinator([], devices=[_trm(), _trm(category="light"), _trm(address=None)])
+    added = []
+    await async_setup_entry(None, types.SimpleNamespace(runtime_data=coord), lambda entities: added.extend(entities))
+    temps = [s for s in added if isinstance(s, PlejdThermostatTemperatureSensor)]
+    assert sorted(s._attr_unique_id for s in temps) == ["floor_temperature_t1", "room_temperature_t1"]
+
+
+def test_thermostat_temperature_sensor_reports_its_own_reading():
+    coord = _Coordinator([], devices=[_trm()])
+    coord.temperatures = {(47, 0): 26.5, (47, 1): 21.8}
+    floor = PlejdThermostatTemperatureSensor(coord, _trm(), 0)
+    room = PlejdThermostatTemperatureSensor(coord, _trm(), 1)
+    assert (floor.native_value, room.native_value) == (26.5, 21.8)
+    assert floor._attr_translation_key == "floor_temperature" and room._attr_translation_key == "room_temperature"
+    assert floor.available is True
+
+
+def test_thermostat_temperature_sensor_unavailable_without_reading_or_connection():
+    coord = _Coordinator([], devices=[_trm()])
+    sensor = PlejdThermostatTemperatureSensor(coord, _trm(), 0)
+    assert sensor.available is False  # no reading yet (e.g. no floor sensor fitted)
+    coord.temperatures = {(47, 0): 26.5}
+    coord.available = False
+    assert sensor.available is False
+
+
+async def test_thermostat_temperature_sensor_subscribes_to_updates():
+    coord = _Coordinator([], devices=[_trm()])
+    await PlejdThermostatTemperatureSensor(coord, _trm(), 1).async_added_to_hass()
+    assert len(coord.listeners) == 1

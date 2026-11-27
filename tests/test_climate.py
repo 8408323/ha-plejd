@@ -33,6 +33,10 @@ class _Coordinator:
         self.modes: list = []
         self.listeners: list = []
         self.available = True
+        self.temperatures: dict = {}
+
+    def climate_temperature(self, address, sensor):
+        return self.temperatures.get((address, sensor))
 
     def async_add_listener(self, cb):
         self.listeners.append(cb)
@@ -114,3 +118,19 @@ async def test_added_to_hass_subscribes():
     coord = _Coordinator([])
     await PlejdClimate(coord, _device()).async_added_to_hass()
     assert len(coord.listeners) == 1
+
+
+def test_current_temperature_is_floor_when_the_thermostat_has_a_floor_sensor():
+    coord = _Coordinator([])
+    coord.temperatures = {(9, 0): 26.5, (9, 1): 21.8}
+    assert PlejdClimate(coord, _device()).current_temperature == 26.5
+
+
+def test_current_temperature_falls_back_to_room_without_a_floor_reading():
+    coord = _Coordinator([])
+    coord.temperatures = {(9, 1): 21.8}
+    assert PlejdClimate(coord, _device()).current_temperature == 21.8
+
+
+def test_current_temperature_is_none_before_any_reading():
+    assert PlejdClimate(_Coordinator([]), _device()).current_temperature is None
