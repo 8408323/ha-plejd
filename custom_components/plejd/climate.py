@@ -1,8 +1,11 @@
 """Plejd climate platform (TRM thermostats).
 
-Decoded from the app but **not hardware-validated** (no thermostat on the test
-mesh). The setpoint/mode commands are byte-exact; current-temperature read-back
-awaits a real device to confirm the broadcast format.
+Decoded from the app. Setpoint writes and the read-back of the target, the operating mode
+and the temperatures are confirmed on TRM-01 hardware in floor regulation; switching the
+operating-mode presets is not yet validated. Everything is read every 5 minutes (see the
+coordinator's thermostat poll), so a change made on the thermostat or in the Plejd app shows
+up here. The current temperature is the floor sensor's reading when the thermostat has
+one, otherwise its room sensor's.
 """
 
 from __future__ import annotations
@@ -17,7 +20,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .cloud import PlejdCloudDevice
-from .const import CATEGORY_CLIMATE, DOMAIN, TRM_MODE_NORMAL, TRM_PRESETS
+from .const import CATEGORY_CLIMATE, DOMAIN, TRM_MODE_NORMAL, TRM_PRESETS, TRM_SENSOR_FLOOR, TRM_SENSOR_ROOM
 from .coordinator import PlejdCoordinator
 
 _PRESET_TO_MODE = {name: mode for mode, name in TRM_PRESETS.items()}
@@ -69,6 +72,25 @@ class PlejdClimate(ClimateEntity):
     @property
     def available(self) -> bool:
         return self._coordinator.available
+
+    @property
+    def target_temperature(self) -> float | None:
+        setpoint = self._coordinator.climate_setpoint(self._device.address)
+        return setpoint if setpoint is not None else self._attr_target_temperature
+
+    @property
+    def preset_mode(self) -> str | None:
+        mode = self._coordinator.climate_mode(self._device.address)
+        if mode is None:
+            return self._attr_preset_mode
+        return TRM_PRESETS.get(mode, self._attr_preset_mode)
+
+    @property
+    def current_temperature(self) -> float | None:
+        floor = self._coordinator.climate_temperature(self._device.address, TRM_SENSOR_FLOOR)
+        if floor is not None:
+            return floor
+        return self._coordinator.climate_temperature(self._device.address, TRM_SENSOR_ROOM)
 
     async def async_set_temperature(self, **kwargs: Any) -> None:
         temperature = kwargs.get(ATTR_TEMPERATURE)

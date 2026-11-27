@@ -106,6 +106,12 @@
           "ble": "Bluetooth",
           "disconnected": "Disconnected"
         }
+      },
+      "floor_temperature": {
+        "name": "Floor temperature"
+      },
+      "room_temperature": {
+        "name": "Room temperature"
       }
     },
     "binary_sensor": {
